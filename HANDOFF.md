@@ -22,5 +22,9 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Offscreen screenshots of every page in `docs/`; fixed Gauge painting at zero size and a teardown-order warning on exit
 - Repo: https://github.com/CalebLykken/baja-OS (private)
 
+- Tested on the Pi 2 (Qt 6.8.2): eglfs drives the Waveshare at 1280x800, all glyphs render with DejaVu,
+  no QML errors; Ctrl-C over SSH stops it cleanly (eglfs exits 1, run.sh only falls back to linuxfb on 134)
+
 ## Still to do
-1. Run `./run.sh` on the Pi 2 and fix anything that differs from the Mac (fonts/glyphs, eglfs)
+1. Confirm touch input on the panel
+2. Start on boot (systemd unit), then real OBD-II / audio / CarPlay backends

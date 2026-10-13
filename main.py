@@ -10,6 +10,7 @@ built and tested before real OBD-II, CarPlay and audio hardware is wired in.
 
 import argparse
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -32,6 +33,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # Qt's event loop never hands control back to Python's Ctrl-C handler, so
+    # let SIGINT kill the process directly (matters when started over SSH).
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Baja Carputer")

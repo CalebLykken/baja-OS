@@ -2,12 +2,11 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// Placeholder settings. Nothing here is wired to hardware yet.
+// Settings. Brightness drives the panel; units and about are placeholders.
 Item {
     id: page
     signal navigate(int index)
 
-    property int brightness: 80
     property bool metric: false
 
     ColumnLayout {
@@ -17,21 +16,40 @@ Item {
         Card {
             Layout.fillWidth: true
             Layout.preferredHeight: 120
-            heading: "Brightness"
+            heading: display.hardware ? "Brightness" : "Brightness (software dim)"
 
             RowLayout {
                 anchors { fill: parent; leftMargin: 20; rightMargin: 20; topMargin: 36 }
                 spacing: 16
-                IconButton { glyph: "−"; size: 60; onClicked: page.brightness = Math.max(10, page.brightness - 10) }
-                ProgressBar { Layout.fillWidth: true; height: 10; radius: 5; value: page.brightness / 100 }
+                IconButton { glyph: "−"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
+
+                // Tap or drag anywhere along the bar; the tall hit area is
+                // easier to land on in a moving car than the 10 px bar.
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    ProgressBar {
+                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
+                        height: 10
+                        radius: 5
+                        value: display.brightness / 100
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        function apply(x) { display.setBrightness(Math.round(100 * x / width)) }
+                        onPressed: (mouse) => apply(mouse.x)
+                        onPositionChanged: (mouse) => apply(mouse.x)
+                    }
+                }
+
                 Text {
                     Layout.preferredWidth: 64
                     horizontalAlignment: Text.AlignRight
-                    text: page.brightness + "%"
+                    text: display.brightness + "%"
                     color: Theme.text
                     font.pixelSize: Theme.fontBody
                 }
-                IconButton { glyph: "+"; size: 60; onClicked: page.brightness = Math.min(100, page.brightness + 10) }
+                IconButton { glyph: "+"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
             }
         }
 

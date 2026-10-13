@@ -23,6 +23,7 @@ main.py              entry point; exposes `vehicle`, `media`, `demoMode` to QML
 run.sh               Pi launcher (EGLFS, falls back to linuxfb)
 backend/vehicle.py   simulated drive: rpm, speed, boost, coolant, intake, volts, gear
 backend/media.py     fake playlist with transport + volume controls
+backend/display.py   screen brightness over DDC/CI (software dim fallback)
 qml/Main.qml         window: nav rail + status bar + pages
 qml/pages/           Home, Music, Maps (CarPlay placeholder), Gauges, Settings
 qml/components/      Theme, Card, Gauge, NowPlaying, Readout, ...

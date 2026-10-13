@@ -25,6 +25,9 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Tested on the Pi 2 (Qt 6.8.2): eglfs drives the Waveshare at 1280x800, all glyphs render with DejaVu,
   no QML errors; Ctrl-C over SSH stops it cleanly (eglfs exits 1, run.sh only falls back to linuxfb on 134)
 
+- Settings brightness drives the Waveshare backlight over DDC/CI on the HDMI cable (`backend/display.py`);
+  falls back to a software dim overlay where DDC isn't available (e.g. the Mac)
+
 ## Still to do
 1. Confirm touch input on the panel
 2. Start on boot (systemd unit), then real OBD-II / audio / CarPlay backends

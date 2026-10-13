@@ -18,6 +18,7 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
+from backend.display import Display
 from backend.media import MediaPlayer
 from backend.vehicle import VehicleData
 
@@ -44,11 +45,13 @@ def main():
     # for real ones (OBD-II reader, audio player) without touching the UI.
     vehicle = VehicleData()
     media = MediaPlayer()
+    display = Display()
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
     ctx.setContextProperty("vehicle", vehicle)
     ctx.setContextProperty("media", media)
+    ctx.setContextProperty("display", display)
     ctx.setContextProperty("demoMode", True)
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))

@@ -76,4 +76,13 @@ Window {
             SettingsPage { onNavigate: (i) => root.page = i }
         }
     }
+
+    // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
+    // Never fully black, and it lets touches through to the UI below.
+    Rectangle {
+        anchors.fill: parent
+        visible: !display.hardware
+        color: "black"
+        opacity: (1 - display.brightness / 100) * 0.85
+    }
 }

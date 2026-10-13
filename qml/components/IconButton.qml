@@ -3,7 +3,7 @@ import QtQuick
 // Round touch button for transport controls (prev / play / next).
 Rectangle {
     id: btn
-    property string glyph
+    property string icon     // a name from Icon.qml
     property bool primary: false
     property int size: Theme.touch
     signal clicked()
@@ -14,10 +14,10 @@ Rectangle {
     color: primary ? (tap.pressed ? Qt.darker(Theme.accent, 1.3) : Theme.accent)
                    : (tap.pressed ? Theme.line : Theme.panelHi)
 
-    Label {
+    Icon {
         anchors.centerIn: parent
-        text: btn.glyph
-        font.pixelSize: btn.size * 0.38
+        name: btn.icon
+        size: btn.size * 0.5
         color: btn.primary ? Theme.bg : Theme.text
     }
 

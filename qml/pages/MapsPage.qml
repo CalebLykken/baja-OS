@@ -12,11 +12,11 @@ Item {
         Column {
             anchors.centerIn: parent
             spacing: 14
-            Label {
+            Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "◈"
+                name: "navigation"
                 color: Theme.accent
-                font.pixelSize: 120
+                size: 108
             }
             Label {
                 anchors.horizontalCenter: parent.horizontalCenter

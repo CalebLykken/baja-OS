@@ -19,7 +19,7 @@ Card {
         anchors { fill: parent; margins: 24; topMargin: 52 }
         spacing: 24
 
-        // Album art, or a note glyph when the track has none
+        // Album art, or a music note icon when the track has none
         Rectangle {
             Layout.preferredWidth: Math.min(parent.height, parent.width * 0.4)
             Layout.preferredHeight: Layout.preferredWidth
@@ -27,12 +27,12 @@ Card {
             radius: Theme.radius
             color: Theme.accentDim
             clip: true
-            Label {
+            Icon {
                 visible: art.status !== Image.Ready
                 anchors.centerIn: parent
-                text: "♫"
+                name: "music"
                 color: Theme.accent
-                font.pixelSize: parent.width * 0.4
+                size: parent.width * 0.45
             }
             Image {
                 id: art
@@ -84,14 +84,14 @@ Card {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.topMargin: 8
                 spacing: 24
-                IconButton { glyph: "◀◀"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
+                IconButton { icon: "previous"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
                 IconButton {
-                    glyph: media.playing ? "❚❚" : "▶"
+                    icon: media.playing ? "pause" : "play"
                     primary: true
                     size: Theme.touch + 16
                     onClicked: media.togglePlay()
                 }
-                IconButton { glyph: "▶▶"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
+                IconButton { icon: "next"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
             }
         }
     }

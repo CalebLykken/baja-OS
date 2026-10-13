@@ -16,11 +16,11 @@ Window {
 
     property int page: 0
     readonly property var pages: [
-        { glyph: "⌂", label: "Home" },
-        { glyph: "♫", label: "Music" },
-        { glyph: "◈", label: "Maps" },
-        { glyph: "◔", label: "Gauges" },
-        { glyph: "⚙", label: "Settings" }
+        { icon: "home", label: "Home" },
+        { icon: "music", label: "Music" },
+        { icon: "map", label: "Maps" },
+        { icon: "speed", label: "Gauges" },
+        { icon: "settings", label: "Settings" }
     ]
 
     // Lets screenshot tooling (and later a hardware button) switch pages.
@@ -55,7 +55,7 @@ Window {
             Repeater {
                 model: root.pages
                 NavButton {
-                    glyph: modelData.glyph
+                    icon: modelData.icon
                     label: modelData.label
                     active: root.page === index
                     onClicked: root.page = index

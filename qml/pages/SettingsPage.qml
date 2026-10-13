@@ -24,7 +24,7 @@ Item {
             RowLayout {
                 anchors { fill: parent; leftMargin: 20; rightMargin: 20; topMargin: 36 }
                 spacing: 16
-                IconButton { glyph: "−"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
+                IconButton { icon: "remove"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
 
                 // Tap or drag anywhere along the bar; the tall hit area is
                 // easier to land on in a moving car than the 10 px bar.
@@ -52,7 +52,7 @@ Item {
                     color: Theme.text
                     font.pixelSize: Theme.fontBody
                 }
-                IconButton { glyph: "+"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
+                IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
             }
         }
 

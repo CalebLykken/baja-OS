@@ -45,13 +45,25 @@ Item {
                         radius: Theme.radius - 4
                         color: current ? Theme.panelHi : (rowTap.pressed ? Theme.line : "transparent")
 
-                        Label {
+                        Item {
                             id: num
                             width: 36
-                            anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
-                            text: current ? "▶" : (index + 1)
-                            color: current ? Theme.accent : Theme.textDim
-                            font.pixelSize: Theme.fontSmall
+                            height: parent.height
+                            anchors { left: parent.left; leftMargin: 12 }
+                            Icon {
+                                visible: current
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: "equalizer"
+                                size: 22
+                                color: Theme.accent
+                            }
+                            Label {
+                                visible: !current
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: index + 1
+                                color: Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
                         }
                         Column {
                             anchors {
@@ -85,7 +97,7 @@ Item {
                 RowLayout {
                     anchors { fill: parent; leftMargin: 16; rightMargin: 16 }
                     spacing: 16
-                    IconButton { glyph: "−"; size: 64; onClicked: media.volumeDown() }
+                    IconButton { icon: "remove"; size: 64; onClicked: media.volumeDown() }
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 8
@@ -97,7 +109,7 @@ Item {
                         }
                         ProgressBar { Layout.fillWidth: true; height: 10; radius: 5; value: media.volume / 100 }
                     }
-                    IconButton { glyph: "+"; size: 64; onClicked: media.volumeUp() }
+                    IconButton { icon: "add"; size: 64; onClicked: media.volumeUp() }
                 }
             }
         }

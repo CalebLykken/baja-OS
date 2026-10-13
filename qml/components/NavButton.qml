@@ -3,7 +3,7 @@ import QtQuick
 // One entry in the left-hand navigation rail.
 Item {
     id: btn
-    property string glyph
+    property string icon
     property string label
     property bool active: false
     signal clicked()
@@ -28,10 +28,10 @@ Item {
         Column {
             anchors.centerIn: parent
             spacing: 6
-            Label {
+            Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: btn.glyph
-                font.pixelSize: 32
+                name: btn.icon
+                size: 34
                 color: btn.active ? Theme.accent : Theme.textDim
             }
             Label {

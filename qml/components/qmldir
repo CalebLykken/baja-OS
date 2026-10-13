@@ -1,0 +1,8 @@
+singleton Theme 1.0 Theme.qml
+Card 1.0 Card.qml
+NavButton 1.0 NavButton.qml
+IconButton 1.0 IconButton.qml
+Gauge 1.0 Gauge.qml
+Readout 1.0 Readout.qml
+ProgressBar 1.0 ProgressBar.qml
+StatusBar 1.0 StatusBar.qml

@@ -6,3 +6,4 @@ venv/
 *.png
 !docs/*.png
 !qml/assets/*.png
+!deploy/plymouth/*.png

@@ -34,6 +34,9 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Starts at boot via a systemd user service (`deploy/`); style, volume and units persist in
   `~/.config/baja-os/baja-os.conf`
 
+- Settings shows network status (online, Wi-Fi name, IP, ssh command); `deploy/quiet-boot.sh` hides
+  boot text/logos behind a Baja OS Plymouth theme that hands off to the app splash
+
 ## Still to do
 1. Confirm touch input on the panel
 2. Real OBD-II / audio / CarPlay backends

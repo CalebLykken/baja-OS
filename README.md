@@ -80,6 +80,16 @@ starts Baja OS full screen at power-on and restarts it if it crashes.
 `systemctl --user stop baja-os` stops it; `systemctl --user disable baja-os`
 turns boot start off.
 
+For a clean boot (no rainbow screen, kernel text, logos or console login;
+a Baja OS boot screen hands straight off to the app's splash):
+
+```bash
+./deploy/quiet-boot.sh        # asks for sudo; reboot afterwards
+./deploy/quiet-boot-undo.sh   # puts the original boot back
+```
+
+Ctrl+Alt+F2 still gives you a text login on the Pi itself.
+
 Style, volume and units are saved to `~/.config/baja-os/baja-os.conf` and
 restored on the next start. `--style` overrides the saved style for one run.
 

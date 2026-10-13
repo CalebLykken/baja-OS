@@ -130,6 +130,47 @@ Item {
                     font.pixelSize: Theme.fontBody
                 }
             }
+
+            // Network: online state, Wi-Fi name and the address to SSH to.
+            Column {
+                anchors { left: parent.horizontalCenter; top: parent.top; topMargin: 52 }
+                spacing: 8
+                readonly property bool known: typeof network !== "undefined" && network.checked
+
+                Row {
+                    spacing: 12
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 14; height: 14; radius: 7
+                        color: !parent.parent.known ? Theme.textDim
+                               : network.online ? Theme.ok : Theme.warn
+                    }
+                    Label {
+                        text: !parent.parent.known ? "Checking network…"
+                              : network.online ? "Online" : (network.ip ? "No internet" : "Offline")
+                        font.pixelSize: Theme.fontTitle
+                        font.weight: Font.DemiBold
+                    }
+                }
+                Label {
+                    visible: parent.known
+                    text: network.ssid ? "Wi-Fi: " + network.ssid : "Wi-Fi: not connected"
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Label {
+                    visible: parent.known
+                    text: "IP: " + (network.ip || "none")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Label {
+                    visible: parent.known && network.ip !== ""
+                    text: "ssh " + network.user + "@" + network.ip
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                }
+            }
         }
     }
 }

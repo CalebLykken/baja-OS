@@ -25,6 +25,7 @@ from PyQt6.QtQml import QQmlApplicationEngine
 
 from backend.display import Display
 from backend.media import MediaPlayer
+from backend.network import Network
 from backend.settings import Settings
 from backend.vehicle import VehicleData
 
@@ -77,12 +78,14 @@ def main():
     media.setVolume(settings.get_int("volume", 40))
     media.volumeChanged.connect(lambda: settings.set("volume", media.volume))
     display = Display()
+    network = Network()
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
     ctx.setContextProperty("vehicle", vehicle)
     ctx.setContextProperty("media", media)
     ctx.setContextProperty("display", display)
+    ctx.setContextProperty("network", network)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
@@ -99,6 +102,7 @@ def main():
 
     vehicle.start()
     media.start()
+    network.start()
     code = app.exec()
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

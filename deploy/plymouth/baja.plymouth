@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Baja OS
+Description=The Baja's side profile in the dark, handing off to the Baja OS splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/baja
+ScriptFile=/usr/share/plymouth/themes/baja/baja.script

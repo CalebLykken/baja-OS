@@ -1,12 +1,14 @@
 import QtQuick
 
-// Startup splash: the Baja's side profile fades in out of the dark, its
-// headlight comes on, then the name, then the whole thing fades into the
-// dashboard. Tap to skip. Only opacity and scale animate, which the Pi 2's
-// GPU handles easily; the glow itself is painted once.
+// Startup splash: the Baja's side profile sits in the dark, its headlight
+// comes on, then the name, then the whole thing fades into the dashboard.
+// Tap to skip. At boot the Plymouth theme in deploy/plymouth has already been
+// showing the same truck at the same spot on the same background, so this
+// picks up seamlessly; keep the two in sync if either moves. Only opacity
+// animates, which the Pi 2's GPU handles easily; the glow is painted once.
 Rectangle {
     id: splash
-    color: Theme.bg
+    color: "#050506"   // matches the Plymouth boot screen, whatever the style
     z: 100
 
     // Where the headlight sits in baja-side.png (0..1 of the image), from
@@ -35,8 +37,6 @@ Rectangle {
             sourceSize.width: 1000
             smooth: true
             mipmap: true
-            opacity: 0
-            scale: 0.97
         }
 
         // Headlight: a warm glow on the lens plus a soft beam reaching
@@ -105,10 +105,7 @@ Rectangle {
 
     SequentialAnimation {
         running: true
-        ParallelAnimation {
-            NumberAnimation { target: truck; property: "opacity"; to: 1; duration: 900; easing.type: Easing.OutCubic }
-            NumberAnimation { target: truck; property: "scale"; to: 1; duration: 1400; easing.type: Easing.OutCubic }
-        }
+        PauseAnimation { duration: 300 }
         // Headlight flicks on: a quick blip, then full.
         NumberAnimation { target: glow; property: "opacity"; to: 0.6; duration: 90 }
         NumberAnimation { target: glow; property: "opacity"; to: 0.15; duration: 110 }

@@ -1,0 +1,13 @@
+# Baja OS boot screen. Draws the truck exactly where qml/components/Splash.qml
+# does (78% of the screen width, max 1000 px, centered, 30 px above center,
+# on #050506), so the app's splash takes over without a visible jump.
+
+Window.SetBackgroundTopColor(0.0196, 0.0196, 0.0235);
+Window.SetBackgroundBottomColor(0.0196, 0.0196, 0.0235);
+
+truck = Image("baja.png");
+w = Math.Min(Window.GetWidth() * 0.78, 1000);
+h = w * truck.GetHeight() / truck.GetWidth();
+sprite = Sprite(truck.Scale(w, h));
+sprite.SetX(Window.GetX() + (Window.GetWidth() - w) / 2);
+sprite.SetY(Window.GetY() + (Window.GetHeight() - h) / 2 - 30);

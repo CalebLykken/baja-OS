@@ -7,3 +7,5 @@ Readout 1.0 Readout.qml
 ProgressBar 1.0 ProgressBar.qml
 StatusBar 1.0 StatusBar.qml
 NowPlaying 1.0 NowPlaying.qml
+Label 1.0 Label.qml
+Backdrop 1.0 Backdrop.qml

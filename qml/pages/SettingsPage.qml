@@ -42,7 +42,7 @@ Item {
                     }
                 }
 
-                Text {
+                Label {
                     Layout.preferredWidth: 64
                     horizontalAlignment: Text.AlignRight
                     text: display.brightness + "%"
@@ -50,6 +50,35 @@ Item {
                     font.pixelSize: Theme.fontBody
                 }
                 IconButton { glyph: "+"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
+            }
+        }
+
+        Card {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 120
+            heading: "Style"
+
+            Row {
+                anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
+                spacing: 12
+                Repeater {
+                    model: Theme.styleNames
+                    Rectangle {
+                        readonly property bool selected: Theme.style === modelData
+                        width: styleText.width + 48
+                        height: 56
+                        radius: 28
+                        color: selected ? Theme.accent : Theme.panelHi
+                        Label {
+                            id: styleText
+                            anchors.centerIn: parent
+                            text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                            color: parent.selected ? Theme.bg : Theme.text
+                            font.pixelSize: Theme.fontBody - 2
+                        }
+                        TapHandler { onTapped: Theme.style = modelData }
+                    }
+                }
             }
         }
 
@@ -69,7 +98,7 @@ Item {
                         height: 56
                         radius: 28
                         color: selected ? Theme.accent : Theme.panelHi
-                        Text {
+                        Label {
                             id: unitText
                             anchors.centerIn: parent
                             text: modelData.label
@@ -90,9 +119,9 @@ Item {
             Column {
                 anchors { left: parent.left; top: parent.top; leftMargin: 20; topMargin: 52 }
                 spacing: 8
-                Text { text: "Baja OS"; color: Theme.text; font.pixelSize: Theme.fontTitle; font.weight: Font.DemiBold }
-                Text { text: "2005 Subaru Baja Turbo carputer"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
-                Text {
+                Label { text: "Baja OS"; color: Theme.text; font.pixelSize: Theme.fontTitle; font.weight: Font.DemiBold }
+                Label { text: "2005 Subaru Baja Turbo carputer"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
+                Label {
                     text: demoMode ? "Running on simulated vehicle and media data" : "Live data"
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody

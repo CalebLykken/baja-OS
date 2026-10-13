@@ -12,19 +12,19 @@ Item {
         Column {
             anchors.centerIn: parent
             spacing: 14
-            Text {
+            Label {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "◈"
                 color: Theme.accent
                 font.pixelSize: 120
             }
-            Text {
+            Label {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "CarPlay not connected"
                 color: Theme.text
                 font.pixelSize: Theme.fontTitle
             }
-            Text {
+            Label {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "Plug in the Carlinkit adapter and your iPhone"
                 color: Theme.textDim

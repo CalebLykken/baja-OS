@@ -6,7 +6,7 @@ Item {
     property string title
     height: 64
 
-    Text {
+    Label {
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
         text: bar.title
         color: Theme.text
@@ -14,7 +14,7 @@ Item {
         font.weight: Font.DemiBold
     }
 
-    Text {
+    Label {
         id: clock
         anchors.centerIn: parent
         color: Theme.text
@@ -35,7 +35,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             width: demoText.width + 20; height: 28; radius: 14
             color: Theme.accentDim
-            Text {
+            Label {
                 id: demoText
                 anchors.centerIn: parent
                 text: "DEMO DATA"
@@ -44,13 +44,13 @@ Item {
                 font.letterSpacing: 1.5
             }
         }
-        Text {
+        Label {
             anchors.verticalCenter: parent.verticalCenter
             text: Math.round(vehicle.coolant) + "°F"
             color: vehicle.coolant > 230 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }
-        Text {
+        Label {
             anchors.verticalCenter: parent.verticalCenter
             text: vehicle.voltage.toFixed(1) + " V"
             color: Theme.textDim

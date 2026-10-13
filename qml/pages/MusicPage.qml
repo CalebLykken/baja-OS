@@ -45,7 +45,7 @@ Item {
                         radius: Theme.radius - 4
                         color: current ? Theme.panelHi : (rowTap.pressed ? Theme.line : "transparent")
 
-                        Text {
+                        Label {
                             id: num
                             width: 36
                             anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
@@ -58,14 +58,14 @@ Item {
                                 left: num.right; right: parent.right; rightMargin: 12
                                 verticalCenter: parent.verticalCenter
                             }
-                            Text {
+                            Label {
                                 width: parent.width
                                 text: modelData.title
                                 color: current ? Theme.accent : Theme.text
                                 font.pixelSize: Theme.fontBody - 2
                                 elide: Text.ElideRight
                             }
-                            Text {
+                            Label {
                                 width: parent.width
                                 text: modelData.artist
                                 color: Theme.textDim
@@ -89,7 +89,7 @@ Item {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 8
-                        Text {
+                        Label {
                             text: "VOLUME  " + media.volume
                             color: Theme.textDim
                             font.pixelSize: Theme.fontSmall - 2

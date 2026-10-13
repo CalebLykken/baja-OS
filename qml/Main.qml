@@ -26,11 +26,15 @@ Window {
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
 
+    Component.onCompleted: if (typeof startStyle !== "undefined") Theme.style = startStyle
+
+    Backdrop { anchors.fill: parent }
+
     Rectangle {
         id: rail
         width: 112
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
-        color: Theme.bg
+        color: Theme.backdrop === "none" ? Theme.bg : "transparent"
 
         Column {
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }

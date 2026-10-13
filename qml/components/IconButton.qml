@@ -14,7 +14,7 @@ Rectangle {
     color: primary ? (tap.pressed ? Qt.darker(Theme.accent, 1.3) : Theme.accent)
                    : (tap.pressed ? Theme.line : Theme.panelHi)
 
-    Text {
+    Label {
         anchors.centerIn: parent
         text: btn.glyph
         font.pixelSize: btn.size * 0.38

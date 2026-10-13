@@ -10,7 +10,7 @@ Column {
 
     spacing: 2
 
-    Text {
+    Label {
         text: r.label.toUpperCase()
         color: Theme.textDim
         font.pixelSize: Theme.fontSmall - 3
@@ -18,13 +18,14 @@ Column {
     }
     Row {
         spacing: 4
-        Text {
+        Label {
+            numeric: true
             text: r.value
             color: r.warning ? Theme.warn : Theme.text
             font.pixelSize: 40
-            font.weight: Font.DemiBold
+            font.weight: Theme.numWeight
         }
-        Text {
+        Label {
             text: r.unit
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall

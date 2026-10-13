@@ -27,7 +27,7 @@ Card {
             radius: Theme.radius
             color: Theme.accentDim
             clip: true
-            Text {
+            Label {
                 visible: art.status !== Image.Ready
                 anchors.centerIn: parent
                 text: "♫"
@@ -52,7 +52,7 @@ Card {
             Layout.alignment: Qt.AlignVCenter
             spacing: 10
 
-            Text {
+            Label {
                 Layout.fillWidth: true
                 text: media.title
                 color: Theme.text
@@ -60,7 +60,7 @@ Card {
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
             }
-            Text {
+            Label {
                 Layout.fillWidth: true
                 text: media.artist
                 color: Theme.textDim
@@ -75,9 +75,9 @@ Card {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: np.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                Label { text: np.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                 Item { Layout.fillWidth: true }
-                Text { text: np.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                Label { text: np.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
             }
 
             Row {

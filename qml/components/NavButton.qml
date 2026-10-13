@@ -28,13 +28,13 @@ Item {
         Column {
             anchors.centerIn: parent
             spacing: 6
-            Text {
+            Label {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: btn.glyph
                 font.pixelSize: 32
                 color: btn.active ? Theme.accent : Theme.textDim
             }
-            Text {
+            Label {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: btn.label.toUpperCase()
                 font.pixelSize: 13

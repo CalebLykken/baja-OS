@@ -34,19 +34,19 @@ Item {
                 Column {
                     anchors.centerIn: parent
                     spacing: 10
-                    Text {
+                    Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "◈"
                         color: Theme.accent
                         font.pixelSize: 72
                     }
-                    Text {
+                    Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "CarPlay"
                         color: Theme.text
                         font.pixelSize: Theme.fontTitle
                     }
-                    Text {
+                    Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "Connect iPhone to start"
                         color: Theme.textDim

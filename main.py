@@ -34,6 +34,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Baja carputer dashboard")
     parser.add_argument("--fullscreen", action="store_true",
                         help="fill the whole screen (use this on the Pi)")
+    parser.add_argument("--style", default="amber",
+                        choices=["amber", "cluster", "trail", "rally"],
+                        help="starting UI style (can also be changed in Settings)")
     parser.add_argument("--music-dir", default="~/Music",
                         help="folder of audio files to play (demo playlist if empty)")
     return parser.parse_known_args()[0]
@@ -75,6 +78,7 @@ def main():
     ctx.setContextProperty("media", media)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("demoMode", True)
+    ctx.setContextProperty("startStyle", args.style)
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))
     if not engine.rootObjects():

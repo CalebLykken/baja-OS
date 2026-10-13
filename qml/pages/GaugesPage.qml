@@ -17,6 +17,7 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "RPM"; unit: "rpm"
             value: vehicle.rpm; minValue: 0; maxValue: 7000; warnAbove: 6000
+            labelDivisor: 1000
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

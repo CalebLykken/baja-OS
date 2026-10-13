@@ -8,12 +8,15 @@ Rectangle {
     property string heading: ""
     signal tapped()
 
-    color: tappable && tap.pressed ? Theme.panelHi : Theme.panel
     radius: Theme.radius
     border.color: Theme.line
-    border.width: 1
+    border.width: Theme.border
+    gradient: Gradient {
+        GradientStop { position: 0; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop }
+        GradientStop { position: 1; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panel }
+    }
 
-    Text {
+    Label {
         visible: card.heading !== ""
         text: card.heading.toUpperCase()
         color: Theme.textDim

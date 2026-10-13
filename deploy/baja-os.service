@@ -3,9 +3,8 @@
 #
 # A system service (not a user one) so it can take the display directly from
 # the Plymouth boot screen: `plymouth deactivate` hands over the screen with
-# the truck still showing, the app draws its splash on top, then Plymouth is
-# told to quit. The app itself runs as the normal user and joins their
-# PipeWire session for audio.
+# the truck still showing and the app draws its splash on top. The app
+# itself runs as the normal user and joins their PipeWire session for audio.
 #
 #   sudo systemctl restart baja-os      (no password needed for this user)
 #   journalctl -u baja-os -f
@@ -22,9 +21,9 @@ Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus
 ExecStartPre=+-/usr/bin/plymouth deactivate
 ExecStart=@APP@/run.sh
-# Plymouth only needs to linger until the app has drawn; quit it in the
-# background so startup isn't held up.
-ExecStartPost=+-/bin/sh -c '(sleep 20; /usr/bin/plymouth quit) >/dev/null 2>&1 &'
+# Don't quit Plymouth while the app runs: quitting hands the screen back to
+# the text console and the app loses it ("Could not queue DRM page flip").
+# Deactivated, Plymouth just idles. It's quit only once the app has stopped.
 ExecStopPost=+-/usr/bin/plymouth quit
 Restart=on-failure
 RestartSec=3

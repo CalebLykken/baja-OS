@@ -69,23 +69,22 @@ Put audio files (mp3, m4a, flac, ogg, wav) in `~/Music` on the Pi, or pass
 With no files there, the Music page plays the demo playlist. Audio goes to the
 default PipeWire output (the Pi's 3.5 mm jack).
 
-## Start on boot
+## Pi setup (boot, Wi-Fi, service)
 
 ```bash
-./deploy/install-service.sh
+./deploy/setup-pi.sh          # asks for sudo once; safe to re-run; reboot afterwards
+./deploy/quiet-boot-undo.sh   # puts the original boot screen and console back
 ```
 
-Installs a systemd user service (with lingering, so no login is needed) that
-starts Baja OS full screen at power-on and restarts it if it crashes.
-`systemctl --user stop baja-os` stops it; `systemctl --user disable baja-os`
-turns boot start off.
-
-For a clean boot (no rainbow screen, kernel text, logos or console login;
-a Baja OS boot screen hands straight off to the app's splash):
+`setup-pi.sh` makes Wi-Fi keep retrying at boot (power saving off), hides the
+rainbow screen, kernel text, logos and console login, installs the Baja OS
+boot screen, and installs `baja-os.service`, which takes the display straight
+from the boot screen so the truck stays up until the dashboard appears. It
+also lets your user restart that one service without a password:
 
 ```bash
-./deploy/quiet-boot.sh        # asks for sudo; reboot afterwards
-./deploy/quiet-boot-undo.sh   # puts the original boot back
+sudo systemctl restart baja-os
+journalctl -u baja-os -f
 ```
 
 Ctrl+Alt+F2 still gives you a text login on the Pi itself.
@@ -96,7 +95,7 @@ restored on the next start. `--style` overrides the saved style for one run.
 ## Deploying updates
 
 ```bash
-git pull && systemctl --user restart baja-os
+git pull && sudo systemctl restart baja-os
 ```
 
 ## Next steps

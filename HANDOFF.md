@@ -31,10 +31,10 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Real music playback from `~/Music` (`backend/library.py`, Qt Multimedia + mutagen) with cover art;
   verified on the Pi through the 3.5 mm jack via PipeWire
 
-- Starts at boot via a systemd user service (`deploy/`); style, volume and units persist in
+- Starts at boot via `baja-os.service` (system service, hands off from the Plymouth boot screen); style, volume and units persist in
   `~/.config/baja-os/baja-os.conf`
 
-- Settings shows network status (online, Wi-Fi name, IP, ssh command); `deploy/quiet-boot.sh` hides
+- Settings shows network status (online, Wi-Fi name, IP, ssh command); `deploy/setup-pi.sh` hides
   boot text/logos behind a Baja OS Plymouth theme that hands off to the app splash
 
 ## Still to do

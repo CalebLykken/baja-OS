@@ -1,0 +1,23 @@
+# Starts Baja OS full screen when the Pi boots, no login or SSH needed.
+# A user service (with lingering enabled) so it shares the user's PipeWire
+# audio session.
+#
+# Install:  ./deploy/install-service.sh
+# Logs:     journalctl --user -u baja-os -f
+# Stop:     systemctl --user stop baja-os
+
+[Unit]
+Description=Baja OS dashboard
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+ExecStart=%h/baja-OS/run.sh
+WorkingDirectory=%h/baja-OS
+Restart=on-failure
+RestartSec=3
+# Qt's eglfs exits 1 when stopped; don't count a deliberate stop as a crash.
+SuccessExitStatus=1
+
+[Install]
+WantedBy=default.target

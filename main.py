@@ -25,6 +25,7 @@ from PyQt6.QtQml import QQmlApplicationEngine
 
 from backend.display import Display
 from backend.media import MediaPlayer
+from backend.settings import Settings
 from backend.vehicle import VehicleData
 
 ROOT = Path(__file__).resolve().parent
@@ -34,9 +35,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Baja carputer dashboard")
     parser.add_argument("--fullscreen", action="store_true",
                         help="fill the whole screen (use this on the Pi)")
-    parser.add_argument("--style", default="amber",
+    parser.add_argument("--style", default=None,
                         choices=["amber", "cluster", "trail", "rally"],
-                        help="starting UI style (can also be changed in Settings)")
+                        help="UI style for this run (default: the one last picked in Settings)")
     parser.add_argument("--no-splash", action="store_true",
                         help="skip the startup animation")
     parser.add_argument("--music-dir", default="~/Music",
@@ -71,7 +72,10 @@ def main():
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
     vehicle = VehicleData()
+    settings = Settings()
     media = make_media_player(args.music_dir)
+    media.setVolume(settings.get_int("volume", 40))
+    media.volumeChanged.connect(lambda: settings.set("volume", media.volume))
     display = Display()
 
     engine = QQmlApplicationEngine()
@@ -80,7 +84,8 @@ def main():
     ctx.setContextProperty("media", media)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("demoMode", True)
-    ctx.setContextProperty("startStyle", args.style)
+    ctx.setContextProperty("settings", settings)
+    ctx.setContextProperty("startStyle", args.style or "")
     ctx.setContextProperty("showSplash", not args.no_splash)
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))

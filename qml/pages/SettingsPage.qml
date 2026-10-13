@@ -7,7 +7,10 @@ Item {
     id: page
     signal navigate(int index)
 
-    property bool metric: false
+    // Saved between runs; QSettings hands booleans back as strings.
+    property bool metric: typeof settings !== "undefined"
+                          && String(settings.get("metric", "false")) === "true"
+    onMetricChanged: if (typeof settings !== "undefined") settings.set("metric", metric ? "true" : "false")
 
     ColumnLayout {
         anchors.fill: parent

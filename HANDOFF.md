@@ -31,6 +31,9 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Real music playback from `~/Music` (`backend/library.py`, Qt Multimedia + mutagen) with cover art;
   verified on the Pi through the 3.5 mm jack via PipeWire
 
+- Starts at boot via a systemd user service (`deploy/`); style, volume and units persist in
+  `~/.config/baja-os/baja-os.conf`
+
 ## Still to do
 1. Confirm touch input on the panel
-2. Start on boot (systemd unit), then real OBD-II / audio / CarPlay backends
+2. Real OBD-II / audio / CarPlay backends

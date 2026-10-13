@@ -25,8 +25,22 @@ Window {
 
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
+    function setStyle(name) { Theme.style = name }
 
-    Component.onCompleted: if (typeof startStyle !== "undefined") Theme.style = startStyle
+    // Style: --style for this run if given, else the one saved last time.
+    // Any change (e.g. from Settings) is saved for the next start.
+    Component.onCompleted: {
+        if (typeof startStyle !== "undefined" && startStyle)
+            Theme.style = startStyle
+        else if (typeof settings !== "undefined")
+            Theme.style = settings.get("style", "amber")
+    }
+    Connections {
+        target: Theme
+        function onStyleChanged() {
+            if (typeof settings !== "undefined") settings.set("style", Theme.style)
+        }
+    }
 
     Backdrop { anchors.fill: parent }
 

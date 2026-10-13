@@ -69,10 +69,24 @@ Put audio files (mp3, m4a, flac, ogg, wav) in `~/Music` on the Pi, or pass
 With no files there, the Music page plays the demo playlist. Audio goes to the
 default PipeWire output (the Pi's 3.5 mm jack).
 
+## Start on boot
+
+```bash
+./deploy/install-service.sh
+```
+
+Installs a systemd user service (with lingering, so no login is needed) that
+starts Baja OS full screen at power-on and restarts it if it crashes.
+`systemctl --user stop baja-os` stops it; `systemctl --user disable baja-os`
+turns boot start off.
+
+Style, volume and units are saved to `~/.config/baja-os/baja-os.conf` and
+restored on the next start. `--style` overrides the saved style for one run.
+
 ## Deploying updates
 
 ```bash
-git pull && ./run.sh
+git pull && systemctl --user restart baja-os
 ```
 
 ## Next steps

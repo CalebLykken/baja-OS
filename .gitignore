@@ -5,3 +5,4 @@ venv/
 .DS_Store
 *.png
 !docs/*.png
+!qml/assets/*.png

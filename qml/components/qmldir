@@ -9,3 +9,5 @@ StatusBar 1.0 StatusBar.qml
 NowPlaying 1.0 NowPlaying.qml
 Label 1.0 Label.qml
 Backdrop 1.0 Backdrop.qml
+VehicleCard 1.0 VehicleCard.qml
+Splash 1.0 Splash.qml

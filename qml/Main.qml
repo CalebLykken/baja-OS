@@ -89,4 +89,10 @@ Window {
         color: "black"
         opacity: (1 - display.brightness / 100) * 0.85
     }
+
+    // Startup animation, on top of everything until it fades out.
+    Splash {
+        anchors.fill: parent
+        visible: typeof showSplash === "undefined" || showSplash
+    }
 }

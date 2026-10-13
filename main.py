@@ -37,6 +37,8 @@ def parse_args():
     parser.add_argument("--style", default="amber",
                         choices=["amber", "cluster", "trail", "rally"],
                         help="starting UI style (can also be changed in Settings)")
+    parser.add_argument("--no-splash", action="store_true",
+                        help="skip the startup animation")
     parser.add_argument("--music-dir", default="~/Music",
                         help="folder of audio files to play (demo playlist if empty)")
     return parser.parse_known_args()[0]
@@ -79,6 +81,7 @@ def main():
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("startStyle", args.style)
+    ctx.setContextProperty("showSplash", not args.no_splash)
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))
     if not engine.rootObjects():

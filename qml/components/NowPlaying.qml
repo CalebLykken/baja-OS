@@ -19,18 +19,30 @@ Card {
         anchors { fill: parent; margins: 24; topMargin: 52 }
         spacing: 24
 
-        // Album art placeholder
+        // Album art, or a note glyph when the track has none
         Rectangle {
             Layout.preferredWidth: Math.min(parent.height, parent.width * 0.4)
             Layout.preferredHeight: Layout.preferredWidth
             Layout.alignment: Qt.AlignVCenter
             radius: Theme.radius
             color: Theme.accentDim
+            clip: true
             Text {
+                visible: art.status !== Image.Ready
                 anchors.centerIn: parent
                 text: "♫"
                 color: Theme.accent
                 font.pixelSize: parent.width * 0.4
+            }
+            Image {
+                id: art
+                anchors.fill: parent
+                source: media.art
+                fillMode: Image.PreserveAspectCrop
+                // Decode at display size; embedded covers can be 3000 px PNGs.
+                sourceSize { width: 400; height: 400 }
+                asynchronous: true
+                smooth: true
             }
             TapHandler { onTapped: np.openMusic() }
         }

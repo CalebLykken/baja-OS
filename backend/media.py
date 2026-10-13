@@ -61,6 +61,10 @@ class MediaPlayer(QObject):
     def artist(self):
         return self._queue[self._index]["artist"]
 
+    @pyqtProperty(str, notify=trackChanged)
+    def art(self):
+        return ""  # demo tracks have no cover art
+
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):
         return self._queue[self._index]["duration"]

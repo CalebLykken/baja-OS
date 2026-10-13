@@ -90,6 +90,8 @@ class Display(QObject):
 
         if self._ddc:
             threading.Thread(target=self._writer, daemon=True).start()
+        else:
+            self._brightness = 100  # software dimming starts undimmed
 
     def _writer(self):
         # Only the newest value matters, so a burst of slider moves collapses

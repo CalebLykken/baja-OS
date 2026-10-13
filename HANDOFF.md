@@ -28,6 +28,9 @@ Python + PyQt6 backend, QML front end, mock data for now.
 - Settings brightness drives the Waveshare backlight over DDC/CI on the HDMI cable (`backend/display.py`);
   falls back to a software dim overlay where DDC isn't available (e.g. the Mac)
 
+- Real music playback from `~/Music` (`backend/library.py`, Qt Multimedia + mutagen) with cover art;
+  verified on the Pi through the 3.5 mm jack via PipeWire
+
 ## Still to do
 1. Confirm touch input on the panel
 2. Start on boot (systemd unit), then real OBD-II / audio / CarPlay backends

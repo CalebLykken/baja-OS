@@ -31,12 +31,15 @@ Card {
         height: width
         anchors.centerIn: parent
         anchors.verticalCenterOffset: 8
+        onWidthChanged: requestPaint()
 
         onPaint: {
             var ctx = getContext("2d")
             ctx.reset()
             var cx = width / 2, cy = height / 2
             var r = width / 2 - 14
+            if (r <= 0)
+                return  // not laid out yet (e.g. a hidden page)
             var start = 0.75 * Math.PI
             var sweep = 1.5 * Math.PI
             ctx.lineCap = "round"

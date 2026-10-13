@@ -6,3 +6,4 @@ Gauge 1.0 Gauge.qml
 Readout 1.0 Readout.qml
 ProgressBar 1.0 ProgressBar.qml
 StatusBar 1.0 StatusBar.qml
+NowPlaying 1.0 NowPlaying.qml

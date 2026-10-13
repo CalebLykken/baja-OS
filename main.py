@@ -58,7 +58,10 @@ def main():
 
     vehicle.start()
     media.start()
-    return app.exec()
+    code = app.exec()
+    # Tear down the QML before the backends so bindings don't read null on exit.
+    del engine
+    return code
 
 
 if __name__ == "__main__":

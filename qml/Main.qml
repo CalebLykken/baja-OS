@@ -1,0 +1,79 @@
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Window
+import "components"
+import "pages"
+
+// Root window: nav rail on the left, status bar + pages on the right.
+// Sized for the 8" 1280x800 panel; main.py goes full screen on the Pi.
+Window {
+    id: root
+    width: 1280
+    height: 800
+    visible: true
+    color: Theme.bg
+    title: "Baja Carputer"
+
+    property int page: 0
+    readonly property var pages: [
+        { glyph: "⌂", label: "Home" },
+        { glyph: "♫", label: "Music" },
+        { glyph: "◈", label: "Maps" },
+        { glyph: "◔", label: "Gauges" },
+        { glyph: "⚙", label: "Settings" }
+    ]
+
+    // Lets screenshot tooling (and later a hardware button) switch pages.
+    function showPage(i) { page = i }
+
+    Rectangle {
+        id: rail
+        width: 112
+        anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
+        color: Theme.bg
+
+        Column {
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
+            Repeater {
+                model: root.pages
+                NavButton {
+                    glyph: modelData.glyph
+                    label: modelData.label
+                    active: root.page === index
+                    onClicked: root.page = index
+                }
+            }
+        }
+
+        Rectangle {
+            width: 1
+            color: Theme.line
+            anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
+        }
+    }
+
+    ColumnLayout {
+        anchors {
+            left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom
+            leftMargin: 24; rightMargin: 24; bottomMargin: 20
+        }
+        spacing: 8
+
+        StatusBar {
+            Layout.fillWidth: true
+            title: root.pages[root.page].label
+        }
+
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: root.page
+
+            HomePage { onNavigate: (i) => root.page = i }
+            MusicPage { onNavigate: (i) => root.page = i }
+            MapsPage { onNavigate: (i) => root.page = i }
+            GaugesPage { onNavigate: (i) => root.page = i }
+            SettingsPage { onNavigate: (i) => root.page = i }
+        }
+    }
+}

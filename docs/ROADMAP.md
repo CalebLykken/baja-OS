@@ -14,13 +14,19 @@ terms, and in-car safety and hardware. What changed, and why, is at the end.
 - **TomTom is optional, for live traffic and search, and only with written
   permission.** Its standard developer terms reportedly exclude in-vehicle use
   and turn-by-turn navigation unless TomTom agrees in writing; the free tier is
-  for evaluation. We ask TomTom before relying on it. If they say no, we go
-  without live traffic, or check traffic on the phone.
+  for evaluation. We're asking TomTom in writing (draft in
+  `docs/tomtom-request.md`). If they say no, we go without live traffic, or
+  check traffic on the phone.
 - **Internet:** the phone's Wi-Fi hotspot first, Bluetooth tethering as backup,
   car Wi-Fi later.
 - **GPS:** a GT-U7 (u-blox 7) USB module for development; upgrade to an enclosed
   u-blox 8 puck if city reception is poor.
 - Bluetooth audio from the phone and local files stay as fallbacks.
+- **Hands-free calling** is planned: a microphone, with calls through the car
+  speakers (S6, H6).
+- **No parked/moving lockouts** (decided 2026-10-14): this is a personal
+  project, so typing, lists and 3D stay available all the time. Big
+  driving-mode sizes, the hardware mute and night dimming stay.
 
 ## Where things stand
 
@@ -81,7 +87,7 @@ The groundwork every later phase depends on, done first.
 - **GPS, moved up from S3:**
   - gpsd with the GT-U7 on a USB 2 port, with u-blox settings re-applied at
     every boot (automotive mode, update rate).
-  - Feeds position, speed (for the "moving or parked" decision) and heading.
+  - Feeds position, speed (shown until OBD-II arrives) and heading.
   - chrony uses it for the clock, along with the Pi 5 RTC battery, so the clock
     is right with no internet.
 - **Brightness:** load `i2c-dev` and find DDC/CI on the Pi 5. Real backlight
@@ -132,9 +138,7 @@ phone locked; the dashboard controls work; it comes back after a reboot.
   - Respect rate limits and back off when Spotify says so.
 - **Sign-in on the Pi** with a QR code (loopback redirect rules permitting).
   Spotify sign-ins expire after 6 months; the dashboard warns ahead of time and
-  re-links while parked.
-- **While moving:** only pinned and recent items and big playback controls. No
-  search and no long scrolling lists.
+  re-links from the dashboard.
 
 ### S3. Live map
 
@@ -152,8 +156,7 @@ phone locked; the dashboard controls work; it comes back after a reboot.
     WebGL works under eglfs).
   - Last resort: raster tiles through QtLocation.
 - **Look:** styles matching each Baja OS style, day and night (night is light
-  text on dark). Flat 2D while moving. Follow mode, recentre, and smooth motion
-  between GPS updates.
+  text on dark). Follow mode, recentre, and smooth motion between GPS updates.
 - **Attribution:** "© OpenStreetMap contributors" on the map.
 - **Traffic overlay (optional):** TomTom flow tiles, only if TomTom approves in
   writing.
@@ -202,15 +205,17 @@ dashboard alone, including a missed turn, in airplane mode.
   of Spotify.
 - Optional FM radio (USB tuner or RTL-SDR), to replace the factory radio and
   for emergency broadcasts.
-- Hands-free calls (HFP) with a microphone and echo cancellation; at minimum,
-  duck the music during calls.
+- **Hands-free calls (HFP):** a USB or I2S microphone, PipeWire echo
+  cancellation, incoming-call screen with answer/decline, the music paused
+  during calls, and the call audio through the car speakers. Washington law only
+  allows minimal touching of a handheld phone while driving, so this keeps calls
+  legal without touching the phone.
 
 ---
 
 ## Hardware track
 
-All 12 V signals into the RP2040 (ignition, dimmer, speed sensor, parking
-brake, reverse) go through opto-isolators. Relay coils are driven by a
+All 12 V signals into the RP2040 (ignition, dimmer, speed sensor, reverse) go through opto-isolators. Relay coils are driven by a
 transistor with a flyback diode.
 
 - **H1. Audio:**
@@ -228,8 +233,6 @@ transistor with a flyback diode.
   - **Hardware mute:** the RP2040 drives the amp's mute/standby pin directly.
     It mutes on a long-press of the knob, or by itself if the Pi stops sending a
     heartbeat.
-  - **Parking brake input:** "parked" means brake on and under 5 mph. If speed
-    is unknown, treat the truck as moving.
   - **Reverse input:** duck audio in reverse; an optional backup camera later.
   - Lower-panel buttons for play/pause, skip and mute (the Baja has no
     steering-wheel controls).
@@ -253,28 +256,22 @@ transistor with a flyback diode.
     cables.
   - Clear of the passenger airbag and its deployment path, the vents and the
     hazard switch. Within 30° below the driver's line of sight.
-  - The Pi mounts low in the radio cavity, not in the pod, because it's rated
-    to 50 °C and slows itself down past about 80 °C.
-  - Active cooler; high-endurance SD card or NVMe.
+  - The Pi goes somewhere cooler than the pod, out of direct sun, with its
+    active cooler fitted (done). It slows itself down past about 80 °C, so check
+    temperatures on a hot day.
+  - High-endurance SD card or NVMe.
   - Anti-glare film or a small hood for daylight.
-- **H6. Optional:** microphone (calls and voice), backup camera, FM tuner, u-blox
-  8 GPS puck.
+- **H6. Microphone** for hands-free calls (planned), mounted near the
+  headliner or A-pillar, away from vents. **Optional:** backup camera, FM
+  tuner, u-blox 8 GPS puck.
 
 ---
 
 ## Safety and driving rules
 
-Based on NHTSA's visual-manual driver distraction guidelines:
+Informed by NHTSA's visual-manual driver distraction guidelines (written for
+manufacturers; this personal build skips their parked/moving lockouts):
 
-- **Moving vs parked:** "parked" means the parking brake is on and speed is
-  under 5 mph. If speed is unknown, the truck counts as moving.
-- **Blocked while moving:**
-  - Typing.
-  - Video, including the Truck page's animation.
-  - Scrolling text and long lists.
-  - 3D or tilted maps.
-- **Glance limits:** every task you can do while driving must fit within 2 s per
-  glance and 12 s in total.
 - **Driving-mode sizes:**
   - Touch targets at least about 90 px (about 12 mm on this panel).
   - Main text at least about 38 px, secondary text at least about 28 px.
@@ -302,14 +299,12 @@ Based on NHTSA's visual-manual driver distraction guidelines:
 
 ## Open decisions
 
-1. **TomTom:** do you want me to draft a short email asking for written
-   permission (personal, non-commercial, one vehicle) to use traffic tiles and
-   search in the car?
-2. **Calls:** add a microphone and hands-free calling (S6), or keep calls on the
-   phone?
+None right now.
 
 Answered 2026-10-14: Spotify Premium; buy the GPS (GT-U7); internet is the
-hotspot first, Bluetooth tethering second.
+hotspot first, Bluetooth tethering second; ask TomTom for written permission
+(draft in `docs/tomtom-request.md`); add hands-free calling; no parked/moving
+lockouts; the Pi goes in a cooler spot with its active cooler.
 
 ---
 
@@ -338,3 +333,6 @@ hotspot first, Bluetooth tethering second.
   and public-domain voices.
 - **Safety rules rewritten** against NHTSA's guidelines, with larger
   driving-mode sizes.
+- **Follow-up (2026-10-14):** dropped the parked/moving lockouts and the
+  parking-brake input at your request; added hands-free calling and a
+  microphone; Pi placement is flexible since it has an active cooler.

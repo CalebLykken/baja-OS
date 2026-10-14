@@ -1,7 +1,9 @@
 // The Baja OS map: MapLibre GL JS drawing the offline Protomaps extract that
 // backend/maps.py serves from /data. Colours come from the dashboard's theme
 // tokens (passed as ?theme={...} and on every style change), so the map
-// always matches the UI. QML drives it through `window.baja` and listens for
+// always matches the UI. The truck is an arrow that glides between position
+// fixes; in follow mode the map tilts, turns heading-up and keeps the truck
+// low on screen. QML drives it through `window.baja` and listens for
 // console messages that start with "baja:".
 
 import * as maplibregl from "./vendor/maplibre-gl.mjs";
@@ -104,7 +106,10 @@ function flavorFor(t) {
 }
 
 // Point-of-interest icons come in fixed colours that clash with the
-// dashboard, so keep the names and drop the icons.
+// dashboard, so keep the names and drop the icons. While following the
+// truck the names are hidden too: shop names are clutter when driving.
+const DRIVING_HIDDEN = ["pois", "address_label"];
+
 function withoutPoiIcons(list) {
     return list.map(layer => {
         if (layer.id !== "pois") return layer;
@@ -114,6 +119,12 @@ function withoutPoiIcons(list) {
         delete layout["text-variable-anchor"];
         return { ...layer, layout };
     });
+}
+
+function forDriving(list, driving) {
+    return list.map(layer => DRIVING_HIDDEN.includes(layer.id)
+        ? { ...layer, layout: { ...layer.layout, visibility: driving ? "none" : "visible" } }
+        : layer);
 }
 
 function styleFor(t) {
@@ -128,15 +139,23 @@ function styleFor(t) {
                 attribution: "© OpenStreetMap contributors",
             },
         },
-        layers: withoutPoiIcons(layers("protomaps", flavorFor(t), { lang: "en" })),
+        layers: forDriving(withoutPoiIcons(layers("protomaps", flavorFor(t), { lang: "en" })),
+                           following),
     };
 }
 
 // ---- the map ----------------------------------------------------------------
 
 const query = new URLSearchParams(location.search);
+let following = false;       // follow mode: the camera rides with the truck
 let theme = { ...FALLBACK_THEME, ...JSON.parse(query.get("theme") || "{}") };
-document.body.style.background = theme.bg;
+
+function applyPageColours(t) {
+    document.body.style.background = t.bg;
+    document.documentElement.style.setProperty("--accent", t.accent);
+    document.documentElement.style.setProperty("--bg", t.bg);
+}
+applyPageColours(theme);
 
 const region = await fetch(`${origin}/data/region.json`).then(r => r.json()).catch(() => null);
 // Keep the camera over the extract, with a little room past its edges.
@@ -160,6 +179,97 @@ const map = new maplibregl.Map({
 });
 
 map.on("load", () => post("ready", { ms: Math.round(performance.now() - started) }));
+
+// ---- the truck and follow mode ----------------------------------------------
+
+const puck = document.createElement("div");
+puck.className = "puck";
+puck.innerHTML = '<svg viewBox="0 0 46 46" width="46" height="46"><path d="M23 4 L38 40 L23 32 L8 40 Z"/></svg>';
+const marker = new maplibregl.Marker({ element: puck, rotationAlignment: "map", pitchAlignment: "map" });
+
+let shown = null;            // where the arrow is drawn: {lon, lat, heading, speed}
+let from = null, to = null, fixAt = 0, span = 1000, frame = 0;
+let touched = false, easingUntil = 0;
+let followZoom = 16.4, zoomBias = 0;
+const FOLLOW_PITCH = 55;
+
+function turn(a, b, f) {                     // shortest way round
+    const d = ((b - a + 540) % 360) - 180;
+    return (a + d * f + 360) % 360;
+}
+
+function followPadding() {
+    return { top: map.getContainer().clientHeight * 0.35, bottom: 0, left: 0, right: 0 };
+}
+
+function followCamera(now) {
+    if (now < easingUntil) return;
+    // Zoom out a little at speed to see further ahead.
+    const s = shown.speed;
+    const target = (s > 22 ? 15.4 : s > 12 ? 15.9 : 16.4) + zoomBias;
+    followZoom += (target - followZoom) * 0.02;
+    map.jumpTo({ center: [shown.lon, shown.lat], bearing: shown.heading, pitch: FOLLOW_PITCH,
+                 zoom: followZoom, padding: followPadding() });
+}
+
+function step(now) {
+    frame = 0;
+    if (!to) return;
+    const f = Math.min(1, (now - fixAt) / span);
+    shown = { lon: from.lon + (to.lon - from.lon) * f, lat: from.lat + (to.lat - from.lat) * f,
+              heading: turn(from.heading, to.heading, f), speed: to.speed };
+    marker.setLngLat([shown.lon, shown.lat]).setRotation(shown.heading);
+    if (following) followCamera(now);
+    if (f < 1) frame = requestAnimationFrame(step);
+}
+
+function setPosition(lon, lat, heading, speed) {
+    const now = performance.now();
+    const fix = { lon, lat, heading, speed };
+    if (!shown) {
+        shown = fix;
+        marker.setLngLat([lon, lat]).setRotation(heading).addTo(map);
+        if (!touched) startFollowing(true);
+    }
+    // Glide from where the arrow is now to the new fix over about the time
+    // between fixes, so it never stops and never jumps.
+    span = fixAt ? Math.min(2000, Math.max(300, now - fixAt)) : 1000;
+    from = { ...shown };
+    to = fix;
+    fixAt = now;
+    if (!frame) frame = requestAnimationFrame(step);
+}
+
+function setFollowing(on) {
+    if (on !== following) {
+        following = on;
+        for (const id of DRIVING_HIDDEN) {
+            if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "none" : "visible");
+        }
+        post("follow", { on });
+    }
+}
+
+function startFollowing(animate) {
+    if (!shown) return;
+    zoomBias = 0;
+    setFollowing(true);
+    if (animate) {
+        easingUntil = performance.now() + 900;
+        map.easeTo({ center: [shown.lon, shown.lat], bearing: shown.heading, pitch: FOLLOW_PITCH,
+                     zoom: followZoom, padding: followPadding(), duration: 900 });
+    }
+}
+
+// Touching the map takes over from follow mode; the follow key gives it back.
+for (const ev of ["dragstart", "rotatestart", "pitchstart", "zoomstart"]) {
+    map.on(ev, (e) => {
+        if (e.originalEvent) {
+            touched = true;
+            setFollowing(false);
+        }
+    });
+}
 map.on("error", (ev) => post("error", { message: String(ev.error && ev.error.message || ev.error) }));
 map.on("rotate", () => post("bearing", { bearing: map.getBearing() }));
 
@@ -191,6 +301,8 @@ function along(path, metres) {
 }
 
 function bench(seconds = 20, speed = 30) {
+    setFollowing(false);
+    touched = true;
     const times = [];
     let last = null, startT = null;
     function frame(now) {
@@ -219,12 +331,29 @@ window.baja = {
     map,                    // for poking at from a desktop browser's console
     setTheme(t) {
         theme = { ...FALLBACK_THEME, ...t };
-        document.body.style.background = theme.bg;
+        applyPageColours(theme);
         map.setStyle(styleFor(theme));
     },
-    zoomIn() { map.zoomIn({ duration: 300 }); },
-    zoomOut() { map.zoomOut({ duration: 300 }); },
-    recenter() { map.easeTo({ center: SEATTLE, zoom: 12.5, bearing: 0, pitch: 0, duration: 800 }); },
-    northUp() { map.easeTo({ bearing: 0, pitch: 0, duration: 500 }); },
+    setPosition,
+    // While following, the zoom keys nudge the follow zoom instead of
+    // breaking out of follow mode.
+    zoomIn() {
+        if (following) zoomBias = Math.min(3, zoomBias + 1);
+        else map.zoomIn({ duration: 300 });
+    },
+    zoomOut() {
+        if (following) zoomBias = Math.max(-4, zoomBias - 1);
+        else map.zoomOut({ duration: 300 });
+    },
+    // Follow the truck if there's a position, else go back to Seattle.
+    recenter() {
+        if (shown) { startFollowing(true); return; }
+        map.easeTo({ center: SEATTLE, zoom: 12.5, bearing: 0, pitch: 0,
+                     padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 800 });
+    },
+    northUp() {
+        setFollowing(false);
+        map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+    },
     bench,
 };

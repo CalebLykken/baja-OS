@@ -16,6 +16,7 @@ Item {
     onVisibleChanged: if (visible) { opened = true; if (hasMaps) maps.refresh() }
 
     readonly property bool hasMaps: typeof maps !== "undefined"
+    readonly property bool hasFix: typeof gps !== "undefined" && gps.hasFix
     readonly property var map: mapLoader.item
 
     Card {
@@ -116,14 +117,49 @@ Item {
             visible: page.mapReady
             anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
             spacing: 12
-            // North: only while the map is turned; the needle points north.
+            // North: only while the map is turned by hand; the needle points north.
             IconButton {
-                visible: page.map && Math.abs(page.map.bearing) > 1
+                visible: page.map && !page.map.following && Math.abs(page.map.bearing) > 1
                 icon: "navigation"
                 iconRotation: page.map ? -page.map.bearing : 0
                 onClicked: page.map.call("northUp()")
             }
-            IconButton { icon: "home"; onClicked: page.map.call("recenter()") }
+            // Follow the truck (lit while following), or back to Seattle
+            // when there's no position yet.
+            IconButton {
+                icon: page.hasFix ? "navigation" : "home"
+                active: page.map && page.map.following
+                onClicked: page.map.call("recenter()")
+            }
+        }
+
+        // Speed, top left, whenever there's a position.
+        Rectangle {
+            visible: page.mapReady && page.hasFix
+            anchors { left: parent.left; top: parent.top; margins: 16 }
+            width: speedRow.implicitWidth + 32
+            height: 76
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: Theme.border
+            border.color: Theme.line
+            Row {
+                id: speedRow
+                anchors.centerIn: parent
+                spacing: 8
+                Label {
+                    id: speedNum
+                    numeric: true
+                    text: Math.round(Units.speed(gps.speed / 0.44704))
+                    font.pixelSize: Theme.fontReadout
+                }
+                Label {
+                    anchors.baseline: speedNum.baseline
+                    text: Units.speedUnit
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                }
+            }
         }
 
         // OpenStreetMap's licence asks for this to be visible on the map.

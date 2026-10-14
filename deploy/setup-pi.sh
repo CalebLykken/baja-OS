@@ -8,6 +8,7 @@
 #     and the dashboard may join networks (the phone's hotspot), use the phone
 #     over Bluetooth as a backup, and reboot or shut down the Pi (polkit)
 #   - The equalizer in front of the speakers (a user PipeWire filter)
+#   - gpsd for the GPS receiver (GT-U7, u-blox 7 over USB), always reading
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
 #   - Baja OS as a system service started at boot
@@ -32,7 +33,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     fonts-urw-base35 fonts-liberation fonts-dejavu-core \
     qml6-module-qtquick3d qml6-module-qtquick3d-assetutils qt6-quick3d-assetimporters-plugin \
     bluez bluez-tools libspa-0.2-bluetooth \
-    python3-pyqt6.qtwebengine qml6-module-qtwebengine python3-pyqt6.qtwebsockets
+    python3-pyqt6.qtwebengine qml6-module-qtwebengine python3-pyqt6.qtwebsockets \
+    gpsd gpsd-clients
 # The user's PipeWire session (audio) runs at boot without anyone logging in,
 # with the PulseAudio-compatible socket that Qt Multimedia plays through.
 loginctl enable-linger "$USER_NAME"
@@ -77,6 +79,19 @@ done
 # that it may change networks (and reboot or shut down from Settings).
 sed "s|@USER@|$USER_NAME|g" "$HERE/polkit/50-baja-os.rules" > /etc/polkit-1/rules.d/50-baja-os.rules
 chmod 644 /etc/polkit-1/rules.d/50-baja-os.rules
+
+echo "== GPS"
+# gpsd finds the u-blox receiver by itself when it's plugged in (USBAUTO)
+# and keeps reading it with no client connected (-n), so the first fix is
+# ready by the time the dashboard asks.
+cat > /etc/default/gpsd <<GPSD
+START_DAEMON="true"
+USBAUTO="true"
+DEVICES=""
+GPSD_OPTIONS="-n"
+GPSD
+systemctl enable --now gpsd.socket >/dev/null 2>&1 || true
+systemctl restart gpsd >/dev/null 2>&1 || true
 
 echo "== Equalizer"
 sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" sh "$HERE/audio/install-eq.sh"

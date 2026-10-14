@@ -9,6 +9,9 @@
   html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #14160f; }
   /* The dashboard draws its own keys and attribution over the map. */
   .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
+  /* The truck: an arrow in the accent colour, lying flat on the map. */
+  .puck { width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.55)); }
+  .puck path { fill: var(--accent, #ff7a1a); stroke: var(--bg, #14160f); stroke-width: 3; stroke-linejoin: round; }
 </style>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>

@@ -13,6 +13,7 @@ WebEngineView {
     signal failed(string message)
     signal benchDone(var result)
     property real bearing: 0
+    property bool following: false
 
     // The dashboard's colours, which the map derives its palette from.
     function themeTokens() {
@@ -23,6 +24,10 @@ WebEngineView {
         }
     }
     function call(js) { runJavaScript("window.baja && baja." + js) }
+    function sendPosition() {
+        if (typeof gps !== "undefined" && gps.hasFix)
+            call("setPosition(" + gps.lon + "," + gps.lat + "," + gps.heading + "," + gps.speed + ")")
+    }
 
     // Set once, not bound: a style change recolours the running map
     // (Connections below) instead of reloading the page.
@@ -38,7 +43,8 @@ WebEngineView {
     onJavaScriptConsoleMessage: (level, message, line, source) => {
         if (message.indexOf("baja:") === 0) {
             var m = JSON.parse(message.slice(5))
-            if (m.kind === "ready") web.ready(m.ms)
+            if (m.kind === "ready") { web.ready(m.ms); web.sendPosition() }
+            else if (m.kind === "follow") web.following = m.on
             else if (m.kind === "error") console.warn("map:", m.message)
             else if (m.kind === "bearing") web.bearing = m.bearing
             else if (m.kind === "bench") web.benchDone(m)
@@ -56,6 +62,12 @@ WebEngineView {
         reloadTimer.start()
     }
     Timer { id: reloadTimer; interval: 1000; onTriggered: web.reload() }
+
+    // The truck's position, about once a second.
+    Connections {
+        target: typeof gps !== "undefined" ? gps : null
+        function onChanged() { web.sendPosition() }
+    }
 
     // New map data (Settings > Map > Update): load it.
     Connections {

@@ -7,15 +7,17 @@
 // the map drops what doesn't help driving (shops, buildings, footpaths,
 // one-way arrows). Traffic lights and stop signs show only on a route.
 //
-// The truck is a small 3D model of the Baja (pre-rendered from every side,
-// see tools/render_car_sprites.py) that glides between fixes and turns
-// with the road. Following tilts the map heading-up with the truck low on
-// screen and clear of the dashboard's panels (setInsets). QML drives it
-// all through `window.baja` and listens for console messages that start
-// with "baja:".
+// The truck is a 3D model of the Baja drawn by three.js in the map's own
+// frame; it rolls on smoothly between GPS fixes and leans into turns.
+// Following tilts the map heading-up with the truck low on screen and
+// clear of the dashboard's panels (setInsets), the camera turning a beat
+// after the truck. QML drives it all through `window.baja` and listens for
+// console messages that start with "baja:".
 
 import * as maplibregl from "./vendor/maplibre-gl.mjs";
 import { layers, namedFlavor } from "./vendor/basemaps.mjs";
+import * as THREE from "three";
+import { GLTFLoader } from "./vendor/three/loaders/GLTFLoader.js";
 
 const started = performance.now();
 const origin = location.origin;
@@ -209,7 +211,6 @@ let mode = query.get("mode") === "day" ? "day" : "night";
 applyPageColours(mode);
 
 const region = await fetch(`${origin}/data/region.json`).then(r => r.json()).catch(() => null);
-const CAR = await fetch("car.json").then(r => r.json()).catch(() => null);      // the truck's frames
 // Keep the camera over the extract, with a little room past its edges.
 const [w, s, e, n] = region ? region.bbox : [-122.7, 47.1, -121.7, 48.1];
 const pad = 0.15;
@@ -228,11 +229,21 @@ const map = new maplibregl.Map({
     maxBounds: [[w - pad, s - pad], [e + pad, n + pad]],
     attributionControl: false,
     fadeDuration: 150,
+    // Smooth edges on the 3D truck.
+    canvasContextAttributes: { antialias: true },
 });
 
 map.on("load", () => post("ready", { ms: Math.round(performance.now() - started) }));
 map.on("error", (ev) => post("error", { message: String(ev.error && ev.error.message || ev.error) }));
-map.on("rotate", () => post("bearing", { bearing: map.getBearing() }));
+// The dashboard only needs to know when the bearing really changes.
+let postedBearing = null;
+map.on("rotate", () => {
+    const b = map.getBearing();
+    if (postedBearing === null || Math.abs(((b - postedBearing + 540) % 360) - 180) > 0.5) {
+        postedBearing = b;
+        post("bearing", { bearing: b });
+    }
+});
 
 // What the dashboard's panels cover, in this page's pixels. Framing and
 // the follow camera keep the truck, the route and places out from under them.
@@ -253,61 +264,168 @@ function framePadding() {
 
 // ---- the truck and follow mode ----------------------------------------------------
 
-// The truck: a small 3D model of the Baja, pre-rendered from 64 directions
-// at three camera tilts (tools/render_car_sprites.py) into one picture,
-// car.webp. drawCar() shows the frame for the way the truck points on
-// screen and how far the map is tilted, and turns it the last few degrees,
-// so it looks like a real car on the road for the cost of one picture.
-const CAR_SIZE = 84;                         // CSS px per frame (car ~74 px long)
-const puck = document.createElement("div");
-puck.className = "puck";
-const car = document.createElement("div");
-car.className = "car";
-puck.appendChild(car);
-if (CAR) {
-    car.style.backgroundSize = `${CAR.cols * CAR_SIZE}px ${CAR.rows * CAR_SIZE}px`;
-}
-const marker = new maplibregl.Marker({ element: puck, rotationAlignment: "viewport", pitchAlignment: "viewport" });
-let carFrame = -1, carTilt = -1;
+// The truck is a 3D model of the Baja (truck.glb, from
+// tools/make_map_truck.py) that three.js draws inside the map's own frame
+// (a custom layer): exactly on its spot, in the map's perspective, so it
+// never jitters against the streets. Like the car in Google Maps it keeps
+// one size on screen at any zoom. Its wheels roll, the front ones steer
+// through turns, and the body leans a little in corners and dips when
+// braking.
+const TRUCK_PX = 80;                 // its length on screen, CSS px
+const TRUCK_M = 4.85;                // its real length, m
+const WHEELBASE_M = 2.65;
 
-function drawCar() {
-    if (!shown || !CAR) return;
-    const pitch = map.getPitch();
-    let t = 0;
-    CAR.tilts.forEach((tilt, i) => { if (pitch >= tilt.minPitch) t = i; });
-    const per = 360 / CAR.headings;
-    const rel = ((shown.heading - map.getBearing()) % 360 + 360) % 360;
-    const k = Math.round(rel / per);
-    const index = t * CAR.headings + (k % CAR.headings);
-    if (index !== carFrame) {
-        carFrame = index;
-        car.style.backgroundPosition =
-            `${-(index % CAR.cols) * CAR_SIZE}px ${-Math.floor(index / CAR.cols) * CAR_SIZE}px`;
+const truckScene = new THREE.Scene();
+const truckCamera = new THREE.Camera();
+const truckRoot = new THREE.Group();          // on its spot, facing its heading
+const truckBody = new THREE.Group();          // leans and dips, about its middle
+truckBody.position.y = 0.6;
+truckRoot.add(truckBody);
+truckScene.add(truckRoot);
+
+// Sky light and a high sun behind the viewer's left shoulder. The rig
+// turns with the map, so the truck is lit the same way on screen
+// whichever way it faces.
+const lightRig = new THREE.Group();
+lightRig.add(new THREE.HemisphereLight(0xffffff, 0x6f6a60, 1.9));
+const sun = new THREE.DirectionalLight(0xffffff, 2.6);
+sun.position.set(0.7, 1.6, -1.1);
+lightRig.add(sun);
+truckScene.add(lightRig);
+
+// A soft shadow on the road under it.
+function blob() {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const g = c.getContext("2d");
+    const grad = g.createRadialGradient(64, 64, 6, 64, 64, 62);
+    grad.addColorStop(0, "rgba(0, 0, 0, 0.75)");
+    grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);      // stretched to an oval by its plane
+}
+const shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 6.2),
+    new THREE.MeshBasicMaterial({ map: blob(), transparent: true, depthWrite: false, opacity: 0.6 }));
+shadowMesh.rotation.x = -Math.PI / 2;
+shadowMesh.position.y = 0.02;
+truckRoot.add(shadowMesh);
+
+let wheels = [], wheelRadius = 0.33, truckLoaded = false;
+let wheelTurn = 0, steer = 0, roll = 0, dip = 0;
+new GLTFLoader().load("truck.glb", (gltf) => {
+    const model = gltf.scene;
+    model.position.y = -0.6;
+    // One side of each surface: the model marks them all two-sided, and
+    // once simplified their backs poke through the fronts as speckles.
+    model.traverse((o) => { if (o.isMesh) o.material.side = THREE.FrontSide; });
+    truckBody.add(model);
+    // The wheels stay on the road while the body leans.
+    model.traverse((o) => {
+        if (/^wheel_(FL|FR|RL|RR)$/.test(o.name) && !/^wheel_/.test(o.parent.name)) wheels.push(o);
+    });
+    for (const wheel of wheels) {
+        truckRoot.attach(wheel);
+        wheel.rotation.order = "YXZ";        // steer, then roll
+        wheel.userData.front = /F/.test(wheel.name);
     }
-    car.style.transform = `rotate(${(rel - k * per).toFixed(2)}deg)`;
-    if (t !== carTilt) {
-        // The frame is centred on the middle of the truck; its wheels sit
-        // a little lower, on the spot it's at.
-        carTilt = t;
-        marker.setOffset([0, -CAR.tilts[t].drop * CAR_SIZE / CAR.frame]);
+    if (wheels.length) {
+        const size = new THREE.Box3().setFromObject(wheels[0]).getSize(new THREE.Vector3());
+        wheelRadius = size.y / 2;
+    }
+    truckLoaded = true;
+    map.triggerRepaint();
+}, undefined, (err) => post("error", { message: "Truck model: " + err }));
+
+// The map's depth range spans a whole city, too coarse for a truck: its
+// bed liner and floor flicker through each other. Re-aim the depth at just
+// the few metres around the truck (m: model space to clip space).
+function tightDepth(m) {
+    const e = m.elements;
+    const w = (x, y, z) => e[3] * x + e[7] * y + e[11] * z + e[15];
+    const centre = w(0, 0.8, 0);
+    const reach = 1.2 * Math.max(Math.abs(w(4, 0.8, 0) - centre), Math.abs(w(0, 4, 0) - centre),
+                                 Math.abs(w(0, 0.8, 4) - centre));
+    const near = Math.max(1e-6, centre - reach), far = centre + reach;
+    const a = (far + near) / (far - near), b = -2 * far * near / (far - near);
+    for (const i of [2, 6, 10, 14]) e[i] = a * e[i + 1];
+    e[14] += b;
+}
+
+let truckRenderer = null;
+const truckLayer = {
+    id: "truck", type: "custom", renderingMode: "3d",
+    onAdd(m, gl) {
+        if (!truckRenderer) {
+            truckRenderer = new THREE.WebGLRenderer({ canvas: m.getCanvas(), context: gl, antialias: true });
+            truckRenderer.autoClear = false;
+        }
+    },
+    render(gl, args) {
+        if (!shown || !truckLoaded) return;
+        const merc = maplibregl.MercatorCoordinate.fromLngLat([shown.lon, shown.lat], 0);
+        // Metres per screen pixel here at this zoom, so it stays TRUCK_PX long.
+        const mpp = 40075016.686 * Math.cos(shown.lat * Math.PI / 180) / (512 * 2 ** map.getZoom());
+        const s = merc.meterInMercatorCoordinateUnits() * (TRUCK_PX * mpp / TRUCK_M);
+        const view = (args.defaultProjectionData && args.defaultProjectionData.mainMatrix) || args.modelViewProjectionMatrix;
+        const p = new THREE.Matrix4().fromArray(view).multiply(
+            new THREE.Matrix4().makeTranslation(merc.x, merc.y, merc.z)
+                .scale(new THREE.Vector3(s, -s, s))
+                .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
+        tightDepth(p);
+        truckCamera.projectionMatrix = p;
+        // The model's nose is +Z; compass bearings turn clockwise from north.
+        truckRoot.rotation.y = Math.PI - shown.heading * Math.PI / 180;
+        lightRig.rotation.y = Math.PI - map.getBearing() * Math.PI / 180;
+        truckBody.rotation.set(dip, 0, roll);
+        for (const wheel of wheels) {
+            wheel.rotation.x = wheelTurn;
+            wheel.rotation.y = wheel.userData.front ? steer : 0;
+        }
+        truckRenderer.resetState();
+        truckRenderer.clearDepth();        // it's drawn last, over everything
+        truckRenderer.render(truckScene, truckCamera);
+    },
+};
+
+function drawTruck() {
+    try {
+        if (!map.getLayer("truck")) map.addLayer(truckLayer);       // on top of everything
+    } catch (err) {
+        setTimeout(drawTruck, 250);
     }
 }
+map.on("load", drawTruck);
+let truckPending = false;
+map.on("styledata", () => {
+    if (truckPending || map.getLayer("truck")) return;
+    truckPending = true;
+    setTimeout(() => { truckPending = false; drawTruck(); }, 0);
+});
+
+// ---- where the truck is, and follow mode --------------------------------------------
 
 let shown = null;            // where the truck is drawn: {lon, lat, heading, speed}
-map.on("move", drawCar);
-let from = null, to = null, fixAt = 0, span = 1000, frame = 0;
+let fix = null, fixAt = 0;   // the latest GPS fix, and when it came
+let frame = 0, lastStep = 0;
+let yawRate = 0, accel = 0;  // rad/s (clockwise +) and m/s², smoothed
 let touched = false, easingUntil = 0;
 let followZoom = 16.4, zoomBias = 0, approach = Infinity;
+let camBearing = 0;
 const FOLLOW_PITCH = 55;
 
 function turn(a, b, f) {                     // shortest way round
     const d = ((b - a + 540) % 360) - 180;
     return (a + d * f + 360) % 360;
 }
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 let speedZoom = 16.4;
-function followCamera(now) {
-    if (now < easingUntil) return;
+function followCamera(now, dt) {
+    if (now < easingUntil) {
+        camBearing = map.getBearing();
+        return;
+    }
     // Zoom out at speed to see further ahead, with some hysteresis so it
     // doesn't pump, and in a little as a turn comes up.
     const v = shown.speed;
@@ -316,7 +434,10 @@ function followCamera(now) {
     else if (v < 10) speedZoom = 16.4;
     const target = speedZoom + zoomBias + (approach < 250 ? 0.6 : 0);
     followZoom += (target - followZoom) * 0.01;
-    map.jumpTo({ center: [shown.lon, shown.lat], bearing: shown.heading, pitch: FOLLOW_PITCH,
+    // The camera turns a beat after the truck, so through a turn you see
+    // the truck swing round before the road straightens out ahead.
+    camBearing = turn(camBearing, shown.heading, 1 - Math.exp(-dt / 0.8));
+    map.jumpTo({ center: [shown.lon, shown.lat], bearing: camBearing, pitch: FOLLOW_PITCH,
                  zoom: followZoom, padding: followPadding() });
 }
 
@@ -347,36 +468,59 @@ function checkRoad(now) {
 
 function step(now) {
     frame = 0;
-    if (!to) return;
-    const f = Math.min(1, (now - fixAt) / span);
-    shown = { lon: from.lon + (to.lon - from.lon) * f, lat: from.lat + (to.lat - from.lat) * f,
-              heading: turn(from.heading, to.heading, f), speed: to.speed };
-    marker.setLngLat([shown.lon, shown.lat]);
+    if (!fix) return;
+    const dt = lastStep ? Math.min(0.1, (now - lastStep) / 1000) : 1 / 60;
+    lastStep = now;
+    // Where the truck should be now: the last fix, carried on at its speed
+    // and heading (for up to 2 s if the next fix is late), so it never
+    // stops between fixes. The drawn truck glides after that point, which
+    // also smooths out the GPS's small jumps.
+    const ahead = Math.min(2, (now - fixAt) / 1000) * fix.speed;
+    const rad = fix.heading * Math.PI / 180;
+    const target = { lon: fix.lon + Math.sin(rad) * ahead / (Math.cos(fix.lat * Math.PI / 180) * 111320),
+                     lat: fix.lat + Math.cos(rad) * ahead / 110540 };
+    const glide = 1 - Math.exp(-dt / 0.25);
+    const before = shown;
+    shown = { lon: before.lon + (target.lon - before.lon) * glide,
+              lat: before.lat + (target.lat - before.lat) * glide,
+              heading: turn(before.heading, fix.heading, 1 - Math.exp(-dt / 0.3)),
+              speed: before.speed + (fix.speed - before.speed) * glide };
+
+    // How hard it's turning and braking, for the wheels and the body.
+    const dHeading = ((shown.heading - before.heading + 540) % 360) - 180;
+    yawRate += (dHeading * Math.PI / 180 / dt - yawRate) * Math.min(1, dt / 0.3);
+    accel += ((shown.speed - before.speed) / dt - accel) * Math.min(1, dt / 0.5);
+    wheelTurn = (wheelTurn + Math.min(0.5, shown.speed * dt / wheelRadius)) % (Math.PI * 2);
+    steer = clamp(Math.atan(WHEELBASE_M * yawRate / Math.max(shown.speed, 2)), -0.5, 0.5);
+    roll = clamp(-0.012 * shown.speed * yawRate, -0.05, 0.05);      // leans out of a turn
+    dip = clamp(-0.008 * accel, -0.03, 0.03);                      // nose down braking
+
     trimRoute(now);
     refreshControls(false);
     if (following) {
-        followCamera(now);
+        followCamera(now, dt);
         checkRoad(now);
+    } else {
+        map.triggerRepaint();
     }
-    drawCar();
-    if (f < 1) frame = requestAnimationFrame(step);
+    // Keep going while it's moving or settling; rest when parked.
+    const settling = Math.abs(target.lon - shown.lon) + Math.abs(target.lat - shown.lat) > 1e-7
+        || Math.abs(((fix.heading - shown.heading + 540) % 360) - 180) > 0.05
+        || (following && Math.abs(((shown.heading - camBearing + 540) % 360) - 180) > 0.05);
+    if (fix.speed > 0.2 || settling) frame = requestAnimationFrame(step);
+    else lastStep = 0;
 }
 
 function setPosition(lon, lat, heading, speed) {
-    const now = performance.now();
-    const fix = { lon, lat, heading, speed };
+    // Below walking pace the GPS heading wanders; keep the last one.
+    if (fix && speed < 1) heading = fix.heading;
+    fix = { lon, lat, heading, speed };
+    fixAt = performance.now();
     if (!shown) {
-        shown = fix;
-        marker.setLngLat([lon, lat]).addTo(map);
-        drawCar();
+        shown = { ...fix };
+        camBearing = heading;
         if (!touched) startFollowing(true);
     }
-    // Glide from where the truck is now to the new fix over about the time
-    // between fixes, so it never stops and never jumps.
-    span = fixAt ? Math.min(2000, Math.max(300, now - fixAt)) : 1000;
-    from = { ...shown };
-    to = fix;
-    fixAt = now;
     if (!frame) frame = requestAnimationFrame(step);
 }
 
@@ -439,49 +583,20 @@ function showPlace(lon, lat) {
 
 // ---- traffic lights, stop signs and yield signs ---------------------------------------
 
-// Drawn here rather than taken from a sprite, so they look the same by day
-// and night. Data: controls.geojson, from OpenStreetMap (build_controls.py).
-function controlIcon(kind) {
-    const s = 56, c = document.createElement("canvas");
-    c.width = c.height = s;
-    const g = c.getContext("2d");
-    if (kind === "signal") {
-        g.fillStyle = "#1b1b1b";
-        g.strokeStyle = "#f2f2f2";
-        g.lineWidth = 3;
-        g.beginPath(); g.roundRect(15, 2, 26, 52, 8); g.fill(); g.stroke();
-        [["#ff4530", 13], ["#ffbf1a", 28], ["#3ccf6e", 43]].forEach(([col, y]) => {
-            g.fillStyle = col; g.beginPath(); g.arc(28, y, 6.5, 0, Math.PI * 2); g.fill();
-        });
-    } else if (kind === "stop") {
-        g.fillStyle = "#d92b2b";
-        g.strokeStyle = "#ffffff";
-        g.lineWidth = 4;
-        g.beginPath();
-        for (let i = 0; i < 8; i++) {
-            const a = Math.PI / 8 + i * Math.PI / 4;
-            g[i ? "lineTo" : "moveTo"](28 + 25 * Math.cos(a), 28 + 25 * Math.sin(a));
-        }
-        g.closePath(); g.fill(); g.stroke();
-        g.fillStyle = "#ffffff";
-        g.font = "bold 15px sans-serif";
-        g.textAlign = "center";
-        g.textBaseline = "middle";
-        g.fillText("STOP", 28, 29);
-    } else {
-        g.fillStyle = "#ffffff";
-        g.strokeStyle = "#d92b2b";
-        g.lineWidth = 7;
-        g.lineJoin = "round";
-        g.beginPath(); g.moveTo(5, 8); g.lineTo(51, 8); g.lineTo(28, 50); g.closePath();
-        g.fill(); g.stroke();
-    }
-    return g.getImageData(0, 0, s, s);
+// The real things: the US STOP and YIELD signs (the federal sign manual's
+// artwork) and Noto's 3D traffic light, made into icons by
+// tools/make_sign_icons.py (sources and licences in tools/sign-icons).
+// Loaded once; a day/night style change asks for them again.
+const SIGN_ICONS = { "ctl-signal": "icons/signal.png", "ctl-stop": "icons/stop.png", "ctl-yield": "icons/yield.png" };
+const signImages = {};
+for (const [id, src] of Object.entries(SIGN_ICONS)) {
+    const img = new Image();
+    img.src = src;
+    img.decode().then(() => { signImages[id] = img; }).catch(() => {});
 }
-
 map.on("styleimagemissing", (ev) => {
-    const kind = { "ctl-signal": "signal", "ctl-stop": "stop", "ctl-yield": "yield" }[ev.id];
-    if (kind && !map.hasImage(ev.id)) map.addImage(ev.id, controlIcon(kind), { pixelRatio: 2 });
+    const img = signImages[ev.id];
+    if (img && !map.hasImage(ev.id)) map.addImage(ev.id, img, { pixelRatio: 2 });
 });
 
 // Like Apple Maps, only while driving a route, and only the lights and
@@ -825,4 +940,10 @@ window.baja = {
         map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
     },
     bench,
+    // What the map's WebGL is doing (for checking a new device).
+    glInfo() {
+        const gl = map.painter.context.gl;
+        post("info", { antialias: gl.getContextAttributes().antialias, samples: gl.getParameter(gl.SAMPLES),
+                       renderer: gl.getParameter(gl.RENDERER), version: gl.getParameter(gl.VERSION) });
+    },
 };

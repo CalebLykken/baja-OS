@@ -12,3 +12,5 @@ venv/
 !qml/assets/*.ktx
 .version
 !qml/assets/truck/*.png
+!tools/sign-icons/*.png
+!web/map/icons/*.png

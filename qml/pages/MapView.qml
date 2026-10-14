@@ -71,6 +71,7 @@ WebEngineView {
             else if (m.kind === "error") console.warn("map:", m.message)
             else if (m.kind === "bearing") web.bearing = m.bearing
             else if (m.kind === "bench") web.benchDone(m)
+            else if (m.kind === "info") console.log("map:", JSON.stringify(m))
         } else if (level === WebEngineView.ErrorMessageLevel) {
             console.warn("map page:", message, "(" + source + ":" + line + ")")
         }

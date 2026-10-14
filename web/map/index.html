@@ -9,15 +9,12 @@
   html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1b1d; }
   /* The dashboard draws its own keys and attribution over the map. */
   .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
-  /* The truck: one frame of car.webp, the 3D model seen from the side it's
-     facing (map.js picks the frame). It carries its own soft shadow. */
-  .puck { width: 84px; height: 84px; pointer-events: none; }
-  .car { width: 84px; height: 84px; background: url(car.webp) no-repeat; will-change: transform; }
   /* A picked place: a red pin, like Apple Maps. */
   .pin { width: 44px; height: 56px; filter: drop-shadow(0 3px 2px var(--shadow, rgba(0, 0, 0, 0.5))); }
   .pin path { fill: var(--pin, #ff3b30); stroke: var(--pin-edge, #ffffff); stroke-width: 1.2; }
   .pin circle { fill: var(--pin-edge, #ffffff); }
 </style>
+<script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>
 </head>

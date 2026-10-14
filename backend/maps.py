@@ -40,6 +40,7 @@ TYPES = {
     ".json": "application/json",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".glb": "model/gltf-binary",
     ".pbf": "application/x-protobuf",
     ".pmtiles": "application/octet-stream",
     ".geojson": "application/geo+json",

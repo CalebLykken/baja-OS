@@ -20,6 +20,21 @@ export QT_QPA_EGLFS_ALWAYS_SET_MODE=1
 export QT_QPA_EGLFS_PHYSICAL_WIDTH=172
 export QT_QPA_EGLFS_PHYSICAL_HEIGHT=108
 
+# Point eglfs at the DRM card that actually drives the screen. On the Pi 5,
+# card0 is the 3D-only GPU and the HDMI outputs live on card1; Qt would pick
+# card0 and fail with "no screens available".
+if [ -z "$QT_QPA_EGLFS_KMS_CONFIG" ]; then
+    for status in /sys/class/drm/card*-*/status; do
+        [ "$(cat "$status" 2>/dev/null)" = connected ] || continue
+        card=$(basename "$(dirname "$status")")
+        card=${card%%-*}
+        cfg="${XDG_RUNTIME_DIR:-/tmp}/baja-kms.json"
+        printf '{ "device": "/dev/dri/%s", "hwcursor": false }\n' "$card" > "$cfg"
+        export QT_QPA_EGLFS_KMS_CONFIG="$cfg"
+        break
+    done
+fi
+
 if [ -n "$QT_QPA_PLATFORM" ]; then
     exec python3 main.py $FULLSCREEN "$@"
 fi

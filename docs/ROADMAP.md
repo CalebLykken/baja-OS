@@ -191,23 +191,39 @@ phone locked; the dashboard controls work; it comes back after a reboot.
 
 - **Routing:** Valhalla on the Pi, with routing data for Washington (and maybe
   Oregon, Idaho and BC) built on the Mac using the same version.
+  - Done differently: the pyvalhalla wheel (3.9.0, pinned and hash-checked)
+    runs Valhalla in user space on the Pi, no sudo, and builds Washington's
+    road graph on the Pi itself (`deploy/maps/install-routing.sh`: 365 MB
+    download, 549 MB graph). It runs as a user service on 127.0.0.1:8002
+    only; a 5.5 km city route takes 0.22 s.
 - **Destinations:**
   - Done: offline search of everything named in the map (about 51,000
     businesses and places plus every street, indexed in 16 s on the Pi,
     searches in under 20 ms), with results ranked by name match and
     distance, a pin, and the truck and the place framed together.
-  - Saved places (home, work) and recent places.
-  - Offline address and place search, from an index built on the Mac.
+  - Saved places and recent places. Done: Home (set from the destination
+    card) and the last six places picked, listed when the search box is
+    empty. Work is still to do.
+  - Offline address and place search. Done for places, businesses and
+    streets (house-number addresses aren't in the map tiles).
   - "Send to Baja": share a place from the phone.
 - **Guidance:**
   - Next-turn banner with distance countdown, progress, ETA, off-route
-    detection and rerouting.
+    detection and rerouting. Done: banner with the turn arrow and countdown,
+    arrival time with time and distance left, the driven part of the line
+    trimmed away, a new route after three fixes more than 60 m off it, the
+    next turn in the status bar on every other page (tap it for the map) and
+    on the Home map tile. In demo mode the simulated truck drives the route.
   - One route and turn model, so a different routing provider can be swapped in
     later.
 - **Voice:**
   - Piper, a persistent process with the voice loaded, using public-domain
-    voices (kristin or norman).
-  - Music ducks under prompts.
+    voices (kristin or norman). Done (`deploy/audio/install-voice.sh`, kristin;
+    loads in 2.3 s once, then 0.5 s a line on the Pi): the route's first
+    step, a warning a quarter mile (or a mile at highway speed) before each
+    turn, the turn about six seconds before it, rerouting and arrival.
+  - Music ducks under prompts. Done: the other audio streams dip to 30% and
+    come back to exactly where they were; Spotify's own volume never moves.
   - "Repeat last instruction" on the knob.
 
 **Done when:** you can drive a familiar route and a new one with the

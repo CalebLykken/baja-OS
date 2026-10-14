@@ -25,6 +25,11 @@ WebEngineView {
         }
     }
     function call(js) { runJavaScript("window.baja && baja." + js) }
+    function syncRoute() {
+        if (typeof routing === "undefined") return
+        if (routing.active) call("showRoute(" + JSON.stringify(routing.shape) + ")")
+        else call("clearRoute()")
+    }
     function sendPosition() {
         if (typeof gps !== "undefined" && gps.hasFix)
             call("setPosition(" + gps.lon + "," + gps.lat + "," + gps.heading + "," + gps.speed + ")")
@@ -44,7 +49,7 @@ WebEngineView {
     onJavaScriptConsoleMessage: (level, message, line, source) => {
         if (message.indexOf("baja:") === 0) {
             var m = JSON.parse(message.slice(5))
-            if (m.kind === "ready") { web.ready(m.ms); web.sendPosition() }
+            if (m.kind === "ready") { web.ready(m.ms); web.sendPosition(); web.syncRoute() }
             else if (m.kind === "follow") web.following = m.on
             else if (m.kind === "road") web.road = m.name
             else if (m.kind === "error") console.warn("map:", m.message)
@@ -64,6 +69,17 @@ WebEngineView {
         reloadTimer.start()
     }
     Timer { id: reloadTimer; interval: 1000; onTriggered: web.reload() }
+
+    // A new route (or none): draw it, and ride along with the truck.
+    Connections {
+        target: typeof routing !== "undefined" ? routing : null
+        property bool wasActive: false
+        function onChanged() {
+            web.syncRoute()
+            if (routing.active && !wasActive) web.call("recenter()")
+            wasActive = routing.active
+        }
+    }
 
     // The truck's position, about once a second.
     Connections {

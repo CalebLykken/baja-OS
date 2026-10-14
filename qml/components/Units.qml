@@ -19,4 +19,18 @@ QtObject {
     readonly property int boostDecimals: metric ? 2 : 1
 
     readonly property string timeFormat: clock24 ? "H:mm" : "h:mm"
+
+    // Distances for directions: feet then miles, or metres then kilometres.
+    function distanceText(m) {
+        if (m < 0) return ""
+        if (metric)
+            return m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1000).toFixed(m < 10000 ? 1 : 0) + " km"
+        var mi = m / 1609.34
+        return mi < 0.1 ? Math.round(m * 3.281 / 50) * 50 + " ft" : mi.toFixed(mi < 10 ? 1 : 0) + " mi"
+    }
+    function durationText(s) {
+        var min = Math.max(1, Math.round(s / 60))
+        return min < 60 ? min + " min" : Math.floor(min / 60) + " h " + (min % 60) + " min"
+    }
+    function arrivalText(s) { return Qt.formatTime(new Date(Date.now() + s * 1000), timeFormat) }
 }

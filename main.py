@@ -27,6 +27,8 @@ from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.eq import Equalizer
 from backend.gps import Gps
+from backend.routing import Router
+from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.media import MediaPlayer
@@ -115,6 +117,9 @@ def main():
     system = SystemInfo()
     # Simulated drive around Seattle until the GPS receiver has a fix.
     gps = Gps(vehicle, demo=True)
+    routing = Router(gps, settings)
+    voice = Voice(settings)
+    routing.speak.connect(voice.say)
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
@@ -129,6 +134,8 @@ def main():
     ctx.setContextProperty("wifi", wifi)
     ctx.setContextProperty("system", system)
     ctx.setContextProperty("gps", gps)
+    ctx.setContextProperty("routing", routing)
+    ctx.setContextProperty("voice", voice)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
@@ -151,6 +158,7 @@ def main():
     wifi.start()
     system.start()
     gps.start()
+    routing.start()
     network.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
@@ -158,7 +166,7 @@ def main():
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

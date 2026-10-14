@@ -1,0 +1,371 @@
+"""Turn-by-turn directions from the offline Valhalla service
+(deploy/maps/install-routing.sh), and following the route as the truck
+moves: the next turn and how far it is, distance and time left, arrival,
+and a new route when the truck leaves this one.
+
+Valhalla runs as its own local service on 127.0.0.1:8002, so a crash
+there can't take the dashboard down; requests go over plain HTTP on a
+worker thread.
+"""
+
+import json
+import math
+import re
+import threading
+import time
+import urllib.error
+import urllib.request
+
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+
+ROUTER = "http://127.0.0.1:8002"
+OFF_ROUTE_M = 60          # this far from the line ...
+OFF_ROUTE_FIXES = 3       # ... for this many fixes in a row means a new route
+REROUTE_EVERY_S = 10
+ARRIVED_M = 35
+FAST_MS = 20              # above ~45 mph, warn about turns from further out
+
+# Early warnings: (metres, how to say it), imperial and metric.
+ALERTS = {
+    False: {"near": (402, "In a quarter mile"), "far": (1609, "In 1 mile")},
+    True: {"near": (400, "In 400 meters"), "far": (1500, "In one and a half kilometers")},
+}
+
+# Valhalla maneuver types -> an icon name in Icon.qml.
+MANEUVER_ICONS = {
+    1: "straight", 2: "turn_right", 3: "turn_left", 4: "place", 5: "place", 6: "place",
+    7: "straight", 8: "straight", 9: "turn_slight_right", 10: "turn_right",
+    11: "turn_sharp_right", 12: "u_turn_right", 13: "u_turn_left", 14: "turn_sharp_left",
+    15: "turn_left", 16: "turn_slight_left", 17: "straight", 18: "ramp_right", 19: "ramp_left",
+    20: "ramp_right", 21: "ramp_left", 22: "straight", 23: "fork_right", 24: "fork_left",
+    25: "merge", 26: "roundabout_right", 27: "roundabout_right", 37: "merge", 38: "merge",
+}
+
+
+def tidy(text):
+    """Valhalla chains spoken steps as "... Then Keep right"; lower-case the verb."""
+    return re.sub(r"\bThen ([A-Z])", lambda m: "then " + m[1].lower(), text).replace(". then ", ". Then ")
+
+
+def decode_polyline6(encoded):
+    """Valhalla's shape: Google polyline encoding at 1e-6 precision -> [(lon, lat)]."""
+    coords, index, lat, lon = [], 0, 0, 0
+    while index < len(encoded):
+        for which in (0, 1):
+            shift = result = 0
+            while True:
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1F) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+            delta = ~(result >> 1) if result & 1 else result >> 1
+            if which == 0:
+                lat += delta
+            else:
+                lon += delta
+        coords.append((lon / 1e6, lat / 1e6))
+    return coords
+
+
+def _xy(p, lat0):
+    """Metres east/north of the origin, near enough for a city."""
+    k = math.cos(math.radians(lat0))
+    return p[0] * 111320.0 * k, p[1] * 110540.0
+
+
+def _project(p, a, b, lat0):
+    """(distance from p to segment ab in metres, fraction along ab)."""
+    px, py = _xy(p, lat0)
+    ax, ay = _xy(a, lat0)
+    bx, by = _xy(b, lat0)
+    dx, dy = bx - ax, by - ay
+    seg = dx * dx + dy * dy
+    t = 0.0 if seg == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy)), t
+
+
+class Route:
+    """One computed route and where the truck is along it."""
+
+    def __init__(self, data, name):
+        leg = data["trip"]["legs"][0]
+        self.name = name
+        self.shape = decode_polyline6(leg["shape"])
+        self.lat0 = self.shape[0][1]
+        self.cum = [0.0]
+        for a, b in zip(self.shape, self.shape[1:]):
+            ax, ay = _xy(a, self.lat0)
+            bx, by = _xy(b, self.lat0)
+            self.cum.append(self.cum[-1] + math.hypot(bx - ax, by - ay))
+        self.length = self.cum[-1]
+        self.time = float(data["trip"]["summary"]["time"])
+        self.maneuvers = leg["maneuvers"]
+        self.seg = 0                  # the shape segment the truck is on
+        self.along = 0.0              # metres travelled along the route
+        self.off = 0.0                # metres from the line
+
+    def locate(self, lon, lat):
+        """Snap the truck to the route, looking a little back and ahead."""
+        p = (lon, lat)
+        best = (1e18, self.seg, 0.0)
+        lo, hi = max(0, self.seg - 5), min(len(self.shape) - 1, self.seg + 150)
+        for i in range(lo, hi):
+            d, t = _project(p, self.shape[i], self.shape[i + 1], self.lat0)
+            if d < best[0]:
+                best = (d, i, t)
+        self.off, self.seg, t = best
+        self.along = self.cum[self.seg] + t * (self.cum[self.seg + 1] - self.cum[self.seg])
+
+    def next_maneuver(self):
+        for m in self.maneuvers:
+            if self.cum[m["begin_shape_index"]] > self.along + 5:
+                return m
+        return self.maneuvers[-1]
+
+    @property
+    def remaining(self):
+        return max(0.0, self.length - self.along)
+
+
+class Router(QObject):
+    changed = pyqtSignal()          # route started/ended, computing, availability
+    progressChanged = pyqtSignal()  # where the truck is along the route
+    speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
+    _got = pyqtSignal(object, str, str, bool)   # response, error, destination name, reroute
+    _status = pyqtSignal(bool)
+
+    def __init__(self, gps, settings=None, parent=None):
+        super().__init__(parent)
+        self._gps = gps
+        self._settings = settings
+        self._spoken = set()          # (maneuver index, "alert"/"turn") already said
+        self._available = False
+        self._route = None
+        self._dest = None             # (name, lon, lat)
+        self._computing = False
+        self._error = ""
+        self._off_count = 0
+        self._last_reroute = 0.0
+        self._arrived = False
+        self._got.connect(self._on_route)
+        self._status.connect(self._on_status)
+        self._check_timer = QTimer(self, interval=30000, timeout=self._check)
+        gps.changed.connect(self._on_fix)
+
+    def start(self):
+        self._check()
+        self._check_timer.start()
+
+    # ---- is the service there? ---------------------------------------------------
+    def _check(self):
+        def work():
+            try:
+                with urllib.request.urlopen(ROUTER + "/status", timeout=3) as r:
+                    ok = r.status == 200
+            except (OSError, urllib.error.URLError):
+                ok = False
+            self._status.emit(ok)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_status(self, ok):
+        if ok != self._available:
+            self._available = ok
+            self.changed.emit()
+
+    # ---- asking for a route ---------------------------------------------------------
+    def _request(self, name, lon, lat, reroute=False):
+        if not self._gps.hasFix:
+            self._error = "Waiting for the truck's position"
+            self.changed.emit()
+            return
+        start = {"lon": self._gps.lon, "lat": self._gps.lat, "type": "break"}
+        if self._gps.speed > 2:
+            # Leave in the direction the truck is already going.
+            start.update(heading=round(self._gps.heading), heading_tolerance=45)
+        body = json.dumps({
+            "locations": [start, {"lon": lon, "lat": lat, "type": "break"}],
+            "costing": "auto",
+            "directions_options": {"units": "kilometers", "language": "en-US"},
+        }).encode()
+        self._computing = True
+        self._error = ""
+        self.changed.emit()
+
+        def work():
+            try:
+                req = urllib.request.Request(ROUTER + "/route", data=body,
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    data = json.loads(r.read())
+                self._got.emit(data, "", name, reroute)
+            except urllib.error.HTTPError as e:
+                try:
+                    msg = json.loads(e.read()).get("error", "")
+                except ValueError:
+                    msg = ""
+                self._got.emit(None, msg or "No route found", name, reroute)
+            except (OSError, urllib.error.URLError, ValueError):
+                self._got.emit(None, "Routing isn't running", name, reroute)
+        threading.Thread(target=work, name="route", daemon=True).start()
+
+    def _on_route(self, data, error, name, reroute):
+        self._computing = False
+        if data is None:
+            self._error = ("No road route to there" if "No path" in error or "No suitable" in error
+                           else error)
+            if not reroute:
+                self._route = None
+            self.changed.emit()
+            return
+        self._route = Route(data, name)
+        self._arrived = False
+        self._off_count = 0
+        self._spoken = set()
+        self._route.locate(self._gps.lon, self._gps.lat)
+        first = self._route.maneuvers[0]
+        self._say(("Rerouting. " if reroute else "")
+                        + (first.get("verbal_pre_transition_instruction") or first.get("instruction") or ""))
+        self._spoken.add((0, "turn"))
+        if self._gps.source == "demo":
+            self._gps.followPath(self._route.shape)     # the simulated truck drives it
+        self.changed.emit()
+        self.progressChanged.emit()
+
+    def _say(self, text):
+        if text:
+            self.speak.emit(tidy(text))
+
+    def _prompt(self, r):
+        """Say the next turn twice: an early warning, then just before it."""
+        m = r.next_maneuver()
+        i = r.maneuvers.index(m)
+        if m.get("type") in (4, 5, 6):
+            return                                  # arrival is announced on its own
+        dist = max(0.0, r.cum[m["begin_shape_index"]] - r.along)
+        speed = self._gps.speed
+        metric = bool(self._settings) and str(self._settings.get("metric", "false")) == "true"
+        warn_m, warn_words = ALERTS[metric]["far" if speed > FAST_MS else "near"]
+        turn_m = max(60.0, speed * 6)               # about six seconds before the turn
+        alert = (m.get("verbal_transition_alert_instruction") or m.get("instruction") or "").rstrip(".")
+        if (i, "alert") not in self._spoken and turn_m * 2 < dist <= warn_m:
+            # Only if the turn was further than this when it came up; on a
+            # short stretch the "turn now" line is enough.
+            self._spoken.add((i, "alert"))
+            if alert:
+                self._say(f"{warn_words}, {alert[0].lower()}{alert[1:]}.")
+        if (i, "turn") not in self._spoken and dist <= turn_m:
+            self._spoken.add((i, "turn"))
+            self._spoken.add((i, "alert"))
+            self._say(m.get("verbal_pre_transition_instruction") or m.get("instruction") or "")
+
+    @pyqtSlot(str, float, float)
+    def routeTo(self, name, lon, lat):
+        self._dest = (name, lon, lat)
+        self._request(name, lon, lat)
+
+    @pyqtSlot()
+    def stop(self):
+        self._gps.clearPath()
+        self._route = None
+        self._dest = None
+        self._error = ""
+        self._computing = False
+        self.changed.emit()
+        self.progressChanged.emit()
+
+    # ---- following it --------------------------------------------------------------
+    def _on_fix(self):
+        r = self._route
+        if not r or not self._gps.hasFix:
+            return
+        r.locate(self._gps.lon, self._gps.lat)
+        if r.remaining < ARRIVED_M and not self._arrived:
+            self._arrived = True
+            self._say(f"You have arrived at {r.name}.")
+            QTimer.singleShot(20000, lambda: self.stop() if self._arrived else None)
+        elif not self._arrived:
+            self._prompt(r)
+        if r.off > OFF_ROUTE_M and not self._arrived:
+            self._off_count += 1
+            now = time.monotonic()
+            if (self._off_count >= OFF_ROUTE_FIXES and not self._computing
+                    and now - self._last_reroute > REROUTE_EVERY_S and self._dest):
+                self._last_reroute = now
+                self._request(*self._dest, reroute=True)
+        else:
+            self._off_count = 0
+        self.progressChanged.emit()
+
+    # ---- what QML sees ------------------------------------------------------------
+    @pyqtProperty(bool, notify=changed)
+    def available(self):
+        return self._available
+
+    @pyqtProperty(bool, notify=changed)
+    def active(self):
+        return self._route is not None
+
+    @pyqtProperty(bool, notify=changed)
+    def computing(self):
+        return self._computing
+
+    @pyqtProperty(str, notify=changed)
+    def error(self):
+        return self._error
+
+    @pyqtProperty(str, notify=changed)
+    def destinationName(self):
+        return self._route.name if self._route else (self._dest[0] if self._dest else "")
+
+    @pyqtProperty("QVariantList", notify=changed)
+    def shape(self):
+        """The route as [[lon, lat], ...] for the map."""
+        return [list(p) for p in self._route.shape] if self._route else []
+
+    @pyqtProperty(bool, notify=progressChanged)
+    def arrived(self):
+        return self._arrived
+
+    @pyqtProperty(str, notify=progressChanged)
+    def instruction(self):
+        if not self._route:
+            return ""
+        if self._arrived:
+            return "You've arrived at " + self._route.name
+        # The short form on screen; the spoken form chains the next step.
+        return (self._route.next_maneuver().get("instruction") or "").rstrip(".")
+
+    @pyqtProperty(str, notify=progressChanged)
+    def maneuverIcon(self):
+        if not self._route:
+            return ""
+        if self._arrived:
+            return "place"
+        return MANEUVER_ICONS.get(self._route.next_maneuver().get("type"), "straight")
+
+    @pyqtProperty(float, notify=progressChanged)
+    def distanceToTurn(self):
+        """Metres to the next maneuver."""
+        r = self._route
+        if not r:
+            return 0.0
+        m = r.next_maneuver()
+        return max(0.0, r.cum[m["begin_shape_index"]] - r.along)
+
+    @pyqtProperty(float, notify=progressChanged)
+    def remainingDistance(self):
+        return self._route.remaining if self._route else 0.0
+
+    @pyqtProperty(float, notify=progressChanged)
+    def remainingTime(self):
+        """Seconds, from Valhalla's estimate for the part still ahead."""
+        r = self._route
+        if not r or r.length <= 0:
+            return 0.0
+        return r.time * r.remaining / r.length
+
+    @pyqtProperty(bool, notify=progressChanged)
+    def offRoute(self):
+        return bool(self._route and self._off_count > 0)

@@ -33,13 +33,41 @@ Item {
         onTriggered: maps.search(page.query, page.hasFix ? gps.lon : 0, page.hasFix ? gps.lat : 0)
     }
 
+    // Home and the last few places picked, saved between runs, listed when
+    // the search box is empty.
+    function loadJson(key, fallback) {
+        if (typeof settings === "undefined") return fallback
+        try { return JSON.parse(String(settings.get(key, JSON.stringify(fallback)))) } catch (e) { return fallback }
+    }
+    property var home: loadJson("homePlace", null)
+    property var recents: loadJson("recentPlaces", [])
+    readonly property var saved: (home ? [Object.assign({}, home, { label: "Home", isHome: true })] : [])
+                                 .concat(recents.filter(p => !home || p.name !== home.name || p.lon !== home.lon))
+    function samePlace(a, b) { return a && b && a.name === b.name && Math.abs(a.lon - b.lon) < 1e-5 && Math.abs(a.lat - b.lat) < 1e-5 }
+    function remember(place) {
+        var keep = { name: place.name, label: place.label, lon: place.lon, lat: place.lat }
+        recents = [keep].concat(recents.filter(p => !samePlace(p, keep))).slice(0, 6)
+        settings.set("recentPlaces", JSON.stringify(recents))
+    }
+    function toggleHome(place) {
+        home = samePlace(home, place) ? null : { name: place.name, label: place.label, lon: place.lon, lat: place.lat }
+        settings.set("homePlace", JSON.stringify(home))
+    }
+
     function openSearch() { query = ""; searching = true }
     function choose(place) {
         destination = place
         searching = false
+        if (!place.isHome) remember(place)
         map.call("showPlace(" + place.lon + "," + place.lat + ")")
     }
     function clearDestination() { destination = null; map.call("clearPlace()") }
+
+    readonly property bool hasRouting: typeof routing !== "undefined"
+    readonly property bool navigating: hasRouting && routing.active
+    function endRoute() { routing.stop(); clearDestination() }
+    function durationText(s) { return Units.durationText(s) }
+    function arrivalText(s) { return Units.arrivalText(s) }
 
     // Straight-line distance from the truck, in metres (-1 without a position).
     function distanceTo(place) {
@@ -49,13 +77,7 @@ Item {
         var dy = (place.lat - gps.lat) * rad * 6371000
         return Math.sqrt(dx * dx + dy * dy)
     }
-    function distanceText(m) {
-        if (m < 0) return ""
-        if (Units.metric)
-            return m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1000).toFixed(m < 10000 ? 1 : 0) + " km"
-        var mi = m / 1609.34
-        return mi < 0.1 ? Math.round(m * 3.281 / 50) * 50 + " ft" : mi.toFixed(mi < 10 ? 1 : 0) + " mi"
-    }
+    function distanceText(m) { return Units.distanceText(m) }
     readonly property var map: mapLoader.item
 
     Card {
@@ -208,7 +230,7 @@ Item {
 
         // The road you're on, bottom centre, while following.
         Rectangle {
-            visible: page.mapReady && page.map && page.map.following && page.map.road !== ""
+            visible: page.mapReady && page.map && page.map.following && page.map.road !== "" && !page.navigating
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
             width: Math.min(roadName.implicitWidth + 40, parent.width - 420)
             height: 56
@@ -229,7 +251,7 @@ Item {
 
         // The place picked from search: name, what it is, how far.
         Rectangle {
-            visible: page.mapReady && page.destination !== null && !page.searching
+            visible: page.mapReady && page.destination !== null && !page.searching && !page.navigating
             anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter }
             width: Math.min(destRow.implicitWidth + 36, parent.width - 400)
             height: 80
@@ -259,13 +281,96 @@ Item {
                         font.pixelSize: Theme.fontSmall
                         text: {
                             if (!page.destination) return ""
+                            if (page.hasRouting && routing.error !== "") return routing.error
                             var d = page.distanceText(page.distanceTo(page.destination))
                             return d ? d + " away, " + page.destination.label.charAt(0).toLowerCase() + page.destination.label.slice(1)
                                      : page.destination.label
                         }
                     }
                 }
+                // Save this place as Home (lit when it is), or forget it.
+                IconButton {
+                    icon: "home"
+                    size: 52
+                    active: page.samePlace(page.home, page.destination)
+                    onClicked: page.toggleHome(page.destination)
+                }
+                TextButton {
+                    visible: page.hasRouting && routing.available
+                    primary: true
+                    implicitHeight: 52
+                    text: routing.computing ? "Finding route" : "Go"
+                    enabled: !routing.computing && page.hasFix
+                    onClicked: routing.routeTo(page.destination.name, page.destination.lon, page.destination.lat)
+                }
                 IconButton { icon: "close"; size: 52; onClicked: page.clearDestination() }
+            }
+        }
+
+        // ---- navigating: the next turn on top, the trip along the bottom ------
+        Rectangle {
+            visible: page.mapReady && page.navigating && !page.searching
+            anchors { left: parent.left; leftMargin: 172; right: parent.right; rightMargin: 108; top: parent.top; topMargin: 16 }
+            height: 112
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: Theme.border
+            border.color: Theme.accent
+            RowLayout {
+                anchors { fill: parent; leftMargin: 18; rightMargin: 20 }
+                spacing: 18
+                Icon {
+                    name: routing.maneuverIcon || "straight"
+                    size: 64
+                    color: Theme.accent
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    Label {
+                        visible: !routing.arrived
+                        numeric: true
+                        text: routing.computing ? "" : page.distanceText(routing.distanceToTurn)
+                        font.pixelSize: Theme.fontHero
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        text: routing.computing ? "Finding a new route" : routing.instruction
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                }
+            }
+        }
+        Rectangle {
+            visible: page.mapReady && page.navigating && !page.searching
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
+            width: tripRow.implicitWidth + 36
+            height: 72
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: Theme.border
+            border.color: Theme.line
+            RowLayout {
+                id: tripRow
+                anchors { fill: parent; leftMargin: 20; rightMargin: 10 }
+                spacing: 18
+                Column {
+                    Label {
+                        text: "Arrive " + page.arrivalText(routing.remainingTime)
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    Label {
+                        text: page.durationText(routing.remainingTime) + ", " + page.distanceText(routing.remainingDistance)
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+                TextButton { text: "End"; danger: true; implicitHeight: 52; onClicked: page.endRoute() }
             }
         }
 
@@ -358,7 +463,7 @@ Item {
                     Layout.fillHeight: true
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    model: page.query === "" ? [] : maps.results
+                    model: page.query === "" ? page.saved : maps.results
                     delegate: Rectangle {
                         required property var modelData
                         width: results.width
@@ -368,9 +473,9 @@ Item {
                         Icon {
                             id: pinIcon
                             anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
-                            name: "place"
+                            name: modelData.isHome ? "home" : "place"
                             size: 26
-                            color: Theme.textDim
+                            color: modelData.isHome ? Theme.accent : Theme.textDim
                         }
                         Column {
                             anchors { left: pinIcon.right; leftMargin: 14; right: dist.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
@@ -391,7 +496,7 @@ Item {
                         Label {
                             id: dist
                             anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter }
-                            text: page.distanceText(modelData.distance)
+                            text: page.distanceText(modelData.distance !== undefined ? modelData.distance : page.distanceTo(modelData))
                             color: Theme.textDim
                             font.pixelSize: Theme.fontBody
                         }
@@ -402,6 +507,8 @@ Item {
                         anchors { left: parent.left; top: parent.top; leftMargin: 12; topMargin: 12 }
                         text: page.query === "" ? "Works with no signal: everything in the map can be searched."
                                                 : "Nothing in the map by that name"
+                        width: parent.width - 24
+                        wrapMode: Text.WordWrap
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }

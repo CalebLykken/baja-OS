@@ -32,6 +32,8 @@ backend/spotify.py   Spotify Connect through Soloist's local API
 backend/maps.py      local web server for the offline map, and place search
 backend/places.py    builds and searches the offline place index
 backend/gps.py       position from gpsd, or a simulated drive in demo mode
+backend/routing.py   turn-by-turn directions from the local Valhalla service
+backend/voice.py     spoken directions with Piper, music dipping underneath
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
 backend/system.py    temperature, fan, power warnings, restart and power
@@ -117,6 +119,19 @@ that the map and search need no internet. Set
 `REGION` and `BBOX` for a different area (the script shows how). The map is
 MapLibre GL JS in Qt WebEngine, coloured from the current style, and starts the
 first time the Maps page opens.
+
+Search on the Maps page finds places, businesses and streets in the map with
+no signal. For turn-by-turn directions and the spoken voice, run these once on
+the Pi (no sudo; each installs into `~/.local/share/baja-os`):
+
+```bash
+./deploy/maps/install-routing.sh     # Valhalla + Washington's roads: 365 MB, about half an hour
+./deploy/audio/install-voice.sh      # Piper + the public-domain "kristin" voice, about 100 MB
+```
+
+Then pick a place, tap Go, and the map shows the route with the next turn,
+arrival time and spoken directions; the next turn also appears in the status
+bar on every other page.
 
 To work on the map in a desktop browser:
 

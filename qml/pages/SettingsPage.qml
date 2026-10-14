@@ -238,6 +238,31 @@ Item {
             }
             Section {
                 Layout.fillWidth: true
+                heading: "Spoken directions"
+                RowLayout {
+                    spacing: 16
+                    SegmentedControl {
+                        enabled: typeof voice !== "undefined" && voice.available
+                        opacity: enabled ? 1 : 0.5
+                        options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                        current: typeof voice !== "undefined" && voice.enabled
+                        onPicked: (v) => voice.setEnabled(v)
+                    }
+                    TextButton {
+                        visible: typeof voice !== "undefined" && voice.available
+                        icon: "volume"
+                        text: "Test"
+                        onClicked: voice.test()
+                    }
+                }
+                Note {
+                    text: typeof voice !== "undefined" && voice.available
+                          ? "Turn instructions are spoken over the music, which dips while they play."
+                          : "Run deploy/audio/install-voice.sh on the Pi once to add the voice (about 100 MB)."
+                }
+            }
+            Section {
+                Layout.fillWidth: true
                 heading: "Spotify"
                 Label {
                     Layout.fillWidth: true
@@ -525,6 +550,29 @@ Item {
                         text: maps.updating || maps.updateMessage !== "" ? maps.updateMessage
                               : network.online ? "Downloads about 130 MB" : "Needs internet"
                     }
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Directions"
+                Row {
+                    spacing: 12
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 14; height: 14; radius: 7
+                        color: typeof routing !== "undefined" && routing.available ? Theme.ok : Theme.textDim
+                    }
+                    Label {
+                        font.pixelSize: Theme.fontBody
+                        text: typeof routing !== "undefined" && routing.available
+                              ? "Ready: turn-by-turn directions with no signal"
+                              : "Not installed"
+                    }
+                }
+                Note {
+                    text: typeof routing !== "undefined" && routing.available
+                          ? "Search for a place on the Maps page and tap Go. Directions come from Valhalla on the Pi, using OpenStreetMap roads for Washington."
+                          : "Run deploy/maps/install-routing.sh on the Pi once: it downloads Washington's roads (365 MB) and builds them for directions, which takes about half an hour."
                 }
             }
         }

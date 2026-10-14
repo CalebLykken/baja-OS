@@ -91,6 +91,8 @@ Window {
         StatusBar {
             Layout.fillWidth: true
             title: root.pages[root.page].label
+            showTurn: root.page !== 2
+            onTurnTapped: root.page = 2
         }
 
         // Pages crossfade and slide as you move between them (PageHost).

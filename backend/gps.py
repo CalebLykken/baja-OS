@@ -39,11 +39,13 @@ def _bearing(a, b):
 
 
 class DemoRoute:
-    """A closed loop of (lon, lat) points to drive around."""
+    """A path of (lon, lat) points to drive: a closed loop (the demo drive
+    around Seattle), or a one-way route that ends at its last point."""
 
-    def __init__(self, path=ROUTE):
-        pts = [tuple(p) for p in json.loads(Path(path).read_text())["coordinates"]]
-        if pts[0] != pts[-1]:
+    def __init__(self, path=ROUTE, points=None, loop=True):
+        pts = [tuple(p) for p in (points or json.loads(Path(path).read_text())["coordinates"])]
+        self.loop = loop
+        if loop and pts[0] != pts[-1]:
             pts.append(pts[0])
         self.points = pts
         self.cum = [0.0]
@@ -52,8 +54,8 @@ class DemoRoute:
         self.length = self.cum[-1]
 
     def at(self, distance):
-        """(lon, lat, heading) at `distance` metres along the loop."""
-        d = distance % self.length
+        """(lon, lat, heading) at `distance` metres along the path."""
+        d = distance % self.length if self.loop else min(distance, self.length - 0.01)
         lo, hi = 0, len(self.cum) - 1
         while lo < hi - 1:                         # binary search for the segment
             mid = (lo + hi) // 2
@@ -70,7 +72,7 @@ class DemoRoute:
         return here[0], here[1], _bearing(here, ahead)
 
     def _point(self, distance):
-        d = distance % self.length
+        d = distance % self.length if self.loop else min(distance, self.length)
         for i in range(len(self.cum) - 1):
             if self.cum[i + 1] >= d:
                 a, b = self.points[i], self.points[i + 1]
@@ -93,6 +95,8 @@ class Gps(QObject):
         self._report.connect(self._apply)
         self._route = None
         self._travelled = 0.0
+        self._path = None                # a one-way route to drive instead (navigation demo)
+        self._path_travelled = 0.0
         self._demo_timer = QTimer(self, interval=1000, timeout=self._demo_tick)
 
     def start(self):
@@ -141,8 +145,16 @@ class Gps(QObject):
             return                           # a real fix wins
         mph = self._vehicle.speed if self._vehicle is not None else 30.0
         speed = mph * MPH_TO_MS
-        self._travelled += speed * self._demo_timer.interval() / 1000
-        lon, lat, heading = self._route.at(self._travelled)
+        step = speed * self._demo_timer.interval() / 1000
+        if self._path:
+            # Driving a navigation route: stop at the end of it.
+            if self._path_travelled >= self._path.length:
+                speed = 0.0
+            self._path_travelled = min(self._path.length, self._path_travelled + step)
+            lon, lat, heading = self._path.at(self._path_travelled)
+        else:
+            self._travelled += step
+            lon, lat, heading = self._route.at(self._travelled)
         self._apply({"lat": lat, "lon": lon, "speed": speed, "heading": heading, "source": "demo"})
 
     def _apply(self, report):
@@ -158,6 +170,15 @@ class Gps(QObject):
                 report["heading"] = self._fix["heading"] if self._fix else 0.0
         self._fix = report
         self.changed.emit()
+
+    def followPath(self, points):
+        """In demo mode, drive this route (from its start) instead of the loop."""
+        if len(points) >= 2:
+            self._path = DemoRoute(points=points, loop=False)
+            self._path_travelled = 0.0
+
+    def clearPath(self):
+        self._path = None
 
     # ---- what QML sees ------------------------------------------------------
     @pyqtProperty(bool, notify=changed)

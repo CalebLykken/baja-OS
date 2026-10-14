@@ -244,6 +244,7 @@ function step(now) {
     shown = { lon: from.lon + (to.lon - from.lon) * f, lat: from.lat + (to.lat - from.lat) * f,
               heading: turn(from.heading, to.heading, f), speed: to.speed };
     marker.setLngLat([shown.lon, shown.lat]).setRotation(shown.heading);
+    trimRoute(now);
     if (following) {
         followCamera(now);
         checkRoad(now);
@@ -311,6 +312,77 @@ function showPlace(lon, lat) {
         map.flyTo({ center: [lon, lat], zoom: 15.5, ...flat, duration: 1400 });
     }
 }
+
+// ---- the route ---------------------------------------------------------------
+
+let routeCoords = null;
+let trimFrom = 0, trimmedAt = 0;      // the route segment the truck is on
+
+// Once a second, drop the part of the line the truck has already driven:
+// snap the truck to the nearest route segment just ahead of the last one
+// and draw from there.
+function trimRoute(now) {
+    if (!routeCoords || !shown || now - trimmedAt < 1000 || !map.getSource("route")) return;
+    trimmedAt = now;
+    const k = Math.cos(shown.lat * Math.PI / 180);
+    let best = trimFrom, bestD = Infinity;
+    const end = Math.min(routeCoords.length - 1, trimFrom + 300);
+    for (let i = trimFrom; i < end; i++) {
+        const [ax, ay] = routeCoords[i], [bx, by] = routeCoords[i + 1];
+        const dx = (bx - ax) * k, dy = by - ay;
+        const px = (shown.lon - ax) * k, py = shown.lat - ay;
+        const len = dx * dx + dy * dy;
+        const t = len ? Math.max(0, Math.min(1, (px * dx + py * dy) / len)) : 0;
+        const ex = px - t * dx, ey = py - t * dy;
+        const d = ex * ex + ey * ey;
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    trimFrom = best;
+    map.getSource("route").setData({ type: "Feature", properties: {},
+        geometry: { type: "LineString", coordinates: [[shown.lon, shown.lat]].concat(routeCoords.slice(best + 1)) } });
+}
+
+// isStyleLoaded() is false whenever tiles are still loading (nearly always
+// while following), so just try, and retry shortly if the style itself is
+// mid-change ("Style is not done loading").
+function drawRoute() {
+    if (!routeCoords) return;
+    try {
+        addRoute();
+    } catch (e) {
+        setTimeout(drawRoute, 250);
+    }
+}
+
+function addRoute() {
+    const data = { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: routeCoords } };
+    if (map.getSource("route")) {
+        map.getSource("route").setData(data);
+    } else {
+        map.addSource("route", { type: "geojson", data });
+    }
+    if (!map.getLayer("route-line")) {
+        // Under the labels, over the roads.
+        const firstLabel = map.getStyle().layers.find(l => l.type === "symbol");
+        const before = firstLabel ? firstLabel.id : undefined;
+        const round = { "line-join": "round", "line-cap": "round" };
+        map.addLayer({ id: "route-casing", type: "line", source: "route", layout: round,
+                       paint: { "line-color": theme.bg,
+                                "line-width": ["interpolate", ["linear"], ["zoom"], 10, 7, 16, 18] } }, before);
+        map.addLayer({ id: "route-line", type: "line", source: "route", layout: round,
+                       paint: { "line-color": theme.accent,
+                                "line-width": ["interpolate", ["linear"], ["zoom"], 10, 4, 16, 11] } }, before);
+    }
+}
+
+function clearRoute() {
+    routeCoords = null;
+    for (const id of ["route-line", "route-casing"]) if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource("route")) map.removeSource("route");
+}
+
+// A style change (a new theme) drops added layers; put the route back.
+map.on("styledata", () => { if (routeCoords && !map.getLayer("route-line")) drawRoute(); });
 
 // Touching the map takes over from follow mode; the follow key gives it back.
 for (const ev of ["dragstart", "rotatestart", "pitchstart", "zoomstart"]) {
@@ -384,10 +456,20 @@ window.baja = {
         theme = { ...FALLBACK_THEME, ...t };
         applyPageColours(theme);
         map.setStyle(styleFor(theme));
+        for (const [id, colour] of [["route-casing", theme.bg], ["route-line", theme.accent]]) {
+            if (map.getLayer(id)) map.setPaintProperty(id, "line-color", colour);
+        }
     },
     setPosition,
     showPlace,
     clearPlace() { pinMarker.remove(); },
+    showRoute(coords) {
+        routeCoords = coords;
+        trimFrom = 0;
+        trimmedAt = 0;
+        drawRoute();
+    },
+    clearRoute,
     // While following, the zoom keys nudge the follow zoom instead of
     // breaking out of follow mode.
     zoomIn() {

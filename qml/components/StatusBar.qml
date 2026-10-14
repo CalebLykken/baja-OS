@@ -4,14 +4,56 @@ import QtQuick
 Item {
     id: bar
     property string title
+    property bool showTurn: false       // the next turn while navigating (not on Maps)
+    signal turnTapped()
     height: 64
 
     Label {
+        id: titleLabel
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
         text: bar.title
         color: Theme.text
         font.pixelSize: Theme.fontTitle
         font.weight: Font.DemiBold
+    }
+
+    // While navigating: the next turn, between the title and the clock.
+    Rectangle {
+        id: turnPill
+        visible: bar.showTurn && typeof routing !== "undefined" && routing.active
+        anchors { left: titleLabel.right; leftMargin: 24; right: clock.left; rightMargin: 24; verticalCenter: parent.verticalCenter }
+        height: 48
+        radius: Theme.radius
+        color: Theme.panel
+        border.width: Theme.border
+        border.color: Theme.accent
+        Row {
+            anchors { left: parent.left; leftMargin: 12; right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+            spacing: 10
+            Icon {
+                anchors.verticalCenter: parent.verticalCenter
+                name: routing.maneuverIcon || "straight"
+                size: 30
+                color: Theme.accent
+            }
+            Label {
+                id: turnDist
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !routing.arrived
+                text: Units.distanceText(routing.distanceToTurn)
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+            Label {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - 30 - (turnDist.visible ? turnDist.width : 0) - 20
+                elide: Text.ElideRight
+                text: routing.instruction
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
+            }
+        }
+        TapHandler { onTapped: bar.turnTapped() }
     }
 
     Label {

@@ -23,7 +23,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     python3-pyqt6 python3-pyqt6.qtqml python3-pyqt6.qtquick python3-pyqt6.qtmultimedia \
     python3-mutagen qml6-module-qtquick qml6-module-qtquick-layouts \
     qml6-module-qtquick-window qml6-module-qtqml-workerscript \
-    pipewire pipewire-pulse wireplumber plymouth
+    pipewire pipewire-pulse wireplumber plymouth \
+    fonts-urw-base35 fonts-liberation fonts-dejavu-core   # the styles' typefaces
 # The user's PipeWire session (audio) runs at boot without anyone logging in.
 loginctl enable-linger "$USER_NAME"
 

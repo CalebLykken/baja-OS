@@ -26,6 +26,8 @@ WATCH_EVERY_MS = 10000
 TETHER_AFTER_S = 45          # this long with no Wi-Fi before trying the phone
 TETHER_RETRY_S = 120
 UNTETHER_AFTER_S = 60        # Wi-Fi back this long before letting the phone go
+IPHONE_GATEWAY = "172.20.10.1"
+HOTSPOT_ADDRESS = "172.20.10.14/28"   # a fixed extra address, for the "Send to Baja" Shortcut
 
 
 def nmcli(*args, input=None, timeout=10):
@@ -102,6 +104,7 @@ class Wifi(QObject):
         self._no_wifi_since = None
         self._wifi_since = None
         self._last_tether_try = 0
+        self._hotspot_done = set()   # hotspot connections already given the fixed address
         self._scanned.connect(self._on_scanned)
         self._finished.connect(self._on_finished)
         self._scan_timer = QTimer(self, interval=SCAN_EVERY_MS, timeout=self.refresh)
@@ -126,8 +129,25 @@ class Wifi(QObject):
             self._scanned.emit(nets, saved_connections(), control)
         threading.Thread(target=work, daemon=True).start()
 
+    def _ensure_hotspot_address(self):
+        """On an iPhone hotspot, give the connection a fixed second address
+        (172.20.10.14) so the phone's Shortcut always knows where the Pi is.
+        DHCP still runs alongside it for the route and DNS."""
+        _, out, _ = nmcli("-t", "-f", "IP4.GATEWAY,GENERAL.CONNECTION", "device", "show", "wlan0", timeout=4)
+        fields = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
+        conn = fields.get("GENERAL.CONNECTION", "")
+        if fields.get("IP4.GATEWAY") != IPHONE_GATEWAY or not conn or conn in self._hotspot_done:
+            return
+        self._hotspot_done.add(conn)
+        _, addrs, _ = nmcli("-g", "ipv4.addresses", "connection", "show", "id", conn, timeout=4)
+        if HOTSPOT_ADDRESS not in addrs:
+            nmcli("connection", "modify", "id", conn, "+ipv4.addresses", HOTSPOT_ADDRESS)
+            nmcli("device", "reapply", "wlan0", timeout=15)
+
     def _on_scanned(self, nets, saved, control):
         self._scanning = False
+        if control and any(n["active"] for n in nets):
+            threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
         saved_ssids = {c["ssid"] for c in saved if c["ssid"]}
         for n in nets:
             n["saved"] = n["ssid"] in saved_ssids

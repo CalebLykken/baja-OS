@@ -9,13 +9,14 @@
   html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #14160f; }
   /* The dashboard draws its own keys and attribution over the map. */
   .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
-  /* The truck: an arrow in the accent colour, lying flat on the map. */
-  .puck { width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.55)); }
-  .puck path { fill: var(--accent, #ff7a1a); stroke: var(--bg, #14160f); stroke-width: 3; stroke-linejoin: round; }
-  /* A searched-for place: a pin in the accent colour. */
-  .pin { width: 44px; height: 56px; filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.55)); }
-  .pin path { fill: var(--accent, #ff7a1a); stroke: var(--bg, #14160f); stroke-width: 1.2; }
-  .pin circle { fill: var(--bg, #14160f); }
+  /* The truck: an orange arrow lying flat on the map, with a light edge so
+     it stands out on the orange route. Colours follow the day/night look. */
+  .puck { width: 46px; height: 46px; filter: drop-shadow(0 3px 2px var(--shadow, rgba(0, 0, 0, 0.5))); }
+  .puck path { fill: var(--arrow, #ff7a1a); stroke: var(--arrow-edge, #e9dfc4); stroke-width: 3; stroke-linejoin: round; }
+  /* A picked place: a pin. */
+  .pin { width: 44px; height: 56px; filter: drop-shadow(0 3px 2px var(--shadow, rgba(0, 0, 0, 0.5))); }
+  .pin path { fill: var(--arrow, #ff7a1a); stroke: var(--arrow-edge, #e9dfc4); stroke-width: 1.2; }
+  .pin circle { fill: var(--arrow-edge, #e9dfc4); }
 </style>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>

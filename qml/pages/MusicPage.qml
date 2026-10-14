@@ -153,7 +153,7 @@ Item {
 
                 ListView {
                     id: queue
-                    anchors { fill: parent; margins: 10; topMargin: 44 }
+                    anchors { fill: parent; margins: 10; topMargin: 52 }
                     clip: true
                     model: listCard.spotifyQueue ? media.upNext : media.queue
                     boundsBehavior: Flickable.StopAtBounds
@@ -164,7 +164,7 @@ Item {
                         readonly property bool current: !listCard.spotifyQueue && index === media.index
 
                         width: queue.width
-                        height: 64
+                        height: 96
                         radius: Theme.radius
                         color: current || rowTap.pressed ? Theme.panelHi : "transparent"
 

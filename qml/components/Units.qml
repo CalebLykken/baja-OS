@@ -7,6 +7,7 @@ import QtQuick
 QtObject {
     property bool metric: false
     property bool clock24: false
+    property string appearance: "auto"  // "auto" (light by day, dark at night), "light" or "dark"
 
     function speed(mph) { return metric ? mph * 1.609344 : mph }
     readonly property string speedUnit: metric ? "km/h" : "mph"

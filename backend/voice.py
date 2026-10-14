@@ -67,7 +67,8 @@ class Voice(QObject):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self._settings = settings
-        self._enabled = str(settings.get("voice", "true")) == "true"
+        # Off unless turned on (Settings > Sound, or the speaker key while navigating).
+        self._enabled = str(settings.get("voice", "false")) == "true"
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
         self._proc = None

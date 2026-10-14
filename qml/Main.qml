@@ -6,6 +6,11 @@ import "pages"
 
 // Root window: nav rail on the left, status bar + pages on the right.
 // Sized for the 8" 1280x800 panel; main.py goes full screen on the Pi.
+//
+// The Maps page is the exception: it fills everything right of the rail
+// (no status bar; the clock moves into the rail), like CarPlay. There is
+// one map engine for the whole dashboard: it sits full size on Maps and
+// small in the Home page's map tile, moved to whichever is showing.
 Window {
     id: root
     width: 1280
@@ -23,6 +28,13 @@ Window {
         { icon: "car", label: "Truck" },
         { icon: "settings", label: "Settings" }
     ]
+    readonly property bool onMaps: page === 2
+
+    // Overpass (after US highway-sign lettering) for the map and its
+    // controls; bundled, so nothing needs installing on the Pi.
+    FontLoader { source: "assets/fonts/Overpass-Regular.ttf" }
+    FontLoader { source: "assets/fonts/Overpass-SemiBold.ttf" }
+    FontLoader { source: "assets/fonts/Overpass-Bold.ttf" }
 
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
@@ -39,6 +51,7 @@ Window {
         if (typeof settings !== "undefined") {
             Units.metric = String(settings.get("metric", "false")) === "true"
             Units.clock24 = String(settings.get("clock24", "false")) === "true"
+            Units.appearance = String(settings.get("appearance", "auto"))
         }
     }
     Connections {
@@ -51,6 +64,53 @@ Window {
         target: Units
         function onMetricChanged() { settings.set("metric", Units.metric ? "true" : "false") }
         function onClock24Changed() { settings.set("clock24", Units.clock24 ? "true" : "false") }
+        function onAppearanceChanged() { settings.set("appearance", Units.appearance) }
+    }
+
+    // Light by day, dark at night (by the sun where the truck is), unless
+    // Settings picks one: the whole dashboard and the map together.
+    Binding {
+        target: Theme
+        property: "dark"
+        value: Units.appearance === "dark"
+               || (Units.appearance !== "light" && typeof display !== "undefined" && display.sunDown)
+    }
+
+    // A destination sent from the phone: open the map with it, ready for Go.
+    Connections {
+        target: typeof phone !== "undefined" ? phone : null
+        function onReceived(place) {
+            root.page = 2
+            mapsPage.receive(place)
+        }
+    }
+
+    // ---- the one map engine ------------------------------------------------------
+    property bool mapWanted: false
+    property bool mapReady: false
+    property string mapProblem: ""
+    readonly property var mapView: mapLoader.item
+    // Start it once the start-up screen is done (it's on Home too).
+    Timer { interval: 3000; running: true; onTriggered: root.mapWanted = true }
+    onPageChanged: if (page === 0 || page === 2) mapWanted = true
+
+    Loader {
+        id: mapLoader
+        active: root.mapWanted && typeof maps !== "undefined" && maps.webEngine && maps.ready
+        source: "pages/MapView.qml"
+        onStatusChanged: if (status === Loader.Error) root.mapProblem = "The map engine didn't start"
+        onLoaded: {
+            item.parent = Qt.binding(() => root.onMaps ? mapsPage.mapSlot : homePage.mapSlot)
+            item.mode = Qt.binding(() => Theme.dark ? "night" : "day")
+            item.insetLeft = Qt.binding(() => root.onMaps ? mapsPage.mapInsetLeft : 0)
+        }
+    }
+    Connections {
+        target: root.mapView
+        ignoreUnknownSignals: true
+        function onReady(ms) { root.mapReady = true; console.log("Map: drawn in " + ms + " ms") }
+        function onFailed(message) { root.mapProblem = message }
+        function onBenchDone(result) { console.log("Map bench: " + JSON.stringify(result)) }
     }
 
     Backdrop { anchors.fill: parent }
@@ -59,7 +119,19 @@ Window {
         id: rail
         width: 112
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
-        color: Theme.backdrop === "none" ? Theme.bg : "transparent"
+        color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
+
+        // On Maps the status bar gives way to the map; the time sits here.
+        Label {
+            visible: root.onMaps
+            anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
+            property date now: new Date()
+            text: Units.timeText(now)
+            numeric: true
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.DemiBold
+            Timer { interval: 5000; running: true; repeat: true; onTriggered: parent.now = new Date() }
+        }
 
         Column {
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
@@ -87,11 +159,14 @@ Window {
             leftMargin: 24; rightMargin: 24; bottomMargin: 20
         }
         spacing: 8
+        opacity: root.onMaps ? 0 : 1
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
 
         StatusBar {
             Layout.fillWidth: true
             title: root.pages[root.page].label
-            showTurn: root.page !== 2
+            showTurn: !root.onMaps && root.page !== 0      // Home's map tile shows it
             onTurnTapped: root.page = 2
         }
 
@@ -101,17 +176,36 @@ Window {
             Layout.fillHeight: true
 
             PageHost { anchors.fill: parent; index: 0; current: root.page
-                HomePage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+                HomePage {
+                    id: homePage
+                    anchors.fill: parent
+                    mapReady: root.mapReady
+                    onNavigate: (i) => root.page = i
+                }
+            }
             PageHost { anchors.fill: parent; index: 1; current: root.page
                 MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
-            PageHost { anchors.fill: parent; index: 2; current: root.page
-                MapsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
             PageHost { anchors.fill: parent; index: 3; current: root.page
                 GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
             PageHost { anchors.fill: parent; index: 4; current: root.page
                 TruckPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
             PageHost { anchors.fill: parent; index: 5; current: root.page
                 SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+        }
+    }
+
+    // Maps: everything right of the rail.
+    PageHost {
+        anchors { left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom }
+        index: 2
+        current: root.page
+        MapsPage {
+            id: mapsPage
+            anchors.fill: parent
+            map: root.mapView
+            mapReady: root.mapReady
+            problem: root.mapProblem
+            onNavigate: (i) => root.page = i
         }
     }
 

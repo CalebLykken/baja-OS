@@ -2,12 +2,14 @@ pragma Singleton
 import QtQuick
 
 // One place for colors, fonts and sizes. `style` picks a set of tokens from
-// `styles`; everything else binds to the active set, so switching style at
-// runtime restyles the whole UI.
+// `styles` (or `lightStyles` when `dark` is off, by day); everything else
+// binds to the active set, so switching style or day/night at runtime
+// restyles the whole UI.
 QtObject {
     id: theme
 
     property string style: "trail"     // the default look
+    property bool dark: true           // Main.qml: light by day, dark at night
 
     readonly property var styles: ({
         // The original look: near-black panels, amber accent.
@@ -45,8 +47,34 @@ QtObject {
             radius: 12, border: 1, gauge: "arc", backdrop: "stripes"
         }
     })
+    // The same looks for daylight: light grounds, dark text, the accents
+    // deepened a little so they hold up on a light background.
+    readonly property var lightStyles: ({
+        amber: {
+            bg: "#ece9e3", panel: "#f8f6f2", panelTop: "#fbfaf7", panelHi: "#e4e0d7",
+            line: "#cdc6ba", text: "#1d1b18", textDim: "#68625a",
+            accent: "#d27c00", accentDim: "#f3dfb9", warn: "#cc3418", ok: "#3c8a2b"
+        },
+        cluster: {
+            bg: "#e8eaed", panel: "#f7f8fa", panelTop: "#ffffff", panelHi: "#e0e3e8",
+            line: "#c5cad2", text: "#13171c", textDim: "#5b636d",
+            accent: "#de4316", accentDim: "#f7cdbd", warn: "#cf1f1f", ok: "#1e7db5"
+        },
+        trail: {
+            bg: "#e8e3d4", panel: "#f6f2e7", panelTop: "#fbf8f0", panelHi: "#e5dfcc",
+            line: "#c8bfa4", text: "#23261b", textDim: "#696450",
+            accent: "#e2650c", accentDim: "#f5d2b5", warn: "#c4321f", ok: "#4c7c29"
+        },
+        rally: {
+            bg: "#e2e7f2", panel: "#f5f7fc", panelTop: "#ffffff", panelHi: "#dbe2f1",
+            line: "#b8c3dc", text: "#0b1633", textDim: "#4d5d84",
+            accent: "#c48600", accentDim: "#f2e1ae", warn: "#d03030", ok: "#1d875a"
+        }
+    })
     readonly property var styleNames: ["amber", "cluster", "trail", "rally"]
-    readonly property var s: styles[style] || styles.amber
+    readonly property var base: styles[style] || styles.amber
+    // Colours from the day or night set; fonts and shapes always from base.
+    readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})
 
     readonly property color bg: s.bg
     readonly property color panel: s.panel
@@ -71,17 +99,21 @@ QtObject {
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
     readonly property string backdrop: s.backdrop  // "none", "topo" or "stripes"
 
-    readonly property int gap: 14
-    readonly property int touch: 76   // minimum tap target, ~15 mm on this panel
+    readonly property string mapFont: "Overpass"     // the map, its labels and its controls
 
-    // Type scale (docs/DESIGN.md). Big, legible type for arm's-length
-    // reading in daylight; nothing else should invent a size.
-    readonly property int fontLegend: 15      // instrument legends: caps, DemiBold, tracked
+    readonly property int gap: 14
+    readonly property int touch: 100  // minimum tap target, ~13 mm on this panel
+
+    // Type scale (docs/DESIGN.md), sized to read from the driver's seat
+    // (70-90 cm) on this 189 ppi panel: body text is about 12-16 arc
+    // minutes there (ISO 15008's floor is 12'). Nothing else should invent
+    // a size.
+    readonly property int fontLegend: 20      // instrument legends: caps, DemiBold, tracked
     readonly property real legendTracking: 2
-    readonly property int fontSmall: 16       // times, units, secondary lines
-    readonly property int fontBody: 22        // artists, list rows, settings text
-    readonly property int fontTitle: 30       // page and card titles, Home track title
-    readonly property int fontHero: 40        // the Music page track title
-    readonly property int fontReadout: 40     // readout numerals
-    readonly property int fontHuge: 64
+    readonly property int fontSmall: 24       // times, units, secondary lines
+    readonly property int fontBody: 30        // artists, list rows, settings text
+    readonly property int fontTitle: 40       // page and card titles, track titles
+    readonly property int fontHero: 56        // the Music page track title, place names
+    readonly property int fontReadout: 56     // readout numerals
+    readonly property int fontHuge: 88        // distance to the next turn
 }

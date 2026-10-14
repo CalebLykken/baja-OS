@@ -39,6 +39,7 @@ TYPES = {
     ".png": "image/png",
     ".pbf": "application/x-protobuf",
     ".pmtiles": "application/octet-stream",
+    ".geojson": "application/geo+json",
     ".txt": "text/plain; charset=utf-8",
 }
 
@@ -55,6 +56,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _target(self):
         path = unquote(urlsplit(self.path).path)
+        if path.startswith("/fonts/"):
+            return self._glyphs(path[len("/fonts/"):])
         if path.startswith("/data/"):
             root, rel = self.server.data_dir, path[len("/data/"):]
         else:
@@ -65,6 +68,25 @@ class _Handler(BaseHTTPRequestHandler):
         if root not in target.parents or not target.is_file():
             return None
         return target
+
+    # The map's labels use Overpass (web/map/fonts, made with
+    # tools/make_glyphs.py); characters outside its Latin ranges come from
+    # the stock Noto glyphs installed with the map.
+    NOTO = {"Overpass Regular": "Noto Sans Regular", "Overpass SemiBold": "Noto Sans Medium",
+            "Overpass Italic": "Noto Sans Italic"}
+
+    def _glyphs(self, rel):
+        stack, _, name = rel.partition("/")
+        if "/" in name or not name.endswith(".pbf"):
+            return None
+        for font in [f.strip() for f in stack.split(",") if f.strip()]:
+            for root, folder in ((self.server.app_dir / "fonts", font),
+                                 (self.server.data_dir / "fonts", self.NOTO.get(font, font))):
+                root = root.resolve()
+                target = (root / folder / name).resolve()
+                if root in target.parents and target.is_file():
+                    return target
+        return None
 
     def _serve(self, send_body):
         target = self._target()
@@ -131,6 +153,7 @@ KIND_WORDS = {
     "car_repair": "Car repair", "car_wash": "Car wash", "parking": "Parking",
     "parking_entrance": "Parking", "stop": "Transit stop", "station": "Station",
     "townhall": "Town hall", "social_facility": "Social services", "pitch": "Sports field",
+    "address": "Address",
 }
 
 
@@ -232,15 +255,47 @@ class MapService(QObject):
         index = self._data_dir / places.INDEX_NAME
         near = (lon, lat) if (lon or lat) else None
 
+        addresses = self._data_dir / places.ADDRESS_INDEX
+
+        def work():
+            rows = []
+            # "123 Main St": street addresses first, then any places too.
+            if places.looks_like_address(text) and addresses.is_file():
+                try:
+                    db = sqlite3.connect(f"file:{addresses}?mode=ro", uri=True)
+                    rows += places.search_addresses(db, text, near=near)
+                    db.close()
+                except sqlite3.Error:
+                    pass
+            try:
+                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+                rows += places.search(db, text, near=near)
+                if not rows and places.looks_like_address(text):
+                    # The house number isn't mapped: offer the street itself.
+                    rows += [r for r in places.search(db, places.street_part(text), near=near)
+                             if r["kind"] == "street"]
+                db.close()
+            except sqlite3.Error:
+                pass
+            self._found.emit(text, rows[:12])
+        threading.Thread(target=work, name="place-search", daemon=True).start()
+
+    @pyqtSlot(str, float, float)
+    def searchNearby(self, category, lon, lat):
+        """The nearest places of a category ("gas", "coffee", "food", ...)."""
+        key = "category:" + category
+        self._query = key
+        index = self._data_dir / places.INDEX_NAME
+
         def work():
             try:
                 db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
-                rows = places.search(db, text, near=near)
+                rows = places.nearby(db, category, (lon, lat))
                 db.close()
             except sqlite3.Error:
                 rows = []
-            self._found.emit(text, rows)
-        threading.Thread(target=work, name="place-search", daemon=True).start()
+            self._found.emit(key, rows)
+        threading.Thread(target=work, name="place-nearby", daemon=True).start()
 
     def _on_found(self, text, rows):
         if text != self._query:

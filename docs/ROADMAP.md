@@ -231,6 +231,22 @@ phone locked; the dashboard controls work; it comes back after a reboot.
 **Done when:** you can drive a familiar route and a new one with the
 dashboard alone, including a missed turn, in airplane mode.
 
+**Redesign (2026-10-14), from research on CarPlay, Android Auto, Google
+Maps, Apple Maps and Waze, NHTSA's glance guidelines and ISO 15008:**
+full-screen map beside the rail with the clock in the rail; light by day
+and dark at night for the whole dashboard (by the sun, or Settings); a
+simplified warm-neutral map palette with orange only for the route and the
+truck; Overpass (highway-sign lettering) for the map labels and controls,
+with glyphs made by tools/make_glyphs.py; type and keys sized for 70-90 cm;
+search panel with Home, recents and categories; street-address search
+(910,000 addresses from OpenStreetMap); route preview with Go at the bottom;
+turn card top-left, arrival bottom-left; speed limit (Valhalla map
+matching) and speed on the right; traffic lights, stop and yield signs;
+overview, voice and follow keys in one strip; Re-center, automatic after
+10 s while driving a route; the route draws itself in; a live mini-map on
+Home; destinations sent from the iPhone (Shortcut or QR page). Voice stays
+off by default, at the owner's request.
+
 ### S4b. Navigation polish
 
 - Lane hints and better maneuver wording.

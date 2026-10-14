@@ -349,6 +349,70 @@ def build(maps_dir, log=print):
 
 # ---- searching ------------------------------------------------------------------
 
+ADDRESS_INDEX = "addresses.sqlite"     # built by deploy/maps/build_addresses.py
+
+# Directions are written out in OpenStreetMap ("North", "Northeast"); most
+# other abbreviations ("Ave", "St") match as word prefixes anyway.
+DIRECTIONS = {"n": "north", "s": "south", "e": "east", "w": "west", "ne": "northeast",
+              "nw": "northwest", "se": "southeast", "sw": "southwest"}
+ABBREVIATIONS = {"st": "street", "rd": "road", "dr": "drive", "blvd": "boulevard",
+                 "hwy": "highway", "pkwy": "parkway", "ln": "lane", "ct": "court",
+                 "pl": "place", "ter": "terrace", "cir": "circle", "mt": "mount"}
+
+
+def looks_like_address(text):
+    words = text.strip().split()
+    return len(words) >= 2 and any(c.isdigit() for c in words[0])
+
+
+def search_addresses(db, text, near=None, limit=8):
+    """'4500 aurora ave n' -> matching street addresses, nearest first."""
+    words = [w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split() if w]
+    if len(words) < 2:
+        return []
+    number, rest = words[0], words[1:]
+    terms = []
+    for w in rest:
+        if w in DIRECTIONS:
+            terms.append(f'"{DIRECTIONS[w]}"')
+        elif w in ABBREVIATIONS:
+            terms.append(f'"{ABBREVIATIONS[w]}"*')
+        else:
+            terms.append(f'"{w}"*')
+    q = f'number : "{number}" AND ' + " AND ".join("{street city} : " + t for t in terms)
+    try:
+        rows = db.execute("SELECT number, street, city, postcode, lon, lat FROM addresses"
+                          " WHERE addresses MATCH ? LIMIT 200", (q,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    out = []
+    for num, street, city, post, lon, lat in rows:
+        dist = -1
+        if near:
+            dx = (lon - near[0]) * 111320 * math.cos(math.radians(lat))
+            dy = (lat - near[1]) * 110540
+            dist = math.hypot(dx, dy)
+        out.append({"name": f"{num} {street}", "kind": "address", "area": city,
+                    "lon": lon, "lat": lat, "distance": dist})
+    out.sort(key=lambda r: r["distance"] if r["distance"] >= 0 else 0)
+    # The same address is often mapped twice (a point and a building);
+    # keep the first of each, preferring one that names its city.
+    seen, unique = {}, []
+    for r in out:
+        key = r["name"].lower()
+        if key in seen:
+            if not unique[seen[key]]["area"] and r["area"]:
+                unique[seen[key]]["area"] = r["area"]
+            continue
+        seen[key] = len(unique)
+        unique.append(r)
+    return unique[:limit]
+
+
+def street_part(text):
+    """'4500 aurora ave n' -> 'aurora ave n'."""
+    return " ".join(text.strip().split()[1:])
+
 def _fts_query(text):
     words = [w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split() if w]
     return " AND ".join(f'"{w}"*' for w in words)
@@ -388,6 +452,41 @@ def search(db, text, near=None, limit=12):
                             "distance": dist if dist is not None else -1}))
     out.sort(key=lambda r: r[0])
     return [r[1] for r in out[:limit]]
+
+
+# One-tap categories: the map's kinds that count for each.
+CATEGORIES = {
+    "gas": ("fuel",),
+    "coffee": ("cafe",),
+    "food": ("restaurant", "fast_food", "food_court"),
+    "parking": ("parking",),
+    "charging": ("charging_station",),
+    "groceries": ("supermarket", "convenience", "greengrocer"),
+}
+
+
+def nearby(db, category, near, limit=12):
+    """The nearest places of a category to `near` (lon, lat)."""
+    kinds = CATEGORIES.get(category)
+    if not kinds or not near:
+        return []
+    lon0, lat0 = near
+    k = math.cos(math.radians(lat0)) ** 2
+    marks = ",".join("?" * len(kinds))
+    rows = db.execute(
+        f"SELECT name, kind, area, lon, lat FROM places WHERE kind IN ({marks})"
+        " ORDER BY (lon - ?) * (lon - ?) * ? + (lat - ?) * (lat - ?) LIMIT ?",
+        (*kinds, lon0, lon0, k, lat0, lat0, limit * 3)).fetchall()
+    out, seen = [], set()
+    for name, kind, area_, lon, lat in rows:
+        if (name, area_) in seen:
+            continue
+        seen.add((name, area_))
+        dx = (lon - lon0) * 111320 * math.cos(math.radians(lat))
+        dy = (lat - lat0) * 110540
+        out.append({"name": name, "kind": kind, "area": area_, "lon": lon, "lat": lat,
+                    "distance": math.hypot(dx, dy)})
+    return out[:limit]
 
 
 if __name__ == "__main__":

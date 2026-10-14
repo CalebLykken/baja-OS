@@ -116,7 +116,7 @@ Item {
         spacing: 16
         Label {
             id: rowLabel
-            Layout.preferredWidth: 220
+            Layout.preferredWidth: 300
             font.pixelSize: Theme.fontBody
         }
     }
@@ -174,6 +174,16 @@ Item {
             Section {
                 Layout.fillWidth: true
                 heading: "Look"
+                SettingRow {
+                    label: "Appearance"
+                    SegmentedControl {
+                        options: [{ label: "Automatic", value: "auto" }, { label: "Light", value: "light" },
+                                  { label: "Dark", value: "dark" }]
+                        current: Units.appearance
+                        onPicked: (v) => Units.appearance = v
+                    }
+                }
+                Note { text: "Automatic is light while the sun is up and dark after it sets, where the truck is, for the whole dashboard and the map." }
                 SettingRow {
                     label: "Style"
                     SegmentedControl {
@@ -565,6 +575,39 @@ Item {
                         font.pixelSize: Theme.fontBody
                         text: maps.updating || maps.updateMessage !== "" ? maps.updateMessage
                               : network.online ? "Downloads about 130 MB" : "Needs internet"
+                    }
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Send from your phone"
+                // On an iPhone hotspot the Pi also answers on a fixed address.
+                readonly property string ip: typeof network === "undefined" || !network.ip ? ""
+                                             : network.ip.indexOf("172.20.10.") === 0 ? "172.20.10.14" : network.ip
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 24
+                    Image {
+                        visible: parent.parent.ip !== "" && typeof phone !== "undefined"
+                        Layout.preferredWidth: 220
+                        Layout.preferredHeight: 220
+                        source: visible ? phone.qrImage(parent.parent.ip) : ""
+                        smooth: false
+                        fillMode: Image.PreserveAspectFit
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: Theme.fontBody
+                            text: parent.parent.parent.ip === "" ? "Connect to Wi-Fi or your phone's hotspot first."
+                                  : "Scan this with the iPhone camera."
+                        }
+                        Note {
+                            text: "It opens a page where you can paste a link from Apple Maps or Google Maps, an address or a place, and send it here. The page also shows how to add a Send to Baja shortcut to the Share button, so you can send a place straight from Maps. It arrives on the Maps page, ready for Go."
+                        }
                     }
                 }
             }

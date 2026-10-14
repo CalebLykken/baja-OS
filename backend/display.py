@@ -29,7 +29,9 @@ DDC_ADDR = 0x37
 VCP_BRIGHTNESS = 0x10
 DDC_DELAY = 0.05  # DDC/CI wants ~50 ms between a command and the next one
 SEATTLE = (47.6062, -122.3321)
-DUSK = -2.0       # sun this far below the horizon counts as night
+DUSK = -2.0       # sun this far below the horizon counts as night (screen dimming)
+MAP_DARK = -4.0   # the map goes dark a little later (between sunset and civil dusk) ...
+MAP_LIGHT = -3.0  # ... and light again a little earlier, so it never flickers
 
 
 def find_ddc_bus():
@@ -85,6 +87,7 @@ class Display(QObject):
         self._settings = settings
         self._location = location or (lambda: SEATTLE)
         self._night = False
+        self._sun_down = False
         self._auto = settings is None or str(settings.get("autoNight", "true")) == "true"
         self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
         self._brightness = 80
@@ -126,7 +129,12 @@ class Display(QObject):
 
     def _check_sun(self, force=False):
         lat, lon = self._location()
-        night = self._auto and sun.altitude(lat, lon) < DUSK
+        alt = sun.altitude(lat, lon)
+        sun_down = alt < (MAP_LIGHT if self._sun_down else MAP_DARK)
+        if sun_down != self._sun_down:
+            self._sun_down = sun_down
+            self.nightChanged.emit()
+        night = self._auto and alt < DUSK
         if night != self._night or force:
             self._night = night
             self._apply(self._levels[night])
@@ -177,6 +185,11 @@ class Display(QObject):
     def night(self):
         """True while the night level is in use."""
         return self._night
+
+    @pyqtProperty(bool, notify=nightChanged)
+    def sunDown(self):
+        """True from just after sunset to just before sunrise (the dark map)."""
+        return self._sun_down
 
     @pyqtProperty(bool, notify=nightChanged)
     def autoNight(self):

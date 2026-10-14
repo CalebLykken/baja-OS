@@ -27,12 +27,14 @@ from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.eq import Equalizer
 from backend.gps import Gps
+from backend.roadinfo import RoadInfo
 from backend.routing import Router
 from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.media import MediaPlayer
 from backend.network import Network
+from backend.phone import PhoneSend
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
 from backend.system import SystemInfo
@@ -115,11 +117,13 @@ def main():
     network = Network()
     maps = MapService(args.maps_dir, web_engine)
     eq = Equalizer(settings)
+    phone = PhoneSend(args.maps_dir)
     wifi = Wifi(settings)
     system = SystemInfo()
     # Simulated drive around Seattle until the GPS receiver has a fix.
     gps = Gps(vehicle, demo=True)
     routing = Router(gps, settings)
+    road = RoadInfo(gps)
     voice = Voice(settings)
     routing.speak.connect(voice.say)
 
@@ -137,7 +141,9 @@ def main():
     ctx.setContextProperty("system", system)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
+    ctx.setContextProperty("road", road)
     ctx.setContextProperty("voice", voice)
+    ctx.setContextProperty("phone", phone)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
@@ -161,7 +167,9 @@ def main():
     system.start()
     gps.start()
     routing.start()
+    road.start()
     display.start()
+    phone.start()
     network.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
@@ -169,7 +177,7 @@ def main():
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

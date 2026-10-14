@@ -8,7 +8,7 @@
 #   EXTRACT=north-america/us/oregon deploy/maps/install-routing.sh
 #
 # Everything goes in $BAJA_ROUTING_DIR (default ~/.local/share/baja-os/valhalla):
-#   venv/            Valhalla 3.9.0 (pinned, hash-checked)
+#   venv/            Valhalla 3.9.0 and pyosmium 4.3.1 (pinned, hash-checked)
 #   osm/             the OpenStreetMap extract it was built from (kept)
 #   tiles/           the road graph
 #   valhalla.json    its configuration (listens on 127.0.0.1:8002 only)
@@ -20,8 +20,13 @@ PORT=8002
 VERSION=3.9.0
 
 case "$(uname -s)-$(uname -m)" in
-    Linux-aarch64) HASH=efc9a8f7098cc9d128b065a59cec386a0c6507c7eb690ef91421fbe5e57ed212 ;;
-    Darwin-arm64)  HASH=e4ed269fc0ffd2d3e69460ca9ba0443309845b2bfdf582d8975af88c6933cd97 ;;
+    Linux-aarch64)
+        HASH=efc9a8f7098cc9d128b065a59cec386a0c6507c7eb690ef91421fbe5e57ed212
+        # pyosmium for the Pi's Python 3.13, to read addresses for search
+        OSMIUM="osmium==4.3.1 --hash=sha256:88687d206a3102c31ccb1792cecad2e3f4fe3204e33cb9154a39828226876249" ;;
+    Darwin-arm64)
+        HASH=e4ed269fc0ffd2d3e69460ca9ba0443309845b2bfdf582d8975af88c6933cd97
+        OSMIUM="" ;;
     *) echo "No pinned Valhalla build for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -113,3 +118,18 @@ else
     echo "Built. Run it with: $BIN/valhalla_service $DIR/valhalla.json 2"
 fi
 du -sh "$DIR/tiles" | sed 's/^/Road graph: /'
+
+# ---- street addresses for search ------------------------------------------------------
+MAPS_DIR="${BAJA_MAPS_DIR:-$HOME/.local/share/baja-os/maps}"
+if [ -n "$OSMIUM" ] && [ -f "$MAPS_DIR/region.json" ]; then
+    if ! "$DIR/venv/bin/python" -c "import osmium" 2>/dev/null; then
+        req=$(mktemp)
+        printf '%s\n' "$OSMIUM" > "$req"
+        "$DIR/venv/bin/pip" install -q --only-binary=:all: --no-deps --require-hashes -r "$req"
+        rm -f "$req"
+    fi
+    echo "Indexing street addresses for search..."
+    "$DIR/venv/bin/python" "$(dirname "$0")/build_addresses.py" "$pbf" "$MAPS_DIR"
+    echo "Finding traffic lights and stop signs for the map..."
+    "$DIR/venv/bin/python" "$(dirname "$0")/build_controls.py" "$pbf" "$MAPS_DIR"
+fi

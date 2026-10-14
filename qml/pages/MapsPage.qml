@@ -2,133 +2,167 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// The offline map in a framed card, with zoom and recentre keys on the right
-// and the OpenStreetMap credit in the corner. The map (a web engine) starts
-// the first time this page is opened and then stays loaded. Until it's
-// drawn, or if it can't be, the card says why in plain words.
+// The Maps page, laid out like the car maps people already know (CarPlay,
+// Android Auto) and sized to read from the driver's seat:
+//
+// - Browsing: the map follows the truck; "Where to?" sits top-left.
+// - Searching: a panel down the left with the search box, Home, recent
+//   places and one-tap categories; the map stays visible on the right.
+//   Typing brings up the keyboard across the bottom.
+// - A picked place: the same panel shows it with the route already worked
+//   out (time, distance, arrival) and a big Go at the bottom.
+// - Driving a route: the next turn top-left, arrival bottom-left.
+// - Always: the speed limit and speed on the right, one strip of map keys
+//   bottom-right (zoom keys only appear after touching the map), and
+//   Re-center when the map has been moved (automatic after 10 s while
+//   driving a route).
+//
+// The map is light by day and dark at night (by the sun, or Settings).
 Item {
     id: page
     objectName: "mapsPage"
     signal navigate(int index)
 
-    property bool opened: false
+    // ---- state -----------------------------------------------------------------
+    property var map: null              // the dashboard's one map engine (Main.qml)
     property bool mapReady: false
     property string problem: ""
-    onVisibleChanged: if (visible) { opened = true; if (hasMaps) maps.refresh() }
-    // Start the map in the background a little after start-up, so it's
-    // ready (and following the truck) the first time the page opens.
-    Timer { interval: 6000; running: true; onTriggered: page.opened = true }
+    readonly property alias mapSlot: slot   // where Main.qml puts the map while this page shows
+    readonly property real mapInsetLeft: panelShown || navigating ? panelWidth + 16 : 0
+    onVisibleChanged: {
+        if (visible) { if (hasMaps) maps.refresh() }
+        else typing = false
+    }
+    onMapReadyChanged: if (mapReady && pending) { choose(pending); pending = null }
 
     readonly property bool hasMaps: typeof maps !== "undefined"
     readonly property bool hasFix: typeof gps !== "undefined" && gps.hasFix
+    readonly property bool hasRouting: typeof routing !== "undefined"
+    readonly property bool navigating: hasRouting && routing.active
+    readonly property bool following: map !== null && map.following
 
-    // Search: the sheet with the keyboard, and the place picked from it.
-    property bool searching: false
+    property string panel: ""          // "", "search", "results" or "place"
+    property bool typing: false
     property string query: ""
-    property var destination: null          // {name, label, lon, lat}
-    onQueryChanged: searchDelay.restart()
-    Timer {
-        id: searchDelay
-        interval: 180
-        onTriggered: maps.search(page.query, page.hasFix ? gps.lon : 0, page.hasFix ? gps.lat : 0)
-    }
+    property string resultsTitle: ""
+    property var place: null            // {name, label, lon, lat}
+    readonly property int panelWidth: 500
+    readonly property bool panelShown: panel !== "" && !navigating
 
-    // Home and the last few places picked, saved between runs, listed when
-    // the search box is empty.
+
+    // ---- Home and recent places, saved between runs ------------------------------
     function loadJson(key, fallback) {
         if (typeof settings === "undefined") return fallback
         try { return JSON.parse(String(settings.get(key, JSON.stringify(fallback)))) } catch (e) { return fallback }
     }
     property var home: loadJson("homePlace", null)
     property var recents: loadJson("recentPlaces", [])
-    readonly property var saved: (home ? [Object.assign({}, home, { label: "Home", isHome: true })] : [])
-                                 .concat(recents.filter(p => !home || p.name !== home.name || p.lon !== home.lon))
-    function samePlace(a, b) { return a && b && a.name === b.name && Math.abs(a.lon - b.lon) < 1e-5 && Math.abs(a.lat - b.lat) < 1e-5 }
-    function remember(place) {
-        var keep = { name: place.name, label: place.label, lon: place.lon, lat: place.lat }
-        recents = [keep].concat(recents.filter(p => !samePlace(p, keep))).slice(0, 6)
+    function samePlace(a, b) {
+        return !!a && !!b && a.name === b.name && Math.abs(a.lon - b.lon) < 1e-5 && Math.abs(a.lat - b.lat) < 1e-5
+    }
+    function remember(p) {
+        var keep = { name: p.name, label: p.label, lon: p.lon, lat: p.lat }
+        recents = [keep].concat(recents.filter(r => !samePlace(r, keep))).slice(0, 6)
         settings.set("recentPlaces", JSON.stringify(recents))
     }
-    function toggleHome(place) {
-        home = samePlace(home, place) ? null : { name: place.name, label: place.label, lon: place.lon, lat: place.lat }
+    function toggleHome(p) {
+        home = samePlace(home, p) ? null : { name: p.name, label: p.label, lon: p.lon, lat: p.lat }
         settings.set("homePlace", JSON.stringify(home))
     }
 
-    function openSearch() { query = ""; searching = true }
-    function choose(place) {
-        destination = place
-        searching = false
-        if (!place.isHome) remember(place)
-        map.call("showPlace(" + place.lon + "," + place.lat + ")")
-    }
-    function clearDestination() { destination = null; map.call("clearPlace()") }
-
-    readonly property bool hasRouting: typeof routing !== "undefined"
-    readonly property bool navigating: hasRouting && routing.active
-    function endRoute() { routing.stop(); clearDestination() }
-    function durationText(s) { return Units.durationText(s) }
-    function arrivalText(s) { return Units.arrivalText(s) }
-
-    // Straight-line distance from the truck, in metres (-1 without a position).
-    function distanceTo(place) {
-        if (!place || !hasFix) return -1
+    // ---- distances -------------------------------------------------------------------
+    function distanceTo(p) {
+        if (!p || !hasFix) return -1
         var rad = Math.PI / 180
-        var dx = (place.lon - gps.lon) * rad * Math.cos(gps.lat * rad) * 6371000
-        var dy = (place.lat - gps.lat) * rad * 6371000
+        var dx = (p.lon - gps.lon) * rad * Math.cos(gps.lat * rad) * 6371000
+        var dy = (p.lat - gps.lat) * rad * 6371000
         return Math.sqrt(dx * dx + dy * dy)
     }
-    function distanceText(m) { return Units.distanceText(m) }
-    readonly property var map: mapLoader.item
 
-    Card {
+    // ---- what the controls do ------------------------------------------------------------
+    function openSearch() { query = ""; panel = "search"; typing = false }
+    function closePanel() {
+        if (panel === "place") cancelPlace()
+        panel = ""
+        typing = false
+    }
+    function startTyping() { if (panel === "") panel = "search"; typing = true }
+    onQueryChanged: if (typing) searchDelay.restart()
+    Timer {
+        id: searchDelay
+        interval: 180
+        onTriggered: if (page.query.trim() !== "")
+            maps.search(page.query, page.hasFix ? gps.lon : 0, page.hasFix ? gps.lat : 0)
+    }
+    function searchCategory(key, label) {
+        resultsTitle = label
+        query = ""
+        typing = false
+        maps.searchNearby(key, hasFix ? gps.lon : -122.3321, hasFix ? gps.lat : 47.6062)
+        panel = "results"
+    }
+    function showTyped() {
+        // "Search" on the keyboard: the full list, keyboard away.
+        resultsTitle = query
+        typing = false
+        panel = "results"
+    }
+    function choose(p) {
+        place = p
+        typing = false
+        panel = "place"
+        if (!p.isHome) remember(p)
+        map.call("showPlace(" + p.lon + "," + p.lat + ")")
+        if (hasRouting && routing.available && hasFix) routing.routeTo(p.name, p.lon, p.lat)
+    }
+    // A destination sent from the phone (Settings > Map > Send from phone).
+    function receive(p) {
+        if (mapReady) choose(p)
+        else pending = p
+    }
+    property var pending: null
+    function cancelPlace() {
+        if (hasRouting && !routing.active) routing.stop()
+        place = null
+        if (map) map.call("clearPlace()")
+    }
+    function go() {
+        routing.go()
+        panel = ""
+    }
+    function endRoute() {
+        routing.stop()
+        place = null
+        map.call("clearPlace()")
+    }
+
+    // Zoom keys appear for a while after the map is touched.
+    property bool showZoom: false
+    Timer { id: zoomHide; interval: 10000; onTriggered: page.showZoom = false }
+    // While driving a route, the map comes back to the truck by itself.
+    Timer {
+        id: autoRecenter
+        interval: 10000
+        running: page.navigating && !page.following && page.mapReady
+        onTriggered: page.map.call("recenter()")
+    }
+
+    // ---- the map, in a framed card -------------------------------------------------------
+    // The map, edge to edge; everything else floats over it.
+    Item {
         id: frame
         anchors.fill: parent
-
-        Loader {
-            id: mapLoader
-            anchors { fill: parent; margins: Theme.border }
-            active: page.opened && page.hasMaps && maps.webEngine && maps.ready
-            source: "MapView.qml"
-            onStatusChanged: if (status === Loader.Error) page.problem = "The map engine didn't start"
-        }
+        Rectangle { anchors.fill: parent; color: Theme.bg }
+        Item { id: slot; anchors.fill: parent }
         Connections {
             target: page.map
             ignoreUnknownSignals: true
-            function onReady(ms) { page.mapReady = true; console.log("Map: drawn in " + ms + " ms") }
-            function onFailed(message) { page.problem = message }
-            function onBenchDone(result) { console.log("Map bench: " + JSON.stringify(result)) }
-        }
-
-        // Fill the four corners outside the frame's curve, which the square
-        // map would otherwise poke through.
-        Repeater {
-            model: 4
-            Canvas {
-                readonly property bool atRight: index === 1 || index === 2
-                readonly property bool atBottom: index >= 2
-                width: Theme.radius; height: Theme.radius
-                x: atRight ? frame.width - width : 0
-                y: atBottom ? frame.height - height : 0
-                rotation: [0, 90, 180, 270][index]
-                onPaint: {
-                    var ctx = getContext("2d"), r = width
-                    ctx.reset()
-                    ctx.fillStyle = Theme.bg
-                    ctx.beginPath()
-                    ctx.moveTo(0, 0); ctx.lineTo(r, 0)
-                    ctx.arc(r, r, r, -Math.PI / 2, Math.PI, true)
-                    ctx.closePath()
-                    ctx.fill()
-                }
-                Connections { target: Theme; function onStyleChanged() { requestPaint() } }
+            function onTouched() {
+                if (!page.visible) return
+                page.showZoom = true
+                zoomHide.restart()
+                if (autoRecenter.running) autoRecenter.restart()
             }
-        }
-        Rectangle {
-            anchors.fill: parent
-            radius: Theme.radius
-            color: "transparent"
-            border.width: Theme.border
-            border.color: Theme.line
         }
 
         // Until the map is drawn: what's happening, or what's missing.
@@ -136,14 +170,14 @@ Item {
             visible: !page.mapReady
             anchors.centerIn: parent
             width: parent.width - 80
-            spacing: 14
+            spacing: 18
             Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 name: "map"
                 color: Theme.textDim
-                size: 96
+                size: 120
             }
-            Label {
+            MapLabel {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 font.pixelSize: Theme.fontTitle
@@ -153,7 +187,7 @@ Item {
                       : page.problem !== "" ? "The map didn't load"
                       : "Loading the map"
             }
-            Label {
+            MapLabel {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
@@ -166,364 +200,711 @@ Item {
             }
         }
 
-        // Keys down the right edge.
-        Column {
-            visible: page.mapReady && !page.searching
-            anchors { right: parent.right; top: parent.top; margins: 16 }
-            spacing: 12
-            IconButton {
-                visible: maps.canSearch
-                icon: "search"
-                onClicked: page.openSearch()
-            }
-            IconButton { icon: "add"; onClicked: page.map.call("zoomIn()") }
-            IconButton { icon: "remove"; onClicked: page.map.call("zoomOut()") }
-        }
-        Column {
-            visible: page.mapReady && !page.searching
-            anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
-            spacing: 12
-            // North: only while the map is turned by hand; the needle points north.
-            IconButton {
-                visible: page.map && !page.map.following && Math.abs(page.map.bearing) > 1
-                icon: "navigation"
-                iconRotation: page.map ? -page.map.bearing : 0
-                onClicked: page.map.call("northUp()")
-            }
-            // Follow the truck (lit while following), or back to Seattle
-            // when there's no position yet.
-            IconButton {
-                icon: page.hasFix ? "navigation" : "home"
-                active: page.map && page.map.following
-                onClicked: page.map.call("recenter()")
-            }
-        }
-
-        // Speed, top left, whenever there's a position.
+        // ================================================================================
+        // Browsing: "Where to?"
         Rectangle {
-            visible: page.mapReady && page.hasFix
-            anchors { left: parent.left; top: parent.top; margins: 16 }
-            width: speedRow.implicitWidth + 32
-            height: 76
+            id: whereTo
+            visible: page.mapReady && !page.panelShown && !page.navigating && !page.typing
+            x: 16; y: 16
+            width: 440
+            height: 100
             radius: Theme.radius
             color: Theme.panel
             border.width: Theme.border
             border.color: Theme.line
+            scale: whereTap.pressed ? 0.98 : 1
+            Behavior on scale { NumberAnimation { duration: 80 } }
             Row {
-                id: speedRow
-                anchors.centerIn: parent
-                spacing: 8
-                Label {
-                    id: speedNum
-                    numeric: true
-                    text: Math.round(Units.speed(gps.speed / 0.44704))
-                    font.pixelSize: Theme.fontReadout
-                }
-                Label {
-                    anchors.baseline: speedNum.baseline
-                    text: Units.speedUnit
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
+                anchors { left: parent.left; leftMargin: 26; verticalCenter: parent.verticalCenter }
+                spacing: 18
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "search"; size: 44; color: Theme.accent }
+                MapLabel {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Where to?"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
                 }
             }
+            TapHandler { id: whereTap; onTapped: page.openSearch() }
         }
-
-        // The road you're on, bottom centre, while following.
+        // One tap home, beside it.
         Rectangle {
-            visible: page.mapReady && page.map && page.map.following && page.map.road !== "" && !page.navigating
-            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
-            width: Math.min(roadName.implicitWidth + 40, parent.width - 420)
-            height: 56
+            visible: whereTo.visible && page.home !== null
+            anchors { left: whereTo.right; leftMargin: 14; top: whereTo.top }
+            width: homeRow.implicitWidth + 48
+            height: 100
             radius: Theme.radius
             color: Theme.panel
             border.width: Theme.border
             border.color: Theme.line
-            Label {
-                id: roadName
+            scale: homeTap.pressed ? 0.98 : 1
+            Row {
+                id: homeRow
                 anchors.centerIn: parent
-                width: Math.min(implicitWidth, parent.width - 40)
-                elide: Text.ElideRight
-                text: page.map ? page.map.road : ""
-                font.pixelSize: Theme.fontBody + 2
-                font.weight: Font.DemiBold
-            }
-        }
-
-        // The place picked from search: name, what it is, how far.
-        Rectangle {
-            visible: page.mapReady && page.destination !== null && !page.searching && !page.navigating
-            anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter }
-            width: Math.min(destRow.implicitWidth + 36, parent.width - 400)
-            height: 80
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
-            RowLayout {
-                id: destRow
-                anchors { fill: parent; leftMargin: 18; rightMargin: 12 }
                 spacing: 14
-                Icon { name: "place"; size: 32; color: Theme.accent }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "home"; size: 40; color: Theme.accent }
                 Column {
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: 380
-                    Label {
-                        width: parent.width
-                        elide: Text.ElideRight
-                        text: page.destination ? page.destination.name : ""
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    Label {
-                        width: parent.width
-                        elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                    MapLabel { text: "Home"; font.pixelSize: Theme.fontBody; font.weight: Font.DemiBold }
+                    MapLabel {
+                        visible: text !== ""
+                        text: Units.distanceText(page.distanceTo(page.home))
                         color: Theme.textDim
                         font.pixelSize: Theme.fontSmall
-                        text: {
-                            if (!page.destination) return ""
-                            if (page.hasRouting && routing.error !== "") return routing.error
-                            var d = page.distanceText(page.distanceTo(page.destination))
-                            return d ? d + " away, " + page.destination.label.charAt(0).toLowerCase() + page.destination.label.slice(1)
-                                     : page.destination.label
+                    }
+                }
+            }
+            TapHandler { id: homeTap; onTapped: page.choose(Object.assign({}, page.home, { isHome: true })) }
+        }
+
+        // ================================================================================
+        // The panel down the left: search, results, a picked place.
+        Rectangle {
+            id: sidePanel
+            readonly property bool shown: page.mapReady && page.panelShown
+            x: shown ? 16 : -width - 40
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on x { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+            y: 16
+            width: page.panelWidth
+            height: (page.typing ? keyboard.y - 16 : parent.height) - 32
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: Theme.border
+            border.color: Theme.line
+            MouseArea { anchors.fill: parent }            // the map underneath doesn't react
+
+            // ---- the header: search box (or a title), back and close ----
+            RowLayout {
+                id: header
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 14 }
+                spacing: 12
+
+                PanelKey {
+                    visible: page.panel === "results" || page.panel === "place"
+                    icon: "back"
+                    onHit: {
+                        if (page.panel === "place") {
+                            page.cancelPlace()
+                            page.panel = page.resultsTitle !== "" ? "results" : "search"
+                        } else {
+                            page.resultsTitle = ""
+                            page.panel = "search"
                         }
                     }
                 }
-                // Save this place as Home (lit when it is), or forget it.
-                IconButton {
+                // The search box: tap to type.
+                Rectangle {
+                    visible: page.panel === "search"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 96
+                    radius: Theme.radius
+                    color: Theme.bg
+                    border.width: Theme.border
+                    border.color: page.typing ? Theme.accent : Theme.line
+                    Icon {
+                        id: glass
+                        anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
+                        name: "search"
+                        size: 38
+                        color: Theme.textDim
+                    }
+                    MapLabel {
+                        id: typed
+                        anchors { left: glass.right; leftMargin: 12; verticalCenter: parent.verticalCenter }
+                        width: Math.min(implicitWidth, parent.width - 90)
+                        clip: true
+                        horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
+                        text: page.query
+                        font.pixelSize: Theme.fontTitle
+                    }
+                    MapLabel {
+                        visible: page.query === ""
+                        anchors { left: glass.right; leftMargin: 14; verticalCenter: parent.verticalCenter }
+                        text: "Where to?"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontTitle
+                    }
+                    Rectangle {                          // caret
+                        visible: page.typing
+                        x: typed.x + typed.width + 3
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 3
+                        height: 44
+                        color: Theme.accent
+                        SequentialAnimation on opacity {
+                            running: page.typing
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0; duration: 500; easing.type: Easing.InOutQuad }
+                            NumberAnimation { to: 1; duration: 500; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                    TapHandler { onTapped: page.startTyping() }
+                }
+                MapLabel {
+                    visible: page.panel === "results"
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    text: page.resultsTitle
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Item { visible: page.panel === "place"; Layout.fillWidth: true }
+                // Save a picked place as Home (lit when it is).
+                PanelKey {
+                    visible: page.panel === "place"
                     icon: "home"
-                    size: 52
-                    active: page.samePlace(page.home, page.destination)
-                    onClicked: page.toggleHome(page.destination)
+                    lit: page.samePlace(page.home, page.place)
+                    onHit: page.toggleHome(page.place)
                 }
-                TextButton {
-                    visible: page.hasRouting && routing.available
-                    primary: true
-                    implicitHeight: 52
-                    text: routing.computing ? "Finding route" : "Go"
-                    enabled: !routing.computing && page.hasFix
-                    onClicked: routing.routeTo(page.destination.name, page.destination.lon, page.destination.lat)
+                PanelKey { icon: "close"; onHit: page.closePanel() }
+            }
+
+            // ---- search: Home, recents, categories ----
+            Flickable {
+                visible: page.panel === "search" && !(page.typing && page.query !== "")
+                anchors { left: parent.left; right: parent.right; top: header.bottom; bottom: parent.bottom; margins: 14 }
+                contentHeight: quick.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ColumnLayout {
+                    id: quick
+                    width: parent.width
+                    spacing: 6
+                    ResultRow {
+                        visible: page.home !== null
+                        icon: "home"
+                        iconLit: true
+                        title: "Home"
+                        subtitle: page.home ? page.home.name : ""
+                        trailing: Units.distanceText(page.distanceTo(page.home))
+                        onHit: page.choose(Object.assign({}, page.home, { isHome: true }))
+                    }
+                    Repeater {
+                        model: page.recents.filter(r => !page.samePlace(r, page.home)).slice(0, 3)
+                        ResultRow {
+                            icon: "history"
+                            title: modelData.name
+                            subtitle: modelData.label || ""
+                            trailing: Units.distanceText(page.distanceTo(modelData))
+                            onHit: page.choose(modelData)
+                        }
+                    }
+                    Legend {
+                        Layout.topMargin: 14
+                        Layout.bottomMargin: 4
+                        text: "Nearby"
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 2
+                        rowSpacing: 10
+                        columnSpacing: 10
+                        Repeater {
+                            model: [
+                                { key: "gas", label: "Gas" }, { key: "food", label: "Food" },
+                                { key: "coffee", label: "Coffee" }, { key: "parking", label: "Parking" },
+                                { key: "charging", label: "EV charging" }, { key: "groceries", label: "Groceries" }
+                            ]
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 100
+                                radius: Theme.radius
+                                color: catTap.pressed ? Theme.line : Theme.panelHi
+                                border.width: Theme.border
+                                border.color: Theme.line
+                                scale: catTap.pressed ? 0.97 : 1
+                                Behavior on scale { NumberAnimation { duration: 70 } }
+                                Row {
+                                    anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
+                                    spacing: 14
+                                    Icon { anchors.verticalCenter: parent.verticalCenter; name: modelData.key; size: 40; color: Theme.accent }
+                                    MapLabel {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.label
+                                        font.pixelSize: Theme.fontBody
+                                        font.weight: Font.DemiBold
+                                    }
+                                }
+                                TapHandler { id: catTap; onTapped: page.searchCategory(modelData.key, modelData.label) }
+                            }
+                        }
+                    }
                 }
-                IconButton { icon: "close"; size: 52; onClicked: page.clearDestination() }
+            }
+
+            // ---- results (typed or a category) ----
+            ListView {
+                id: resultList
+                visible: page.panel === "results" || (page.panel === "search" && page.typing && page.query !== "")
+                anchors { left: parent.left; right: parent.right; top: header.bottom; bottom: parent.bottom; margins: 14 }
+                clip: true
+                spacing: 6
+                boundsBehavior: Flickable.StopAtBounds
+                model: maps.results
+                delegate: ResultRow {
+                    required property var modelData
+                    width: resultList.width
+                    icon: page.kindIcon(modelData.kind)
+                    title: modelData.name
+                    subtitle: modelData.label
+                    trailing: Units.distanceText(modelData.distance)
+                    onHit: page.choose(modelData)
+                }
+                MapLabel {
+                    visible: resultList.count === 0
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Nothing by that name in the offline map"
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                }
+            }
+
+            // ---- a picked place: what it is, the route, and Go ----
+            Item {
+                visible: page.panel === "place" && page.place !== null
+                anchors { left: parent.left; right: parent.right; top: header.bottom; bottom: parent.bottom; margins: 20; topMargin: 6 }
+
+                Column {
+                    anchors { left: parent.left; right: parent.right; top: parent.top }
+                    spacing: 8
+                    MapLabel {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        text: page.place ? page.place.name : ""
+                        font.pixelSize: Theme.fontTitle + 4
+                        font.weight: Font.DemiBold
+                    }
+                    MapLabel {
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: page.place ? page.place.label || "" : ""
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                    Item { width: 1; height: 18 }
+                    // The route, worked out as soon as the place was picked.
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing
+                        numeric: true
+                        text: page.hasRouting ? Units.durationText(routing.remainingTime) : ""
+                        font.pixelSize: Theme.fontHero
+                    }
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: page.hasRouting ? Units.distanceText(routing.remainingDistance) + ", arrive "
+                                                + Units.arrivalText(routing.remainingTime) : ""
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                    MapLabel {
+                        visible: !page.hasRouting || !routing.previewing
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                        text: !page.hasRouting || !routing.available
+                              ? Units.distanceText(page.distanceTo(page.place)) + " away. Directions need deploy/maps/install-routing.sh on the Pi."
+                              : routing.computing ? "Finding a route"
+                              : routing.error !== "" ? routing.error
+                              : !page.hasFix ? "Waiting for the truck's position"
+                              : ""
+                    }
+                }
+
+                // Go, at the bottom where a thumb finds it.
+                Rectangle {
+                    visible: page.hasRouting && routing.previewing
+                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                    height: 116
+                    radius: Theme.radius
+                    color: goTap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent
+                    scale: goTap.pressed ? 0.98 : 1
+                    Behavior on scale { NumberAnimation { duration: 70 } }
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 16
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "navigation"; size: 48; color: Theme.bg }
+                        MapLabel {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Go"
+                            color: Theme.bg
+                            font.pixelSize: Theme.fontHero
+                            font.weight: Font.Bold
+                        }
+                    }
+                    TapHandler { id: goTap; onTapped: page.go() }
+                }
             }
         }
 
-        // ---- navigating: the next turn on top, the trip along the bottom ------
+        // ================================================================================
+        // Driving a route: the next turn, top-left.
         Rectangle {
-            visible: page.mapReady && page.navigating && !page.searching
-            anchors { left: parent.left; leftMargin: 172; right: parent.right; rightMargin: 108; top: parent.top; topMargin: 16 }
-            height: 112
+            id: turnCard
+            readonly property bool shown: page.mapReady && page.navigating
+            x: shown ? 16 : -width - 40
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on x { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+            y: 16
+            width: page.panelWidth
+            height: turnContent.implicitHeight + 40
             radius: Theme.radius
             color: Theme.panel
             border.width: Theme.border
             border.color: Theme.accent
+
+            // A new step fades in, so the change is noticed but not jarring.
+            property string step: page.hasRouting ? routing.instruction : ""
+            onStepChanged: stepFade.restart()
+            NumberAnimation { id: stepFade; target: turnContent; property: "opacity"; from: 0.2; to: 1; duration: 350; easing.type: Easing.OutQuad }
+
             RowLayout {
-                anchors { fill: parent; leftMargin: 18; rightMargin: 20 }
+                id: turnContent
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
                 spacing: 18
                 Icon {
-                    name: routing.maneuverIcon || "straight"
-                    size: 64
+                    Layout.alignment: Qt.AlignTop
+                    name: page.hasRouting && routing.computing ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
+                    size: 112
                     color: Theme.accent
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 0
-                    Label {
-                        visible: !routing.arrived
+                    spacing: 2
+                    MapLabel {
+                        visible: page.hasRouting && !routing.arrived && !routing.computing
                         numeric: true
-                        text: routing.computing ? "" : page.distanceText(routing.distanceToTurn)
-                        font.pixelSize: Theme.fontHero
+                        text: page.hasRouting ? Units.distanceText(routing.distanceToTurn) : ""
+                        font.pixelSize: Theme.fontHuge
+                        lineHeight: 0.9
                     }
-                    Label {
+                    MapLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
-                        maximumLineCount: 2
+                        maximumLineCount: 3
                         elide: Text.ElideRight
-                        text: routing.computing ? "Finding a new route" : routing.instruction
-                        font.pixelSize: Theme.fontBody
+                        text: !page.hasRouting ? "" : routing.computing ? "Finding a new route" : routing.instruction
+                        font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }
                 }
             }
+            TapHandler { onTapped: page.map.call("recenter()") }
         }
+
+        // ... and arrival, bottom-left.
         Rectangle {
-            visible: page.mapReady && page.navigating && !page.searching
-            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
-            width: tripRow.implicitWidth + 36
-            height: 72
+            readonly property bool shown: page.mapReady && page.navigating
+            x: shown ? 16 : -width - 40
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on x { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: 200 } }
+            anchors { bottom: parent.bottom; bottomMargin: 16 }
+            width: page.panelWidth
+            height: 132
             radius: Theme.radius
             color: Theme.panel
             border.width: Theme.border
             border.color: Theme.line
             RowLayout {
-                id: tripRow
-                anchors { fill: parent; leftMargin: 20; rightMargin: 10 }
-                spacing: 18
+                anchors { fill: parent; leftMargin: 22; rightMargin: 16 }
+                spacing: 14
                 Column {
-                    Label {
-                        text: "Arrive " + page.arrivalText(routing.remainingTime)
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
+                    Layout.fillWidth: true
+                    MapLabel {
+                        text: page.hasRouting ? Units.arrivalText(routing.remainingTime) : ""
+                        numeric: true
+                        font.pixelSize: Theme.fontHero
                     }
-                    Label {
-                        text: page.durationText(routing.remainingTime) + ", " + page.distanceText(routing.remainingDistance)
+                    MapLabel {
+                        text: page.hasRouting ? Units.durationText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
                         color: Theme.textDim
-                        font.pixelSize: Theme.fontSmall
+                        font.pixelSize: Theme.fontBody
                     }
                 }
-                TextButton { text: "End"; danger: true; implicitHeight: 52; onClicked: page.endRoute() }
+                TextButton {
+                    text: "End"
+                    danger: true
+                    implicitWidth: 150
+                    implicitHeight: 100
+                    onClicked: page.endRoute()
+                }
             }
         }
 
-        // OpenStreetMap's licence asks for this to be visible on the map.
+        // ================================================================================
+        // The speed limit and the truck's speed, on the right.
+        Column {
+            visible: page.mapReady && page.hasFix && !page.typing
+            anchors { right: parent.right; top: parent.top; margins: 16 }
+            spacing: 12
+            readonly property int limitKph: typeof road !== "undefined" ? road.speedLimit : 0
+            // Shown in the local style: US sign in mph, round sign in km/h.
+            readonly property int limit: Units.metric ? limitKph : Math.round(limitKph / 1.609344 / 5) * 5
+            readonly property real speedNow: Units.speed(gps.speed / 0.44704)
+            readonly property bool over: limit > 0 && speedNow > limit + (Units.metric ? 8 : 5)
+
+            Rectangle {                                   // US: SPEED LIMIT
+                visible: parent.limit > 0 && !Units.metric
+                width: 112; height: 140
+                radius: 12
+                color: "white"
+                border.width: 5
+                border.color: "black"
+                Column {
+                    anchors.centerIn: parent
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "SPEED"; font.pixelSize: 20; font.bold: true; color: "black" }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "LIMIT"; font.pixelSize: 20; font.bold: true; color: "black" }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: parent.parent.parent.limit; font.pixelSize: 60; font.bold: true; color: "black" }
+                }
+            }
+            Rectangle {                                   // metric: red ring
+                visible: parent.limit > 0 && Units.metric
+                width: 124; height: 124
+                radius: 62
+                color: "white"
+                border.width: 13
+                border.color: "#d92b2b"
+                Text { anchors.centerIn: parent; text: parent.parent.limit; font.pixelSize: 52; font.bold: true; color: "black" }
+            }
+            Rectangle {                                   // speed now
+                width: 112
+                height: 108
+                radius: Theme.radius
+                color: parent.over ? Theme.warn : Theme.panel
+                border.width: Theme.border
+                border.color: parent.over ? Theme.warn : Theme.line
+                Column {
+                    anchors.centerIn: parent
+                    MapLabel {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        numeric: true
+                        text: Math.round(parent.parent.parent.speedNow)
+                        color: parent.parent.parent.over ? Theme.bg : Theme.text
+                        font.pixelSize: Theme.fontReadout
+                    }
+                    MapLabel {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: Units.speedUnit
+                        color: parent.parent.parent.over ? Theme.bg : Theme.textDim
+                        font.pixelSize: Theme.fontSmall - 4
+                    }
+                }
+            }
+        }
+
+        // ================================================================================
+        // Map keys, bottom-right: one strip.
         Rectangle {
-            visible: page.mapReady
-            anchors { left: parent.left; bottom: parent.bottom; margins: 16 }
-            width: credit.implicitWidth + 24
-            height: 34
+            id: keys
+            visible: page.mapReady && !page.typing
+            anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
+            width: 104
+            height: keyColumn.height
             radius: Theme.radius
             color: Theme.panel
             border.width: Theme.border
             border.color: Theme.line
-            Label {
-                id: credit
-                anchors.centerIn: parent
-                text: "© OpenStreetMap contributors"
-                color: Theme.textDim
-                font.pixelSize: Theme.fontSmall - 2
+            clip: true
+            Column {
+                id: keyColumn
+                width: parent.width
+                PillKey { visible: page.showZoom; icon: "add"; onHit: { page.map.call("zoomIn()"); zoomHide.restart() } }
+                PillKey { visible: page.showZoom; icon: "remove"; onHit: { page.map.call("zoomOut()"); zoomHide.restart() } }
+                PillKey { visible: page.navigating; icon: "overview"; onHit: page.map.call("overview()") }
+                PillKey {
+                    visible: page.navigating && typeof voice !== "undefined" && voice.available
+                    icon: typeof voice !== "undefined" && voice.enabled ? "volume" : "volume_off"
+                    lit: typeof voice !== "undefined" && voice.enabled
+                    onHit: voice.setEnabled(!voice.enabled)
+                }
+                PillKey {
+                    icon: "navigation"
+                    lit: page.following
+                    divider: false
+                    onHit: page.map.call("recenter()")
+                }
             }
         }
 
-        // ---- search: what you type, the matches, the keyboard ---------------
+        // Re-center, when the map has been moved away from the truck.
         Rectangle {
-            visible: page.searching
-            anchors.fill: parent
+            readonly property bool shown: page.mapReady && page.hasFix && !page.following && !page.typing
+                                          && !(page.panelShown && page.panel === "place")
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 220 } }
+            anchors { horizontalCenter: parent.horizontalCenter; horizontalCenterOffset: page.panelShown || page.navigating ? (page.panelWidth + 16) / 2 : 0
+                      bottom: parent.bottom; bottomMargin: 16 }
+            width: recenterRow.implicitWidth + 56
+            height: 100
             radius: Theme.radius
-            color: Theme.bg
+            color: recenterTap.pressed ? Theme.panelHi : Theme.panel
             border.width: Theme.border
-            border.color: Theme.line
-            MouseArea { anchors.fill: parent }          // nothing underneath reacts
-
-            ColumnLayout {
-                anchors { fill: parent; margins: 16 }
-                spacing: 12
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 12
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 64
-                        radius: Theme.radius
-                        color: Theme.panel
-                        border.width: Theme.border
-                        border.color: Theme.accent
-                        Icon {
-                            id: glass
-                            anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
-                            name: "search"
-                            size: 28
-                            color: Theme.textDim
-                        }
-                        Label {
-                            id: typed
-                            anchors { left: glass.right; leftMargin: 12; verticalCenter: parent.verticalCenter }
-                            width: Math.min(implicitWidth, parent.width - 90)
-                            clip: true
-                            horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
-                            text: page.query
-                            font.pixelSize: Theme.fontTitle
-                        }
-                        Label {
-                            visible: page.query === ""
-                            anchors { left: glass.right; leftMargin: 14; verticalCenter: parent.verticalCenter }
-                            text: "Places, streets and businesses"
-                            color: Theme.textDim
-                            font.pixelSize: Theme.fontBody
-                        }
-                        Rectangle {                  // caret
-                            x: typed.x + typed.width + 3
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 2
-                            height: 34
-                            color: Theme.accent
-                            SequentialAnimation on opacity {
-                                running: page.searching
-                                loops: Animation.Infinite
-                                NumberAnimation { to: 0; duration: 500; easing.type: Easing.InOutQuad }
-                                NumberAnimation { to: 1; duration: 500; easing.type: Easing.InOutQuad }
-                            }
-                        }
-                    }
-                    TextButton { text: "Cancel"; implicitHeight: 64; onClicked: page.searching = false }
-                }
-
-                ListView {
-                    id: results
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    model: page.query === "" ? page.saved : maps.results
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: results.width
-                        height: 66
-                        radius: Theme.radius
-                        color: hit.pressed ? Theme.panelHi : "transparent"
-                        Icon {
-                            id: pinIcon
-                            anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
-                            name: modelData.isHome ? "home" : "place"
-                            size: 26
-                            color: modelData.isHome ? Theme.accent : Theme.textDim
-                        }
-                        Column {
-                            anchors { left: pinIcon.right; leftMargin: 14; right: dist.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
-                            Label {
-                                width: parent.width
-                                elide: Text.ElideRight
-                                text: modelData.name
-                                font.pixelSize: Theme.fontBody
-                            }
-                            Label {
-                                width: parent.width
-                                elide: Text.ElideRight
-                                text: modelData.label
-                                color: Theme.textDim
-                                font.pixelSize: Theme.fontSmall
-                            }
-                        }
-                        Label {
-                            id: dist
-                            anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter }
-                            text: page.distanceText(modelData.distance !== undefined ? modelData.distance : page.distanceTo(modelData))
-                            color: Theme.textDim
-                            font.pixelSize: Theme.fontBody
-                        }
-                        TapHandler { id: hit; onTapped: page.choose(modelData) }
-                    }
-                    Label {
-                        visible: results.count === 0
-                        anchors { left: parent.left; top: parent.top; leftMargin: 12; topMargin: 12 }
-                        text: page.query === "" ? "Works with no signal: everything in the map can be searched."
-                                                : "Nothing in the map by that name"
-                        width: parent.width - 24
-                        wrapMode: Text.WordWrap
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontBody
-                    }
-                }
-
-                Keyboard {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 300
-                    doneLabel: "Go"
-                    doneEnabled: maps.results.length > 0 && page.query !== ""
-                    onTyped: (ch) => page.query += ch
-                    onBackspace: page.query = page.query.slice(0, -1)
-                    onDone: page.choose(maps.results[0])
+            border.color: Theme.accent
+            Row {
+                id: recenterRow
+                anchors.centerIn: parent
+                spacing: 14
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "navigation"; size: 40; color: Theme.accent }
+                MapLabel {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Re-center"
+                    font.pixelSize: Theme.fontBody
+                    font.weight: Font.DemiBold
                 }
             }
+            TapHandler { id: recenterTap; onTapped: page.map.call("recenter()") }
         }
+
+        // The road you're on, bottom centre, while just following (flat: it's
+        // information, not a key).
+        Rectangle {
+            visible: page.mapReady && page.following && !page.navigating && page.map.road !== "" && !page.typing
+                     && !page.panelShown
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 20 }
+            width: Math.min(roadName.implicitWidth + 48, parent.width - 520)
+            height: 72
+            radius: height / 2
+            color: Qt.rgba(Theme.bg.r, Theme.bg.g, Theme.bg.b, 0.82)
+            MapLabel {
+                id: roadName
+                anchors.centerIn: parent
+                width: Math.min(implicitWidth, parent.width - 48)
+                elide: Text.ElideRight
+                text: page.map ? page.map.road : ""
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+        }
+
+        // OpenStreetMap's licence asks for this to be visible on the map.
+        MapLabel {
+            visible: page.mapReady && !page.typing
+            anchors { right: keys.left; rightMargin: 12; bottom: parent.bottom; bottomMargin: 8 }
+            text: "© OpenStreetMap"
+            color: Theme.textDim
+            font.pixelSize: 18
+        }
+
+        // ================================================================================
+        // Typing: the keyboard across the bottom.
+        Keyboard {
+            id: keyboard
+            visible: page.typing
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 16 }
+            height: 340
+            doneLabel: "Search"
+            doneEnabled: page.query.trim() !== ""
+            onTyped: (ch) => page.query += ch
+            onBackspace: page.query = page.query.slice(0, -1)
+            onDone: page.showTyped()
+        }
+    }
+
+    // ---- small parts -------------------------------------------------------------------
+    // Text on the map: Overpass, like the map's own labels.
+    component MapLabel: Label { font.family: Theme.mapFont; font.italic: false }
+    function kindIcon(kind) {
+        return ({ fuel: "gas", cafe: "coffee", restaurant: "food", fast_food: "food", parking: "parking",
+                  charging_station: "charging", supermarket: "groceries", convenience: "groceries" })[kind] || "place"
+    }
+
+    // A row in the panel's lists: icon, name, what it is, how far.
+    component ResultRow: Rectangle {
+        id: row
+        property string icon: "place"
+        property bool iconLit: false
+        property string title
+        property string subtitle
+        property string trailing
+        signal hit()
+        Layout.fillWidth: true
+        implicitHeight: 100
+        radius: Theme.radius
+        color: rowTap.pressed ? Theme.panelHi : "transparent"
+        Icon {
+            id: rowIcon
+            anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
+            name: row.icon
+            size: 38
+            color: row.iconLit ? Theme.accent : Theme.textDim
+        }
+        Column {
+            anchors { left: rowIcon.right; leftMargin: 16; right: rowTrail.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
+            MapLabel {
+                width: parent.width
+                elide: Text.ElideRight
+                text: row.title
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+            MapLabel {
+                visible: text !== ""
+                width: parent.width
+                elide: Text.ElideRight
+                text: row.subtitle
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
+            }
+        }
+        MapLabel {
+            id: rowTrail
+            anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+            text: row.trailing
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+        }
+        TapHandler { id: rowTap; onTapped: row.hit() }
+    }
+
+    // A key in the panel header.
+    component PanelKey: Rectangle {
+        id: pk
+        property string icon
+        property bool lit: false
+        signal hit()
+        Layout.preferredWidth: 96
+        Layout.preferredHeight: 96
+        radius: Theme.radius
+        color: pkTap.pressed ? Theme.line : Theme.panelHi
+        border.width: Theme.border
+        border.color: pk.lit ? Theme.accent : Theme.line
+        Icon { anchors.centerIn: parent; name: pk.icon; size: 44; color: pk.lit ? Theme.accent : Theme.text }
+        TapHandler { id: pkTap; onTapped: pk.hit() }
+    }
+
+    // A key in the map's strip.
+    component PillKey: Item {
+        id: key
+        property string icon
+        property bool lit: false
+        property bool divider: true
+        signal hit()
+        width: 104
+        height: visible ? 100 : 0
+        Rectangle {
+            anchors.fill: parent
+            color: keyTap.pressed ? Theme.panelHi : "transparent"
+        }
+        Icon { anchors.centerIn: parent; name: key.icon; size: 46; color: key.lit ? Theme.accent : Theme.text }
+        Rectangle {
+            visible: key.divider
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 14; bottomMargin: 0 }
+            height: 2
+            color: Theme.line
+        }
+        TapHandler { id: keyTap; onTapped: key.hit() }
     }
 }

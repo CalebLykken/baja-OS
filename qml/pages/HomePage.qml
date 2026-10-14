@@ -2,10 +2,14 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// At-a-glance screen: the music card, the maps tile, and the key readouts.
+// At-a-glance screen: the music card, a small live map, and the key
+// readouts, like CarPlay's split screen.
 Item {
     id: page
     signal navigate(int index)
+
+    property bool mapReady: false
+    readonly property alias mapSlot: slot   // where Main.qml puts the map while Home shows
 
     ColumnLayout {
         anchors.fill: parent
@@ -23,54 +27,28 @@ Item {
                 onOpenMusic: page.navigate(1)
             }
 
-            Card {
+            // The map, small: the same map as the Maps page (Main.qml moves
+            // it here), following the truck. Tap it for the full map.
+            Rectangle {
+                id: mapTile
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 2
-                tappable: true
-                onTapped: page.navigate(2)
+                radius: Theme.radius
+                color: Theme.panel
 
-                // Navigating: the next turn, big, and when you'll get there.
-                Column {
-                    visible: typeof routing !== "undefined" && routing.active
-                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 24 }
-                    spacing: 10
-                    Icon {
-                        name: routing.maneuverIcon || "straight"
-                        size: 72
-                        color: Theme.accent
-                    }
-                    Label {
-                        visible: !routing.arrived
-                        numeric: true
-                        text: Units.distanceText(routing.distanceToTurn)
-                        font.pixelSize: Theme.fontHero
-                    }
-                    Label {
-                        width: parent.width
-                        wrapMode: Text.WordWrap
-                        maximumLineCount: 3
-                        elide: Text.ElideRight
-                        text: routing.instruction
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    Label {
-                        text: "Arrive " + Units.arrivalText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance)
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontSmall
-                    }
-                }
+                Item { id: slot; anchors { fill: parent; margins: Theme.border } }
 
+                // Until the map is drawn (or without one): what it is.
                 Column {
-                    visible: typeof routing === "undefined" || !routing.active
+                    visible: !page.mapReady
                     anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 20 }
                     spacing: 10
                     Icon {
                         anchors.horizontalCenter: parent.horizontalCenter
                         name: "map"
                         color: Theme.textDim
-                        size: 64
+                        size: 72
                     }
                     Label {
                         width: parent.width
@@ -89,6 +67,102 @@ Item {
                         font.pixelSize: Theme.fontBody
                     }
                 }
+
+                // Navigating: the next turn over the top of the map.
+                Rectangle {
+                    visible: page.mapReady && typeof routing !== "undefined" && routing.active
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                    height: miniTurn.implicitHeight + 28
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.width: Theme.border
+                    border.color: Theme.accent
+                    RowLayout {
+                        id: miniTurn
+                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
+                        spacing: 12
+                        Icon {
+                            Layout.alignment: Qt.AlignTop
+                            name: typeof routing !== "undefined" ? routing.maneuverIcon || "straight" : "straight"
+                            size: 64
+                            color: Theme.accent
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+                            Label {
+                                visible: typeof routing !== "undefined" && !routing.arrived
+                                numeric: true
+                                text: typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
+                                font.pixelSize: Theme.fontReadout
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                text: typeof routing !== "undefined" ? routing.instruction : ""
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: Font.DemiBold
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    visible: page.mapReady && typeof routing !== "undefined" && routing.active
+                    anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
+                    width: arriveText.implicitWidth + 32
+                    height: 64
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.width: Theme.border
+                    border.color: Theme.line
+                    Label {
+                        id: arriveText
+                        anchors.centerIn: parent
+                        text: typeof routing !== "undefined"
+                              ? "Arrive " + Units.arrivalText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
+                    }
+                }
+
+                // Round off the map's square corners, then the frame.
+                Repeater {
+                    model: 4
+                    Canvas {
+                        readonly property bool atRight: index === 1 || index === 2
+                        readonly property bool atBottom: index >= 2
+                        width: Theme.radius; height: Theme.radius
+                        x: atRight ? mapTile.width - width : 0
+                        y: atBottom ? mapTile.height - height : 0
+                        rotation: [0, 90, 180, 270][index]
+                        onPaint: {
+                            var ctx = getContext("2d"), r = width
+                            ctx.reset()
+                            ctx.fillStyle = Theme.bg
+                            ctx.beginPath()
+                            ctx.moveTo(0, 0); ctx.lineTo(r, 0)
+                            ctx.arc(r, r, r, -Math.PI / 2, Math.PI, true)
+                            ctx.closePath()
+                            ctx.fill()
+                        }
+                        Connections {
+                            target: Theme
+                            function onStyleChanged() { requestPaint() }
+                            function onDarkChanged() { requestPaint() }
+                        }
+                    }
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radius
+                    color: "transparent"
+                    border.width: Theme.border
+                    border.color: Theme.line
+                }
+                // The small map isn't for dragging: any tap opens Maps.
+                MouseArea { anchors.fill: parent; onClicked: page.navigate(2) }
             }
         }
 

@@ -129,9 +129,16 @@ the Pi (no sudo; each installs into `~/.local/share/baja-os`):
 ./deploy/audio/install-voice.sh      # Piper + the public-domain "kristin" voice, about 100 MB
 ```
 
-Then pick a place, tap Go, and the map shows the route with the next turn,
-arrival time and spoken directions; the next turn also appears in the status
-bar on every other page.
+Search takes places, businesses, street addresses ("400 Broad St") and one-tap
+categories (gas, food, coffee, parking, EV charging, groceries). Pick a place
+and the route is worked out straight away; tap Go for turn-by-turn directions
+(spoken directions are off until turned on). The map fills the screen beside
+the rail, is light by day and dark at night, draws traffic lights and stop
+signs, shows the speed limit, and also runs small on the Home screen.
+
+To send a place from the iPhone, scan the QR code in Settings > Map: it opens a
+page on the Pi with a paste box and the steps for a "Send to Baja" Share-sheet
+Shortcut.
 
 To work on the map in a desktop browser:
 

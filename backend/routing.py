@@ -3,6 +3,9 @@
 moves: the next turn and how far it is, distance and time left, arrival,
 and a new route when the truck leaves this one.
 
+Picking a place previews the route (line, distance, time, arrival) and
+guidance starts with go(), like Start in other car maps.
+
 Valhalla runs as its own local service on 127.0.0.1:8002, so a crash
 there can't take the dashboard down; requests go over plain HTTP on a
 worker thread.
@@ -141,6 +144,7 @@ class Router(QObject):
         self._gps = gps
         self._settings = settings
         self._spoken = set()          # (maneuver index, "alert"/"turn") already said
+        self._started = False         # guidance running (False: just a preview)
         self._available = False
         self._route = None
         self._dest = None             # (name, lon, lat)
@@ -224,14 +228,28 @@ class Router(QObject):
         self._off_count = 0
         self._spoken = set()
         self._route.locate(self._gps.lon, self._gps.lat)
+        if reroute and self._started:
+            self._begin("Rerouting. ")
+        self.changed.emit()
+        self.progressChanged.emit()
+
+    def _begin(self, prefix=""):
+        """Guidance starts (or restarts on a new route): say the first step."""
         first = self._route.maneuvers[0]
-        self._say(("Rerouting. " if reroute else "")
-                        + (first.get("verbal_pre_transition_instruction") or first.get("instruction") or ""))
+        self._say(prefix + (first.get("verbal_pre_transition_instruction") or first.get("instruction") or ""))
         self._spoken.add((0, "turn"))
         if self._gps.source == "demo":
             self._gps.followPath(self._route.shape)     # the simulated truck drives it
-        self.changed.emit()
-        self.progressChanged.emit()
+
+    @pyqtSlot()
+    def go(self):
+        """Start guidance on the previewed route."""
+        if self._route and not self._started:
+            self._started = True
+            self._route.locate(self._gps.lon, self._gps.lat)
+            self._begin()
+            self.changed.emit()
+            self.progressChanged.emit()
 
     def _say(self, text):
         if text:
@@ -262,12 +280,18 @@ class Router(QObject):
 
     @pyqtSlot(str, float, float)
     def routeTo(self, name, lon, lat):
+        """Work out a route to preview (a new place replaces any route)."""
+        if self._started:
+            self._gps.clearPath()
+        self._started = False
+        self._route = None
         self._dest = (name, lon, lat)
         self._request(name, lon, lat)
 
     @pyqtSlot()
     def stop(self):
         self._gps.clearPath()
+        self._started = False
         self._route = None
         self._dest = None
         self._error = ""
@@ -278,7 +302,7 @@ class Router(QObject):
     # ---- following it --------------------------------------------------------------
     def _on_fix(self):
         r = self._route
-        if not r or not self._gps.hasFix:
+        if not r or not self._started or not self._gps.hasFix:
             return
         r.locate(self._gps.lon, self._gps.lat)
         if r.remaining < ARRIVED_M and not self._arrived:
@@ -305,7 +329,13 @@ class Router(QObject):
 
     @pyqtProperty(bool, notify=changed)
     def active(self):
-        return self._route is not None
+        """Guidance is running."""
+        return self._route is not None and self._started
+
+    @pyqtProperty(bool, notify=changed)
+    def previewing(self):
+        """A route is computed and shown, waiting for Go."""
+        return self._route is not None and not self._started
 
     @pyqtProperty(bool, notify=changed)
     def computing(self):

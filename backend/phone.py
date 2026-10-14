@@ -280,9 +280,9 @@ PAGE = """<!doctype html>
 <li>Add <b>Get Dictionary Value</b> for key <b>message</b>, then <b>Show Notification</b>.</li>
 <li>The first time, tap <b>Always Allow</b> (and <b>Allow</b> if it asks about the local network).</li>
 </ol>
-<p>Address:</p><code id="api">%(api)s</code>
+<p>Address:</p><code id="api">{{api}}</code>
 <button class="quiet" data-copy="api">Copy address</button>
-<p>Token:</p><code id="token">%(token)s</code>
+<p>Token:</p><code id="token">{{token}}</code>
 <button class="quiet" data-copy="token">Copy token</button>
 <script>
 document.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
@@ -366,8 +366,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._authorised():
             return self._send(403, "Scan the code in the dashboard's Settings > Map to open this page.", "text/plain")
         host = self.headers.get("Host", f"{svc.address}:{PORT}")
-        page = PAGE % {"api": html.escape(f"http://{host}/api/v1/destination"),
-                       "token": html.escape(svc.token)}
+        page = (PAGE.replace("{{api}}", html.escape(f"http://{host}/api/v1/destination"))
+                    .replace("{{token}}", html.escape(svc.token)))
         self._send(200, page, "text/html; charset=utf-8")
 
     def do_POST(self):

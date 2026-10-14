@@ -1,6 +1,7 @@
 #!/bin/sh
 # One-time Pi setup for Baja OS. Safe to re-run.
 #
+#   - Installs the packages Baja OS needs (Qt, audio, boot screen)
 #   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
@@ -15,6 +16,16 @@ APP=$(dirname "$HERE")
 USER_NAME=${SUDO_USER:?run this as your normal user, it will ask for sudo}
 USER_ID=$(id -u "$USER_NAME")
 FW=/boot/firmware
+
+echo "== Packages"
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    python3-pyqt6 python3-pyqt6.qtqml python3-pyqt6.qtquick python3-pyqt6.qtmultimedia \
+    python3-mutagen qml6-module-qtquick qml6-module-qtquick-layouts \
+    qml6-module-qtquick-window qml6-module-qtqml-workerscript \
+    pipewire pipewire-pulse wireplumber plymouth
+# The user's PipeWire session (audio) runs at boot without anyone logging in.
+loginctl enable-linger "$USER_NAME"
 
 echo "== Wi-Fi"
 # NetworkManager gives up after 4 failed tries by default; a brownout while

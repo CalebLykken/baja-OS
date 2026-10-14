@@ -1,7 +1,9 @@
 #!/bin/sh
 # One-time Pi setup for Baja OS. Safe to re-run.
 #
-#   - Installs the packages Baja OS needs (Qt, audio, boot screen)
+#   - Installs the packages Baja OS needs (Qt, audio, 3D, Bluetooth, boot screen)
+#   - Bluetooth: shows up to phones as "Baja OS" (car audio), pairing only
+#     while you press Pair phone in Settings, phone audio through PipeWire
 #   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
@@ -24,9 +26,37 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     python3-mutagen qml6-module-qtquick qml6-module-qtquick-layouts \
     qml6-module-qtquick-window qml6-module-qtqml-workerscript \
     pipewire pipewire-pulse wireplumber plymouth \
-    fonts-urw-base35 fonts-liberation fonts-dejavu-core   # the styles' typefaces
+    fonts-urw-base35 fonts-liberation fonts-dejavu-core \
+    qml6-module-qtquick3d qml6-module-qtquick3d-assetutils \
+    bluez bluez-tools libspa-0.2-bluetooth
 # The user's PipeWire session (audio) runs at boot without anyone logging in.
 loginctl enable-linger "$USER_NAME"
+
+echo "== Bluetooth"
+usermod -aG bluetooth "$USER_NAME"          # control BlueZ over D-Bus
+CONF=/etc/bluetooth/main.conf
+[ -f "$CONF.baja-backup" ] || cp "$CONF" "$CONF.baja-backup"
+# Car audio device class; stay hidden and unpairable unless Pair phone is on.
+setconf() {  # setconf KEY VALUE: set an existing or commented-out key
+    if grep -qE "^#? *$1 *=" "$CONF"; then
+        sed -i -E "s|^#? *$1 *=.*|$1 = $2|" "$CONF"
+    else
+        printf '%s = %s\n' "$1" "$2" >> "$CONF"
+    fi
+}
+setconf Class 0x000420
+setconf DiscoverableTimeout 120
+setconf PairableTimeout 120
+setconf AutoEnable true
+systemctl restart bluetooth
+bluetoothctl system-alias "Baja OS" >/dev/null 2>&1 || true
+cp "$HERE/bluetooth/baja-bt-agent.service" /etc/systemd/system/
+systemctl enable --now baja-bt-agent.service
+WP="/home/$USER_NAME/.config/wireplumber/wireplumber.conf.d"
+install -d -o "$USER_NAME" -g "$USER_NAME" "/home/$USER_NAME/.config/wireplumber" "$WP"
+install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$HERE/bluetooth/80-baja-bluetooth.conf" "$WP/"
+sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" \
+    systemctl --user restart wireplumber 2>/dev/null || true
 
 echo "== Wi-Fi"
 # NetworkManager gives up after 4 failed tries by default; a brownout while

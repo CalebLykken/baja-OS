@@ -7,3 +7,4 @@ venv/
 !docs/*.png
 !qml/assets/*.png
 !deploy/plymouth/*.png
+!qml/assets/*.glb

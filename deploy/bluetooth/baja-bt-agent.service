@@ -1,0 +1,15 @@
+# Accepts phone pairing without a PIN on the Pi (the phone shows a pairing
+# prompt instead). BlueZ only lets phones pair while the adapter is
+# pairable, which Baja OS turns on for two minutes from Settings ->
+# Bluetooth -> Pair phone. Installed by deploy/setup-pi.sh.
+[Unit]
+Description=Baja OS Bluetooth pairing agent
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+ExecStart=/usr/bin/bt-agent --capability=NoInputNoOutput
+Restart=on-failure
+
+[Install]
+WantedBy=bluetooth.target

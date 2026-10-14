@@ -1,8 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Now-playing card shared by the Home and Music pages: art placeholder,
-// title/artist, progress, and transport controls.
+// Now-playing card shared by the Home and Music pages: art (or a placeholder),
+// title/artist, progress, and transport controls. Shows a Bluetooth badge
+// when the music is coming from the phone.
 Card {
     id: np
     property bool compact: false
@@ -14,6 +15,23 @@ Card {
     }
 
     heading: "Now playing"
+
+    readonly property bool fromPhone: media.source === "phone"
+    readonly property color tint: media.artColor !== "" ? media.artColor : Theme.accent
+
+    Row {
+        visible: np.fromPhone
+        anchors { right: parent.right; top: parent.top; rightMargin: 20; topMargin: 12 }
+        spacing: 6
+        Icon { name: "bluetooth"; size: 20; color: Theme.accent; anchors.verticalCenter: parent.verticalCenter }
+        Label {
+            anchors.verticalCenter: parent.verticalCenter
+            text: media.sourceName || "Phone"
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall - 2
+            font.letterSpacing: 1
+        }
+    }
 
     RowLayout {
         anchors { fill: parent; margins: 24; topMargin: 52 }
@@ -30,7 +48,7 @@ Card {
             Icon {
                 visible: art.status !== Image.Ready
                 anchors.centerIn: parent
-                name: "music"
+                name: np.fromPhone ? "phone" : "music"
                 color: Theme.accent
                 size: parent.width * 0.45
             }
@@ -72,6 +90,7 @@ Card {
                 Layout.fillWidth: true
                 Layout.topMargin: 12
                 value: media.duration > 0 ? media.position / media.duration : 0
+                fill: np.tint
             }
             RowLayout {
                 Layout.fillWidth: true

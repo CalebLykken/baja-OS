@@ -2,10 +2,29 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// Now playing on the left; tappable queue and volume on the right.
+// Now playing on the left; tappable queue and volume on the right, over a
+// blurred, darkened copy of the album art.
 Item {
     id: page
     signal navigate(int index)
+
+    readonly property bool hasBackdrop: media.artBlur !== ""
+
+    // The art is pre-shrunk to ~24 px in Python; scaling it back up smoothly
+    // reads as a heavy blur and costs the GPU nothing.
+    Image {
+        anchors.fill: parent
+        source: media.artBlur
+        fillMode: Image.PreserveAspectCrop
+        smooth: true
+        opacity: page.hasBackdrop ? 0.55 : 0
+        Behavior on opacity { NumberAnimation { duration: 500 } }
+    }
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.bg
+        opacity: page.hasBackdrop ? 0.35 : 0
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -15,6 +34,7 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredWidth: 1
+            glass: page.hasBackdrop ? 0.45 : 0
         }
 
         ColumnLayout {
@@ -26,7 +46,10 @@ Item {
             Card {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                heading: "Queue"
+                glass: page.hasBackdrop ? 0.45 : 0
+                // While the phone plays, the list is still here: tap a song
+                // to switch back to the Pi's own music.
+                heading: media.source === "phone" ? "Library · tap a song to switch" : "Queue"
 
                 ListView {
                     id: queue
@@ -93,6 +116,7 @@ Item {
             Card {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 108
+                glass: page.hasBackdrop ? 0.45 : 0
 
                 RowLayout {
                     anchors { fill: parent; leftMargin: 16; rightMargin: 16 }

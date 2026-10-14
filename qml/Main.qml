@@ -20,6 +20,7 @@ Window {
         { icon: "music", label: "Music" },
         { icon: "map", label: "Maps" },
         { icon: "speed", label: "Gauges" },
+        { icon: "car", label: "Truck" },
         { icon: "settings", label: "Settings" }
     ]
 
@@ -82,16 +83,23 @@ Window {
             title: root.pages[root.page].label
         }
 
-        StackLayout {
+        // Pages crossfade and slide as you move between them (PageHost).
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.page
 
-            HomePage { onNavigate: (i) => root.page = i }
-            MusicPage { onNavigate: (i) => root.page = i }
-            MapsPage { onNavigate: (i) => root.page = i }
-            GaugesPage { onNavigate: (i) => root.page = i }
-            SettingsPage { onNavigate: (i) => root.page = i }
+            PageHost { anchors.fill: parent; index: 0; current: root.page
+                HomePage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            PageHost { anchors.fill: parent; index: 1; current: root.page
+                MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            PageHost { anchors.fill: parent; index: 2; current: root.page
+                MapsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            PageHost { anchors.fill: parent; index: 3; current: root.page
+                GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            PageHost { anchors.fill: parent; index: 4; current: root.page
+                TruckPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            PageHost { anchors.fill: parent; index: 5; current: root.page
+                SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
         }
     }
 

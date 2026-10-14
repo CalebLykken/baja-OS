@@ -23,7 +23,9 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
+from backend.bluetooth import BluetoothAudio
 from backend.display import Display
+from backend.hub import MediaHub
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.settings import Settings
@@ -74,8 +76,10 @@ def main():
     # for real ones (OBD-II reader, audio player) without touching the UI.
     vehicle = VehicleData()
     settings = Settings()
-    media = make_media_player(args.music_dir)
-    media.setVolume(settings.get_int("volume", 40))
+    # Local music and the phone (Bluetooth) behind one `media` object.
+    bluetooth = BluetoothAudio()
+    media = MediaHub(make_media_player(args.music_dir), bluetooth,
+                     volume=settings.get_int("volume", 40))
     media.volumeChanged.connect(lambda: settings.set("volume", media.volume))
     display = Display()
     network = Network()
@@ -84,6 +88,7 @@ def main():
     ctx = engine.rootContext()
     ctx.setContextProperty("vehicle", vehicle)
     ctx.setContextProperty("media", media)
+    ctx.setContextProperty("bluetooth", bluetooth)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("network", network)
     ctx.setContextProperty("demoMode", True)

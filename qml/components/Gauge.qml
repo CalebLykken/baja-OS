@@ -19,7 +19,11 @@ Card {
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
 
     readonly property bool warning: value > warnAbove || value < warnBelow
-    readonly property real frac: clamp((value - minValue) / (maxValue - minValue))
+    // What's drawn eases toward the latest reading, so every look sweeps
+    // smoothly between the ~5 Hz updates instead of jumping.
+    property real shown: value
+    Behavior on shown { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+    readonly property real frac: clamp((shown - minValue) / (maxValue - minValue))
     readonly property real warnFrac: isFinite(warnAbove)
                                      ? clamp((warnAbove - minValue) / (maxValue - minValue)) : 1
     readonly property real warnLowFrac: isFinite(warnBelow)
@@ -208,7 +212,6 @@ Card {
             visible: g.look === "needle"
             anchors.fill: parent
             rotation: (g.startAngle + g.sweep * g.frac) * 180 / Math.PI
-            Behavior on rotation { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
             Rectangle {
                 x: dial.cx - 14

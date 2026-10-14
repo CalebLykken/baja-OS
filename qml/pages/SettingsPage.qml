@@ -56,61 +56,121 @@ Item {
             }
         }
 
-        Card {
+        // Style and units share a row to leave room for Bluetooth.
+        RowLayout {
             Layout.fillWidth: true
             Layout.preferredHeight: 120
-            heading: "Style"
+            Layout.fillHeight: false   // the cards inside fill it; it mustn't grow
+            spacing: Theme.gap
 
-            Row {
-                anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                spacing: 12
-                Repeater {
-                    model: Theme.styleNames
-                    Rectangle {
-                        readonly property bool selected: Theme.style === modelData
-                        width: styleText.width + 48
-                        height: 56
-                        radius: 28
-                        color: selected ? Theme.accent : Theme.panelHi
-                        Label {
-                            id: styleText
-                            anchors.centerIn: parent
-                            text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                            color: parent.selected ? Theme.bg : Theme.text
-                            font.pixelSize: Theme.fontBody - 2
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                heading: "Style"
+
+                Row {
+                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
+                    spacing: 12
+                    Repeater {
+                        model: Theme.styleNames
+                        Rectangle {
+                            readonly property bool selected: Theme.style === modelData
+                            width: styleText.width + 48
+                            height: 56
+                            radius: 28
+                            color: selected ? Theme.accent : Theme.panelHi
+                            Label {
+                                id: styleText
+                                anchors.centerIn: parent
+                                text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                                color: parent.selected ? Theme.bg : Theme.text
+                                font.pixelSize: Theme.fontBody - 2
+                            }
+                            TapHandler { onTapped: Theme.style = modelData }
                         }
-                        TapHandler { onTapped: Theme.style = modelData }
+                    }
+                }
+            }
+
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                heading: "Units"
+
+                Row {
+                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
+                    spacing: 12
+                    Repeater {
+                        model: [{ label: "Imperial (mph, °F)", metric: false }, { label: "Metric (km/h, °C)", metric: true }]
+                        Rectangle {
+                            readonly property bool selected: page.metric === modelData.metric
+                            width: unitText.width + 48
+                            height: 56
+                            radius: 28
+                            color: selected ? Theme.accent : Theme.panelHi
+                            Label {
+                                id: unitText
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: parent.selected ? Theme.bg : Theme.text
+                                font.pixelSize: Theme.fontBody - 2
+                            }
+                            TapHandler { onTapped: page.metric = modelData.metric }
+                        }
                     }
                 }
             }
         }
 
         Card {
+            id: btCard
             Layout.fillWidth: true
             Layout.preferredHeight: 120
-            heading: "Units"
+            heading: "Bluetooth"
+            visible: typeof bluetooth !== "undefined" && bluetooth.available
+
+            property int secondsLeft: 0
+            Timer {
+                interval: 1000; repeat: true; triggeredOnStart: true
+                running: btCard.visible && bluetooth.pairing
+                onTriggered: btCard.secondsLeft = bluetooth.pairingSecondsLeft
+            }
+            function mmss(s) { return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
 
             Row {
                 anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                spacing: 12
-                Repeater {
-                    model: [{ label: "Imperial (mph, °F)", metric: false }, { label: "Metric (km/h, °C)", metric: true }]
-                    Rectangle {
-                        readonly property bool selected: page.metric === modelData.metric
-                        width: unitText.width + 48
-                        height: 56
-                        radius: 28
-                        color: selected ? Theme.accent : Theme.panelHi
-                        Label {
-                            id: unitText
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            color: parent.selected ? Theme.bg : Theme.text
-                            font.pixelSize: Theme.fontBody - 2
-                        }
-                        TapHandler { onTapped: page.metric = modelData.metric }
-                    }
+                spacing: 14
+                Icon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "bluetooth"
+                    size: 30
+                    color: bluetooth.deviceName !== "" || bluetooth.pairing ? Theme.accent : Theme.textDim
                 }
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    font.pixelSize: Theme.fontBody
+                    text: !bluetooth.adapterPresent ? "Bluetooth is off"
+                          : bluetooth.pairing ? "Visible as “Baja OS”: pair from your phone (" + btCard.mmss(btCard.secondsLeft) + ")"
+                          : bluetooth.deviceName !== "" ? "Connected: " + bluetooth.deviceName
+                          : "No phone connected"
+                }
+            }
+
+            Rectangle {
+                visible: bluetooth.adapterPresent
+                anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
+                width: pairText.width + 48
+                height: 56
+                radius: 28
+                color: bluetooth.pairing ? Theme.panelHi : Theme.accent
+                Label {
+                    id: pairText
+                    anchors.centerIn: parent
+                    text: bluetooth.pairing ? "Stop" : "Pair phone"
+                    color: bluetooth.pairing ? Theme.text : Theme.bg
+                    font.pixelSize: Theme.fontBody - 2
+                }
+                TapHandler { onTapped: bluetooth.setPairing(!bluetooth.pairing) }
             }
         }
 

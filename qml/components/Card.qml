@@ -6,15 +6,21 @@ Rectangle {
     id: card
     property bool tappable: false
     property string heading: ""
+    // 0 = solid panel; up to 1 = see-through, for cards over a backdrop
+    // (the Music page's blurred album art).
+    property real glass: 0
     signal tapped()
+
+    function fill(c) { return Qt.rgba(c.r, c.g, c.b, 1 - glass) }
 
     radius: Theme.radius
     border.color: Theme.line
     border.width: Theme.border
     gradient: Gradient {
-        GradientStop { position: 0; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop }
-        GradientStop { position: 1; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panel }
+        GradientStop { position: 0; color: card.fill(card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop) }
+        GradientStop { position: 1; color: card.fill(card.tappable && tap.pressed ? Theme.panelHi : Theme.panel) }
     }
+    Behavior on glass { NumberAnimation { duration: 400 } }
 
     Label {
         visible: card.heading !== ""

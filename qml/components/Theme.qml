@@ -7,7 +7,7 @@ import QtQuick
 QtObject {
     id: theme
 
-    property string style: "amber"
+    property string style: "trail"     // the default look
 
     readonly property var styles: ({
         // The original look: near-black panels, amber accent.

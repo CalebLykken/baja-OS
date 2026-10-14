@@ -34,7 +34,7 @@ Window {
         if (typeof startStyle !== "undefined" && startStyle)
             Theme.style = startStyle
         else if (typeof settings !== "undefined")
-            Theme.style = settings.get("style", "amber")
+            Theme.style = settings.get("style", "trail")
     }
     Connections {
         target: Theme

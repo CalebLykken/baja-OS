@@ -34,21 +34,25 @@ Item {
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
             tonemapMode: SceneEnvironment.TonemapModeFilmic
+            // A generated photo-studio environment (dark room, big soft
+            // panels). Metallic car paint gets its colour from reflecting
+            // surroundings; with lights alone it renders nearly black.
+            lightProbe: Texture { source: Qt.resolvedUrl("../assets/studio.hdr") }
+            probeExposure: 1.1
+            probeOrientation: Qt.vector3d(0, -page.spin, 0)   // reflections stay put as it turns
         }
 
         // Model units are metres; scale to centimetres, Quick 3D's defaults.
         PerspectiveCamera {
-            position: Qt.vector3d(0, 190, 820)
-            eulerRotation.x: -9
+            position: Qt.vector3d(0, 175, 640)
+            eulerRotation.x: -10
             fieldOfView: 38
         }
 
-        // Key light from above-front.
-        DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 1.6 }
-        // Soft fill from the camera side and a warm rim from behind.
-        DirectionalLight { eulerRotation: Qt.vector3d(-10, 20, 0); brightness: 0.55 }
-        DirectionalLight { eulerRotation: Qt.vector3d(-25, 170, 0); brightness: 0.7; color: "#ffe2c4" }
-        DirectionalLight { eulerRotation: Qt.vector3d(70, 0, 0); brightness: 0.25 }   // lifts the underside
+        // The studio environment does most of the lighting; one key light
+        // adds definition and a warm rim separates the truck from the page.
+        DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 0.8 }
+        DirectionalLight { eulerRotation: Qt.vector3d(-25, 170, 0); brightness: 0.5; color: "#ffe2c4" }
 
         Node {
             eulerRotation.y: page.spin

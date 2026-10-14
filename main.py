@@ -80,7 +80,7 @@ def main():
     bluetooth = BluetoothAudio()
     media = MediaHub(make_media_player(args.music_dir), bluetooth,
                      volume=settings.get_int("volume", 40))
-    media.volumeChanged.connect(lambda: settings.set("volume", media.volume))
+    media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     display = Display()
     network = Network()
 

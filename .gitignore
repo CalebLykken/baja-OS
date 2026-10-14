@@ -8,3 +8,4 @@ venv/
 !qml/assets/*.png
 !deploy/plymouth/*.png
 !qml/assets/*.glb
+!qml/assets/*.hdr

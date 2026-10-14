@@ -31,7 +31,7 @@ def _v(variant):
 def parse_objects(objects):
     """Reduce BlueZ's GetManagedObjects data to what the UI needs."""
     state = {"adapter": None, "discoverable": False, "device": None, "player": None,
-             "to_trust": []}
+             "to_trust": [], "transport": None, "volume": None}
     devices = {}
     for path, ifaces in objects.items():
         if "org.bluez.Adapter1" in ifaces and state["adapter"] is None:
@@ -43,6 +43,14 @@ def parse_objects(objects):
             devices[path] = d
             if _v(d.get("Paired")) and not _v(d.get("Trusted")):
                 state["to_trust"].append(path)
+        if "org.bluez.MediaTransport1" in ifaces:
+            # The audio link. Its Volume (0-127) is the phone's own volume
+            # setting, kept in sync both ways (AVRCP absolute volume).
+            t = ifaces["org.bluez.MediaTransport1"]
+            vol = _v(t.get("Volume"))
+            if vol is not None:
+                state["transport"] = path
+                state["volume"] = int(vol)
         if "org.bluez.MediaPlayer1" in ifaces:
             p = ifaces["org.bluez.MediaPlayer1"]
             track = _v(p.get("Track")) or {}
@@ -73,6 +81,7 @@ def _busctl(*args, timeout=3):
 
 class BluetoothAudio(QObject):
     changed = pyqtSignal()          # connection / pairing state
+    volumeChanged = pyqtSignal()    # the phone's volume (changed on either end)
     trackChanged = pyqtSignal()
     positionChanged = pyqtSignal()
     playingChanged = pyqtSignal()
@@ -86,6 +95,7 @@ class BluetoothAudio(QObject):
         self._pos_ms = 0
         self._pos_at = time.monotonic()
         self._pairing_until = 0.0
+        self._volume_sent_at = 0.0
         self._busy = False
         self._polled.connect(self._apply)
         self._timer = QTimer(self)
@@ -132,6 +142,12 @@ class BluetoothAudio(QObject):
         if (old["adapter"], old["discoverable"], old["device"]) != \
                 (state["adapter"], state["discoverable"], state["device"]):
             self.changed.emit()
+        # Ignore polls that raced a change we just sent, so the bar doesn't
+        # jump back while the phone catches up.
+        if state["volume"] != old["volume"] and time.monotonic() - self._volume_sent_at > 1.5:
+            self.volumeChanged.emit()
+        elif time.monotonic() - self._volume_sent_at <= 1.5:
+            state["volume"] = old["volume"]
         if not p:
             if old_player:
                 self.trackChanged.emit()
@@ -205,6 +221,17 @@ class BluetoothAudio(QObject):
     def playing(self):
         return (self._player or {}).get("status") == "playing"
 
+    @pyqtProperty(bool, notify=volumeChanged)
+    def hasVolume(self):
+        """True when the phone shares its volume (absolute volume)."""
+        return self._state["volume"] is not None
+
+    @pyqtProperty(int, notify=volumeChanged)
+    def volume(self):
+        """The phone's volume as 0-100."""
+        v = self._state["volume"]
+        return round(v * 100 / 127) if v is not None else 0
+
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def play(self):
@@ -225,6 +252,20 @@ class BluetoothAudio(QObject):
     @pyqtSlot()
     def previous(self):
         self._command("Previous")
+
+    @pyqtSlot(int)
+    def setVolume(self, value):
+        """Set the phone's volume (0-100); the phone's own slider follows."""
+        transport = self._state["transport"]
+        if not transport:
+            return
+        raw = max(0, min(127, round(int(value) * 127 / 100)))
+        self._state["volume"] = raw
+        self._volume_sent_at = time.monotonic()
+        threading.Thread(target=lambda: _busctl(
+            "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
+            "Volume", "q", str(raw)), daemon=True).start()
+        self.volumeChanged.emit()
 
     @pyqtSlot(bool)
     def setPairing(self, on):

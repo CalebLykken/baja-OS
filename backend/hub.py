@@ -5,9 +5,11 @@ forwards whichever is active, with the same properties and slots the QML
 already uses. The phone takes over when it starts playing (local music
 pauses); tapping a song in the queue switches back.
 
-Volume is a single master volume: where PipeWire's `wpctl` exists (the Pi)
-it sets the system output, so it applies to phone audio too; elsewhere it
-falls back to the local player's own volume.
+Volume follows the active source, like a car stereo: while the phone plays,
+the bar is the phone's own volume (Bluetooth absolute volume, in sync with
+the phone's buttons) and the Pi's output sits at 100%; for local music it's
+the Pi's output volume via PipeWire's `wpctl` (or the player's own volume
+where wpctl doesn't exist, e.g. on a Mac).
 
 It also derives two things from the current album art for the Music page:
 an accent colour and a pre-blurred backdrop image.
@@ -70,6 +72,7 @@ class MediaHub(QObject):
         local.trackChanged.connect(self._update_art)
         phone.playingChanged.connect(self._phone_playing_changed)
         phone.trackChanged.connect(self._phone_player_changed)
+        phone.volumeChanged.connect(self._phone_volume_changed)
 
         if self._system_volume:
             local.setVolume(100)          # master volume lives in PipeWire
@@ -85,10 +88,16 @@ class MediaHub(QObject):
     def _active(self):
         return self._phone if self._source == "phone" else self._local
 
+    @property
+    def _phone_volume(self):
+        return self._source == "phone" and self._phone.hasVolume
+
     def _set_source(self, source):
         if source != self._source:
             self._source = source
+            self._apply_volume()
             self.sourceChanged.emit()
+            self.volumeChanged.emit()
             self.trackChanged.emit()
             self.positionChanged.emit()
             self.playingChanged.emit()
@@ -103,6 +112,11 @@ class MediaHub(QObject):
         if not self._phone.hasPlayer and self._source == "phone":
             self._set_source("local")
 
+    def _phone_volume_changed(self):
+        if self._phone_volume:
+            self._apply_volume()      # the Pi's output goes to 100% once known
+            self.volumeChanged.emit()
+
     def _forward(self, origin, signal):
         if origin == self._source:
             getattr(self, signal).emit()
@@ -115,7 +129,8 @@ class MediaHub(QObject):
     # ---- volume -----------------------------------------------------------
     def _apply_volume(self):
         if self._system_volume:
-            level = f"{self._volume / 100:.2f}"
+            # Phone audio: the phone sets the level, so the Pi stays at full.
+            level = "1.00" if self._phone_volume else f"{self._volume / 100:.2f}"
             threading.Thread(target=lambda: subprocess.run(
                 ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", level],
                 capture_output=True, timeout=3), daemon=True).start()
@@ -176,6 +191,11 @@ class MediaHub(QObject):
 
     @pyqtProperty(int, notify=volumeChanged)
     def volume(self):
+        return self._phone.volume if self._phone_volume else self._volume
+
+    @property
+    def local_volume(self):
+        """The Pi's own volume (what's saved between runs); the phone keeps its own."""
         return self._volume
 
     # ---- controls ---------------------------------------------------------
@@ -201,6 +221,9 @@ class MediaHub(QObject):
     @pyqtSlot(int)
     def setVolume(self, value):
         value = max(0, min(100, int(value)))
+        if self._phone_volume:
+            self._phone.setVolume(value)
+            return
         if value != self._volume:
             self._volume = value
             self._apply_volume()
@@ -208,8 +231,8 @@ class MediaHub(QObject):
 
     @pyqtSlot()
     def volumeUp(self):
-        self.setVolume(self._volume + 2)
+        self.setVolume(self.volume + 4)
 
     @pyqtSlot()
     def volumeDown(self):
-        self.setVolume(self._volume - 2)
+        self.setVolume(self.volume - 4)

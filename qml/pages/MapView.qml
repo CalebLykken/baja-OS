@@ -14,6 +14,7 @@ WebEngineView {
     signal benchDone(var result)
     property real bearing: 0
     property bool following: false
+    property string road: ""            // the road under the truck while following
 
     // The dashboard's colours, which the map derives its palette from.
     function themeTokens() {
@@ -45,6 +46,7 @@ WebEngineView {
             var m = JSON.parse(message.slice(5))
             if (m.kind === "ready") { web.ready(m.ms); web.sendPosition() }
             else if (m.kind === "follow") web.following = m.on
+            else if (m.kind === "road") web.road = m.name
             else if (m.kind === "error") console.warn("map:", m.message)
             else if (m.kind === "bearing") web.bearing = m.bearing
             else if (m.kind === "bench") web.benchDone(m)

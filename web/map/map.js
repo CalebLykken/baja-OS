@@ -212,6 +212,31 @@ function followCamera(now) {
                  zoom: followZoom, padding: followPadding() });
 }
 
+// The name of the road under the arrow, checked about once a second.
+let road = "", roadCheckedAt = 0;
+const ROAD_LAYERS = ["roads_minor", "roads_minor_service", "roads_link", "roads_major",
+                     "roads_highway", "roads_other", "roads_bridges_minor", "roads_bridges_link",
+                     "roads_bridges_major", "roads_bridges_highway", "roads_tunnels_minor",
+                     "roads_tunnels_link", "roads_tunnels_major", "roads_tunnels_highway"];
+
+function checkRoad(now) {
+    if (now - roadCheckedAt < 1000) return;
+    roadCheckedAt = now;
+    const p = map.project([shown.lon, shown.lat]);
+    const layers = ROAD_LAYERS.filter(id => map.getLayer(id));
+    const hits = map.queryRenderedFeatures([[p.x - 10, p.y - 10], [p.x + 10, p.y + 10]], { layers });
+    // At junctions prefer the bigger road.
+    const rank = (id) => /highway/.test(id) ? 0 : /major/.test(id) ? 1 : /link/.test(id) ? 2
+                       : /minor/.test(id) && !/service/.test(id) ? 3 : 4;
+    const named = hits.filter(f => f.properties.name || f.properties.ref)
+                      .sort((a, b) => rank(a.layer.id) - rank(b.layer.id))[0];
+    const name = named ? (named.properties.name || named.properties.ref) : "";
+    if (name !== road) {
+        road = name;
+        post("road", { name });
+    }
+}
+
 function step(now) {
     frame = 0;
     if (!to) return;
@@ -219,7 +244,10 @@ function step(now) {
     shown = { lon: from.lon + (to.lon - from.lon) * f, lat: from.lat + (to.lat - from.lat) * f,
               heading: turn(from.heading, to.heading, f), speed: to.speed };
     marker.setLngLat([shown.lon, shown.lat]).setRotation(shown.heading);
-    if (following) followCamera(now);
+    if (following) {
+        followCamera(now);
+        checkRoad(now);
+    }
     if (f < 1) frame = requestAnimationFrame(step);
 }
 

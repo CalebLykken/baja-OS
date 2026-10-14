@@ -165,6 +165,27 @@ Item {
             }
         }
 
+        // The road you're on, bottom centre, while following.
+        Rectangle {
+            visible: page.mapReady && page.map && page.map.following && page.map.road !== ""
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 16 }
+            width: Math.min(roadName.implicitWidth + 40, parent.width - 420)
+            height: 56
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: Theme.border
+            border.color: Theme.line
+            Label {
+                id: roadName
+                anchors.centerIn: parent
+                width: Math.min(implicitWidth, parent.width - 40)
+                elide: Text.ElideRight
+                text: page.map ? page.map.road : ""
+                font.pixelSize: Theme.fontBody + 2
+                font.weight: Font.DemiBold
+            }
+        }
+
         // OpenStreetMap's licence asks for this to be visible on the map.
         Rectangle {
             visible: page.mapReady

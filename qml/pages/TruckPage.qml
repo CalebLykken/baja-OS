@@ -43,15 +43,8 @@ Item {
             fieldOfView: 38
         }
 
-        // Key light from above-front, casting the ground shadow.
-        DirectionalLight {
-            eulerRotation: Qt.vector3d(-55, -25, 0)
-            brightness: 1.6
-            castsShadow: true
-            shadowMapQuality: Light.ShadowMapQualityHigh
-            shadowFactor: 55
-            shadowBias: 8
-        }
+        // Key light from above-front.
+        DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 1.6 }
         // Soft fill from the camera side and a warm rim from behind.
         DirectionalLight { eulerRotation: Qt.vector3d(-10, 20, 0); brightness: 0.55 }
         DirectionalLight { eulerRotation: Qt.vector3d(-25, 170, 0); brightness: 0.7; color: "#ffe2c4" }
@@ -65,18 +58,20 @@ Item {
                 source: Qt.resolvedUrl("../assets/baja-3d.glb")
                 scale: Qt.vector3d(100, 100, 100)
             }
-        }
 
-        // Shadow catcher: the same colour as the page, so only the shadow shows.
-        Model {
-            source: "#Rectangle"
-            eulerRotation.x: -90
-            scale: Qt.vector3d(14, 14, 1)
-            receivesShadows: true
-            materials: PrincipledMaterial {
-                baseColor: Theme.bg
-                roughness: 1
-                lighting: PrincipledMaterial.FragmentLighting
+            // Soft pre-drawn contact shadow that turns with the truck: looks
+            // better on the dark page than a real-time shadow and costs
+            // almost nothing (no shadow map pass).
+            Model {
+                source: "#Rectangle"
+                y: 1
+                eulerRotation.x: -90
+                scale: Qt.vector3d(2.9, 6.0, 1)    // ~ the truck's footprint (cm)
+                materials: PrincipledMaterial {
+                    lighting: PrincipledMaterial.NoLighting
+                    baseColorMap: Texture { source: Qt.resolvedUrl("../assets/truck-shadow.png") }
+                    alphaMode: PrincipledMaterial.Blend
+                }
             }
         }
     }

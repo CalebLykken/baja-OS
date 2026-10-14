@@ -27,10 +27,13 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     qml6-module-qtquick-window qml6-module-qtqml-workerscript \
     pipewire pipewire-pulse wireplumber plymouth \
     fonts-urw-base35 fonts-liberation fonts-dejavu-core \
-    qml6-module-qtquick3d qml6-module-qtquick3d-assetutils \
+    qml6-module-qtquick3d qml6-module-qtquick3d-assetutils qt6-quick3d-assetimporters-plugin \
     bluez bluez-tools libspa-0.2-bluetooth
-# The user's PipeWire session (audio) runs at boot without anyone logging in.
+# The user's PipeWire session (audio) runs at boot without anyone logging in,
+# with the PulseAudio-compatible socket that Qt Multimedia plays through.
 loginctl enable-linger "$USER_NAME"
+sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" \
+    systemctl --user enable --now pipewire-pulse.socket 2>/dev/null || true
 
 echo "== Bluetooth"
 usermod -aG bluetooth "$USER_NAME"          # control BlueZ over D-Bus

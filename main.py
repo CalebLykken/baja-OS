@@ -26,6 +26,7 @@ from PyQt6.QtQml import QQmlApplicationEngine
 from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.hub import MediaHub
+from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.settings import Settings
@@ -47,6 +48,8 @@ def parse_args():
                         help="skip the startup animation")
     parser.add_argument("--music-dir", default="~/Music",
                         help="folder of audio files to play (demo playlist if empty)")
+    parser.add_argument("--maps-dir", default=str(DEFAULT_DATA_DIR),
+                        help="offline map data from deploy/maps/install-map.sh")
     return parser.parse_known_args()[0]
 
 
@@ -65,12 +68,25 @@ def make_media_player(music_dir):
     return LibraryPlayer(tracks)
 
 
+def init_web_engine():
+    """Qt WebEngine (for the map) must be set up before the app object
+    exists. Returns False if it isn't installed; the Maps page says so."""
+    try:
+        from PyQt6.QtWebEngineQuick import QtWebEngineQuick
+    except ImportError as e:
+        print(f"Maps: Qt WebEngine unavailable ({e})")
+        return False
+    QtWebEngineQuick.initialize()
+    return True
+
+
 def main():
     args = parse_args()
     # Qt's event loop never hands control back to Python's Ctrl-C handler, so
     # let SIGINT kill the process directly (matters when started over SSH).
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    web_engine = init_web_engine()
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Baja Carputer")
 
@@ -86,6 +102,7 @@ def main():
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     display = Display()
     network = Network()
+    maps = MapService(args.maps_dir, web_engine)
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
@@ -95,6 +112,7 @@ def main():
     ctx.setContextProperty("spotify", spotify)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("network", network)
+    ctx.setContextProperty("maps", maps)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
@@ -111,6 +129,7 @@ def main():
 
     vehicle.start()
     media.start()
+    maps.start()
     network.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()

@@ -8,6 +8,7 @@ Rectangle {
     property string icon     // a name from Icon.qml
     property bool primary: false
     property int size: Theme.touch
+    property real iconRotation: 0   // e.g. a compass needle
     signal clicked()
 
     width: size
@@ -24,6 +25,7 @@ Rectangle {
         anchors.centerIn: parent
         name: btn.icon
         size: btn.size * 0.46
+        rotation: btn.iconRotation
         color: btn.primary ? Theme.bg : Theme.text
     }
 

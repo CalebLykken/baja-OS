@@ -30,16 +30,15 @@ terms, and in-car safety and hardware. What changed, and why, is at the end.
 
 ## Where things stand
 
-Running on the Pi 5: dashboard (Home, Music, Maps placeholder, Gauges, Truck,
-Settings), four styles, settings saved, network status, 55-60 fps, Baja OS boot
-screen, start at boot, local music, Bluetooth phone audio with track info and
-two-way volume.
+Running on the Pi 5: dashboard (Home, Music, Maps, Gauges, Truck, Settings),
+four styles with Trail as the default, settings saved, network status, 55-60
+fps, Baja OS boot screen, start at boot, crash and freeze recovery (service
+watchdog plus the Pi's hardware watchdog), local music, Bluetooth phone audio
+with track info and two-way volume, Spotify through Soloist, and an offline
+map of the Seattle area.
 
 Known issues:
 
-- **Bug:** a Python crash exits with code 1, which the service treats as a
-  normal stop (`SuccessExitStatus=1` with `Restart=on-failure`), so the
-  dashboard would not come back after a crash.
 - **Brightness:** only software dimming on the Pi 5. The backlight stays fully
   on, so the screen glows at night.
 - **Truck page:** stalls about 3 s the first time it opens.
@@ -155,8 +154,23 @@ phone locked; the dashboard controls work; it comes back after a reboot.
   - Fallback after about 2 days: MapLibre GL JS in Qt WebEngine (check hardware
     WebGL works under eglfs).
   - Last resort: raster tiles through QtLocation.
+- **Spike result (2026-10-14): MapLibre GL JS in Qt WebEngine, kept.** It was
+  already installed and WebGL runs on the Pi 5's GPU (V3D 7.1) under eglfs, so
+  it was measured first. On the Pi 5, with the Seattle-area extract:
+  - Cold start, page opened to map drawn: 0.99 s (target under 2 s).
+  - Tilted follow mode at 30 m/s, zoom 16.5, pitch 60: 59.5 fps, 95th
+    percentile frame 16.8 ms, no frames over 50 ms (target 30 fps). The same
+    after opening the Truck page: 59.6 fps.
+  - Memory over the Home screen: +220 MB with the map open, +284 MB while
+    following (target 250 MB). A smaller tile cache didn't change it; it's the
+    web engine's own processes. With 7.4 GB free on the 8 GB Pi this is
+    acceptable, so MapLibre Native isn't worth two days of compiling now.
+    Revisit only if memory becomes a problem.
 - **Look:** styles matching each Baja OS style, day and night (night is light
   text on dark). Follow mode, recentre, and smooth motion between GPS updates.
+  Done so far: the map's palette is derived from the current style's tokens
+  and recolours live when the style changes; labels are drawn 1.4x for arm's
+  length reading.
 - **Attribution:** "© OpenStreetMap contributors" on the map.
 - **Traffic overlay (optional):** TomTom flow tiles, only if TomTom approves in
   writing.

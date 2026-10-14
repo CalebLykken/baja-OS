@@ -60,6 +60,18 @@ earns its place, it carries information ("Up next on Spotify") in sentence case.
 - **No cover:** a Moss tile with a Lichen icon.
 - **No album backdrop.** The topo map is the constant background on every page.
 
+## Map
+
+- **Colours come from the style's tokens,** never a separate palette: land is
+  Olive, water a quiet teal tint of Basin, parks a faint Sage tint, roads step
+  up from Contour toward Lichen by importance, labels are Sand and Lichen.
+  Blaze is kept for the route and the truck's position.
+- **Labels at 1.4x** the stock size so they read at arm's length.
+- **No coloured POI icons;** POI names only, in Lichen.
+- The map sits in a card like everything else; its keys are the standard
+  rounded squares (zoom on the top right, north and recentre on the bottom
+  right), and the OpenStreetMap credit is a small chip in the corner.
+
 ## Layout
 
 All card content is inset 20 px. Gutters between cards are 14 px.

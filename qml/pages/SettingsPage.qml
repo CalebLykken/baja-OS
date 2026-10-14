@@ -150,6 +150,16 @@ Item {
                     font.pixelSize: Theme.fontBody
                 }
                 Label {
+                    // e.g. "Map: Seattle area, OpenStreetMap of 14 Oct 2026"
+                    readonly property string built: typeof maps === "undefined" || maps.build.length !== 8 ? ""
+                        : new Date(+maps.build.slice(0, 4), +maps.build.slice(4, 6) - 1, +maps.build.slice(6))
+                              .toLocaleDateString(Qt.locale("en_GB"), "d MMM yyyy")
+                    text: typeof maps === "undefined" || !maps.ready ? "Map: not installed"
+                          : "Map: " + maps.region + ", OpenStreetMap of " + built
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Label {
                     text: typeof spotify === "undefined" || !spotify.available ? "Spotify: not set up"
                           : !spotify.linked ? "Spotify: pick “" + (spotify.deviceName || "Baja") + "” in the Spotify app to link"
                           : "Spotify: linked as “" + spotify.deviceName + "”"

@@ -50,7 +50,8 @@ Item {
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
-                        text: "An offline map of Seattle\nis coming next"
+                        text: typeof maps === "undefined" || !maps.ready ? "No map installed yet"
+                              : maps.region + "\nworks with no signal"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }

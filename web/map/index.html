@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baja OS map</title>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<style>
+  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #14160f; }
+  /* The dashboard draws its own keys and attribution over the map. */
+  .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
+</style>
+<script src="vendor/pmtiles.js"></script>
+<script type="module" src="map.js"></script>
+</head>
+<body><div id="map"></div></body>
+</html>

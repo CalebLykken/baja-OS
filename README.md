@@ -1,9 +1,12 @@
 # Baja OS
 
 Touchscreen dashboard for a Raspberry Pi carputer in a 2005 Subaru Baja Turbo.
-Python + PyQt6 backend, QML front end. Vehicle and media data are simulated for
-now (the **DEMO DATA** badge in the status bar), so the UI can be built before
-the OBD-II adapter, CarPlay dongle and audio are wired in.
+Python + PyQt6 backend, QML front end. Music comes from Spotify (the official
+Soloist player), a phone over Bluetooth, or files on the Pi; the map is
+OpenStreetMap stored on the Pi, so it works with no signal. Vehicle data is
+simulated for now (the **DEMO DATA** badge in the status bar) until the OBD-II
+adapter is wired in. The plan is in [docs/ROADMAP.md](docs/ROADMAP.md) and the
+look in [docs/DESIGN.md](docs/DESIGN.md).
 
 ![Home](docs/home.png)
 
@@ -14,20 +17,25 @@ the OBD-II adapter, CarPlay dongle and audio are wired in.
 ## Hardware
 
 - Waveshare 8" HDMI capacitive touch, 1280x800, landscape
-- Raspberry Pi 2 for testing (Raspberry Pi OS 13 "trixie", 32-bit, console only); Raspberry Pi 5 in the car
+- Raspberry Pi 5, 8 GB (Raspberry Pi OS Lite 13 "trixie", 64-bit, console only)
 
 ## Layout
 
 ```
-main.py              entry point; exposes `vehicle`, `media`, `demoMode` to QML
+main.py              entry point; hands the backends to QML
 run.sh               Pi launcher (EGLFS, falls back to linuxfb)
 backend/vehicle.py   simulated drive: rpm, speed, boost, coolant, intake, volts, gear
-backend/media.py     demo playlist (used when there's no music)
+backend/hub.py       one `media` object over local files, the phone and Spotify
 backend/library.py   plays real files from --music-dir (default ~/Music)
+backend/bluetooth.py phone audio over Bluetooth (BlueZ, AVRCP)
+backend/spotify.py   Spotify Connect through Soloist's local API
+backend/maps.py      local web server for the offline map
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
 qml/Main.qml         window: nav rail + status bar + pages
-qml/pages/           Home, Music, Maps (CarPlay placeholder), Gauges, Settings
+qml/pages/           Home, Music, Maps, Gauges, Truck, Settings
 qml/components/      Theme, Card, Gauge, NowPlaying, Readout, ...
+web/map/             the map page: MapLibre GL JS + PMTiles (vendored)
+deploy/              Pi setup, service, Spotify and map installers
 ```
 
 The UI uses only QtQuick and QtQuick.Layouts (no Controls or Shapes) to keep
@@ -69,6 +77,25 @@ Put audio files (mp3, m4a, flac, ogg, wav) in `~/Music` on the Pi, or pass
 With no files there, the Music page plays the demo playlist. Audio goes to the
 default PipeWire output (the Pi's 3.5 mm jack).
 
+## Offline map
+
+```bash
+./deploy/maps/install-map.sh   # Seattle area, about 130 MB; safe to re-run to update
+```
+
+This cuts the Seattle area (Tacoma to Everett, Bremerton to North Bend) out of
+Protomaps' daily OpenStreetMap build, with the label fonts and icons, into
+`~/.local/share/baja-os/maps`. After that the map needs no internet. Set
+`REGION` and `BBOX` for a different area (the script shows how). The map is
+MapLibre GL JS in Qt WebEngine, coloured from the current style, and starts the
+first time the Maps page opens.
+
+To work on the map in a desktop browser:
+
+```bash
+python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
+```
+
 ## Pi setup (boot, Wi-Fi, service)
 
 ```bash
@@ -100,7 +127,4 @@ git pull && sudo systemctl restart baja-os
 
 ## Next steps
 
-- Swap `VehicleData._tick` for real OBD-II PID reads (same property names, QML unchanged)
-- Real audio backend in `MediaPlayer`; wire `volumeUp`/`volumeDown` to the dash knob
-- CarPlay via the Carlinkit dongle on the Maps page
-- Start on boot (systemd unit)
+See [docs/ROADMAP.md](docs/ROADMAP.md).

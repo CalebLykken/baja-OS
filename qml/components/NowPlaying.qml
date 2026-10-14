@@ -1,12 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Now-playing card shared by the Home and Music pages: art (or a placeholder),
-// title/artist, progress, and transport controls. Shows a Bluetooth badge
-// when the music is coming from the phone.
+// The Home screen's now-playing card: the album art (rounded, glowing in its
+// own colours), title and artist, progress, and transport controls. The play
+// button and progress bar take the cover's colour. A badge shows when the
+// music comes from Spotify or the phone. Tap the art to open Music.
 Card {
     id: np
-    property bool compact: false
     signal openMusic()
 
     function mmss(s) {
@@ -17,84 +17,53 @@ Card {
     heading: "Now playing"
 
     readonly property bool fromPhone: media.source === "phone"
-    readonly property bool fromSpotify: media.source === "spotify"
     readonly property color tint: media.artColor !== "" ? media.artColor : Theme.accent
 
-    Row {
-        visible: np.fromPhone || np.fromSpotify
+    SourceBadge {
         anchors { right: parent.right; top: parent.top; rightMargin: 20; topMargin: 12 }
-        spacing: 6
-        Icon {
-            name: np.fromSpotify ? "music" : "bluetooth"
-            size: 20
-            color: np.fromSpotify ? "#1ed760" : Theme.accent     // Spotify green
-            anchors.verticalCenter: parent.verticalCenter
-        }
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            text: media.sourceName || "Phone"
-            color: Theme.textDim
-            font.pixelSize: Theme.fontSmall - 2
-            font.letterSpacing: 1
-        }
     }
 
     RowLayout {
         anchors { fill: parent; margins: 24; topMargin: 52 }
-        spacing: 24
+        spacing: 28
 
-        // Album art, or a music note icon when the track has none
-        Rectangle {
-            Layout.preferredWidth: Math.min(parent.height, parent.width * 0.4)
+        AlbumArt {
+            Layout.preferredWidth: Math.min(parent.height, parent.width * 0.5)
             Layout.preferredHeight: Layout.preferredWidth
             Layout.alignment: Qt.AlignVCenter
-            radius: Theme.radius
-            color: Theme.accentDim
-            clip: true
-            Icon {
-                visible: art.status !== Image.Ready
-                anchors.centerIn: parent
-                name: np.fromPhone ? "phone" : "music"
-                color: Theme.accent
-                size: parent.width * 0.45
-            }
-            Image {
-                id: art
-                anchors.fill: parent
-                source: media.art
-                fillMode: Image.PreserveAspectCrop
-                // Decode at display size; embedded covers can be 3000 px PNGs.
-                sourceSize { width: 400; height: 400 }
-                asynchronous: true
-                smooth: true
-            }
+            source: media.artCard
+            glowSource: media.artGlow
+            placeholder: np.fromPhone ? "phone" : "music"
             TapHandler { onTapped: np.openMusic() }
         }
 
         ColumnLayout {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
-            spacing: 10
+            spacing: 8
 
             Label {
                 Layout.fillWidth: true
                 text: media.title
-                color: Theme.text
-                font.pixelSize: Theme.fontTitle
+                font.pixelSize: 34
                 font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
                 elide: Text.ElideRight
             }
             Label {
                 Layout.fillWidth: true
                 text: media.artist
                 color: Theme.textDim
-                font.pixelSize: Theme.fontBody
+                font.pixelSize: 24
                 elide: Text.ElideRight
             }
 
             ProgressBar {
                 Layout.fillWidth: true
-                Layout.topMargin: 12
+                Layout.topMargin: 14
+                Layout.preferredHeight: 8
+                radius: 4
                 value: media.duration > 0 ? media.position / media.duration : 0
                 fill: np.tint
             }
@@ -107,16 +76,17 @@ Card {
 
             Row {
                 Layout.alignment: Qt.AlignHCenter
-                Layout.topMargin: 8
-                spacing: 24
-                IconButton { icon: "previous"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
+                Layout.topMargin: 6
+                spacing: 18
+                IconButton { icon: "previous"; size: 76; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
                 IconButton {
                     icon: media.playing ? "pause" : "play"
                     primary: true
-                    size: Theme.touch + 16
+                    fill: np.tint
+                    size: 96
                     onClicked: media.togglePlay()
                 }
-                IconButton { icon: "next"; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
+                IconButton { icon: "next"; size: 76; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
             }
         }
     }

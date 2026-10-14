@@ -2,10 +2,19 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// At-a-glance screen: now playing, the maps tile, and three key readouts.
+// At-a-glance screen: now playing, the maps tile, and the key readouts,
+// over a blurred copy of the current album art.
 Item {
     id: page
     signal navigate(int index)
+
+    readonly property real glass: backdrop.active ? 0.5 : 0
+
+    ArtBackdrop {
+        id: backdrop
+        anchors.fill: parent
+        strength: 0.45
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -20,6 +29,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 3
+                glass: page.glass
                 onOpenMusic: page.navigate(1)
             }
 
@@ -28,6 +38,7 @@ Item {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 2
                 heading: "Maps"
+                glass: page.glass
                 tappable: true
                 onTapped: page.navigate(2)
 
@@ -59,6 +70,7 @@ Item {
         Card {
             Layout.fillWidth: true
             Layout.preferredHeight: 128
+            glass: page.glass
             tappable: true
             onTapped: page.navigate(3)
 

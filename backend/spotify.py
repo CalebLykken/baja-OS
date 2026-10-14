@@ -35,8 +35,9 @@ def _cover(entity, prefer=("large", "xlarge", "default", "small")):
 
 
 def _artists(entity):
+    # Each creator is wrapped: {"entity": {..., "decorations": {"identity": ...}}}
     creators = ((entity or {}).get("decorations") or {}).get("creators") or []
-    return ", ".join(n for n in (_name(c) for c in creators) if n)
+    return ", ".join(n for n in (_name(c.get("entity", c)) for c in creators) if n)
 
 
 def _duration_ms(entity):

@@ -12,3 +12,6 @@ Backdrop 1.0 Backdrop.qml
 Splash 1.0 Splash.qml
 Icon 1.0 Icon.qml
 PageHost 1.0 PageHost.qml
+AlbumArt 1.0 AlbumArt.qml
+ArtBackdrop 1.0 ArtBackdrop.qml
+SourceBadge 1.0 SourceBadge.qml

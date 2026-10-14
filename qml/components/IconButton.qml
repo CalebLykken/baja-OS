@@ -5,14 +5,16 @@ Rectangle {
     id: btn
     property string icon     // a name from Icon.qml
     property bool primary: false
+    property color fill: Theme.accent     // primary button colour (e.g. from album art)
     property int size: Theme.touch
     signal clicked()
 
     width: size
     height: size
     radius: size / 2
-    color: primary ? (tap.pressed ? Qt.darker(Theme.accent, 1.3) : Theme.accent)
+    color: primary ? (tap.pressed ? Qt.darker(fill, 1.3) : fill)
                    : (tap.pressed ? Theme.line : Theme.panelHi)
+    Behavior on color { ColorAnimation { duration: 400 } }
 
     Icon {
         anchors.centerIn: parent

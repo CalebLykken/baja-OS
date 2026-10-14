@@ -1,33 +1,29 @@
 import QtQuick
 
-// Rounded panel used for every tile. Set `tappable` to get press feedback
-// and a `tapped` signal.
+// The panel every tile sits on: solid, with the style's border and radius.
+// `heading` is an optional sentence-case caption for cards whose content
+// needs one ("Up next on Spotify"). Set `tappable` for press feedback and a
+// `tapped` signal.
 Rectangle {
     id: card
     property bool tappable: false
     property string heading: ""
-    // 0 = solid panel; up to 1 = see-through, for cards over a backdrop
-    // (the Music page's blurred album art).
-    property real glass: 0
     signal tapped()
-
-    function fill(c) { return Qt.rgba(c.r, c.g, c.b, 1 - glass) }
 
     radius: Theme.radius
     border.color: Theme.line
     border.width: Theme.border
     gradient: Gradient {
-        GradientStop { position: 0; color: card.fill(card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop) }
-        GradientStop { position: 1; color: card.fill(card.tappable && tap.pressed ? Theme.panelHi : Theme.panel) }
+        GradientStop { position: 0; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop }
+        GradientStop { position: 1; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panel }
     }
-    Behavior on glass { NumberAnimation { duration: 400 } }
 
     Label {
         visible: card.heading !== ""
-        text: card.heading.toUpperCase()
+        text: card.heading
         color: Theme.textDim
-        font.pixelSize: Theme.fontSmall - 2
-        font.letterSpacing: 2
+        font.pixelSize: Theme.fontSmall
+        font.weight: Font.DemiBold
         anchors { left: parent.left; top: parent.top; leftMargin: 20; topMargin: 16 }
     }
 

@@ -1,25 +1,22 @@
 import QtQuick
 
-// Where the music is coming from: Spotify (green), the phone over Bluetooth,
-// or this Pi's own library.
+// Where the music is coming from, in plain words: "Spotify", the phone's
+// name over Bluetooth, or "On this Pi". Quiet text, no brand colour.
 Row {
-    id: badge
-    property bool showLocal: false     // also label the Pi's own library
     readonly property string src: media.source
-    visible: src !== "local" || showLocal
     spacing: 8
 
     Icon {
         anchors.verticalCenter: parent.verticalCenter
-        name: badge.src === "phone" ? "bluetooth" : "music"
-        size: 20
-        color: badge.src === "spotify" ? "#1ed760" : Theme.accent     // Spotify green
+        name: parent.src === "phone" ? "bluetooth" : "music"
+        size: 18
+        color: Theme.textDim
     }
     Label {
         anchors.verticalCenter: parent.verticalCenter
-        text: badge.src === "local" ? "ON THIS PI" : (media.sourceName || "PHONE").toUpperCase()
+        text: parent.src === "local" ? "On this Pi" : (media.sourceName || "Phone")
         color: Theme.textDim
-        font.pixelSize: Theme.fontSmall - 2
-        font.letterSpacing: 1.5
+        font.pixelSize: Theme.fontSmall
+        font.weight: Font.DemiBold
     }
 }

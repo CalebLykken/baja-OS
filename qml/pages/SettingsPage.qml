@@ -26,31 +26,18 @@ Item {
                 spacing: 16
                 IconButton { icon: "remove"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
 
-                // Tap or drag anywhere along the bar; the tall hit area is
-                // easier to land on in a moving car than the 10 px bar.
-                Item {
+                LevelBar {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    ProgressBar {
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
-                        height: 10
-                        radius: 5
-                        value: display.brightness / 100
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        function apply(x) { display.setBrightness(Math.round(100 * x / width)) }
-                        onPressed: (mouse) => apply(mouse.x)
-                        onPositionChanged: (mouse) => apply(mouse.x)
-                    }
+                    value: display.brightness / 100
+                    onMoved: (v) => display.setBrightness(Math.round(v * 100))
                 }
-
                 Label {
                     Layout.preferredWidth: 64
                     horizontalAlignment: Text.AlignRight
                     text: display.brightness + "%"
-                    color: Theme.text
+                    font.family: Theme.numFont
                     font.pixelSize: Theme.fontBody
+                    font.weight: Font.DemiBold
                 }
                 IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
             }
@@ -68,27 +55,11 @@ Item {
                 Layout.fillHeight: true
                 heading: "Style"
 
-                Row {
+                SegmentedControl {
                     anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                    spacing: 12
-                    Repeater {
-                        model: Theme.styleNames
-                        Rectangle {
-                            readonly property bool selected: Theme.style === modelData
-                            width: styleText.width + 48
-                            height: 56
-                            radius: 28
-                            color: selected ? Theme.accent : Theme.panelHi
-                            Label {
-                                id: styleText
-                                anchors.centerIn: parent
-                                text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                                color: parent.selected ? Theme.bg : Theme.text
-                                font.pixelSize: Theme.fontBody - 2
-                            }
-                            TapHandler { onTapped: Theme.style = modelData }
-                        }
-                    }
+                    options: Theme.styleNames.map(n => ({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n }))
+                    current: Theme.style
+                    onPicked: (v) => Theme.style = v
                 }
             }
 
@@ -97,27 +68,11 @@ Item {
                 Layout.fillHeight: true
                 heading: "Units"
 
-                Row {
+                SegmentedControl {
                     anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                    spacing: 12
-                    Repeater {
-                        model: [{ label: "Imperial (mph, °F)", metric: false }, { label: "Metric (km/h, °C)", metric: true }]
-                        Rectangle {
-                            readonly property bool selected: page.metric === modelData.metric
-                            width: unitText.width + 48
-                            height: 56
-                            radius: 28
-                            color: selected ? Theme.accent : Theme.panelHi
-                            Label {
-                                id: unitText
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                color: parent.selected ? Theme.bg : Theme.text
-                                font.pixelSize: Theme.fontBody - 2
-                            }
-                            TapHandler { onTapped: page.metric = modelData.metric }
-                        }
-                    }
+                    options: [{ label: "mph, °F", value: false }, { label: "km/h, °C", value: true }]
+                    current: page.metric
+                    onPicked: (v) => page.metric = v
                 }
             }
         }
@@ -161,16 +116,21 @@ Item {
                 anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
                 width: pairText.width + 48
                 height: 56
-                radius: 28
-                color: bluetooth.pairing ? Theme.panelHi : Theme.accent
+                radius: Theme.radius
+                border.width: Theme.border
+                border.color: bluetooth.pairing ? Theme.line : Theme.accent
+                color: bluetooth.pairing ? (pairTap.pressed ? Theme.line : Theme.panelHi)
+                                         : (pairTap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent)
+                scale: pairTap.pressed ? 0.97 : 1
                 Label {
                     id: pairText
                     anchors.centerIn: parent
-                    text: bluetooth.pairing ? "Stop" : "Pair phone"
+                    text: bluetooth.pairing ? "Stop pairing" : "Pair phone"
                     color: bluetooth.pairing ? Theme.text : Theme.bg
                     font.pixelSize: Theme.fontBody - 2
+                    font.weight: Font.DemiBold
                 }
-                TapHandler { onTapped: bluetooth.setPairing(!bluetooth.pairing) }
+                TapHandler { id: pairTap; onTapped: bluetooth.setPairing(!bluetooth.pairing) }
             }
         }
 

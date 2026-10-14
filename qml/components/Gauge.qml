@@ -197,8 +197,13 @@ Card {
                     continue  // unlit blocks are already on the face
                 // Lit blocks only turn red when the reading itself is out of
                 // range; the warning zones just tint their unlit blocks.
+                // The redline's unlit blocks are a dim red so the zone reads
+                // as red, not brown.
+                var w = Theme.warn
                 ctx.strokeStyle = on ? "" + (g.warning ? Theme.warn : Theme.accent)
-                                     : "" + (hot ? Theme.accentDim : Theme.panelHi)
+                                     : (hot ? "rgba(" + Math.round(w.r * 255) + "," + Math.round(w.g * 255) + ","
+                                              + Math.round(w.b * 255) + ",0.3)"
+                                            : "" + Theme.panelHi)
                 var a = g.startAngle + i * (segA + gapA)
                 ctx.beginPath()
                 ctx.arc(dial.cx, dial.cx, dial.r - 4, a, a + segA, false)
@@ -256,11 +261,8 @@ Card {
         }
     }
 
-    Label {
+    Legend {
         anchors { horizontalCenter: dial.horizontalCenter; bottom: dial.bottom; bottomMargin: 4 }
-        text: g.label.toUpperCase()
-        color: Theme.textDim
-        font.pixelSize: Theme.fontSmall - 2
-        font.letterSpacing: 2
+        text: g.label
     }
 }

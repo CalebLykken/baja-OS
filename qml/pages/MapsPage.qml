@@ -1,7 +1,7 @@
 import QtQuick
 import "../components"
 
-// Placeholder for CarPlay. The Carlinkit dongle's video will render here.
+// Placeholder until the offline map lands (docs/ROADMAP.md).
 Item {
     id: page
     signal navigate(int index)
@@ -14,19 +14,19 @@ Item {
             spacing: 14
             Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
-                name: "navigation"
-                color: Theme.accent
+                name: "map"
+                color: Theme.textDim
                 size: 108
             }
             Label {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "CarPlay not connected"
-                color: Theme.text
+                text: "The offline map is coming next"
                 font.pixelSize: Theme.fontTitle
+                font.weight: Font.DemiBold
             }
             Label {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Plug in the Carlinkit adapter and your iPhone"
+                text: "Seattle first, working without signal, then GPS and directions"
                 color: Theme.textDim
                 font.pixelSize: Theme.fontBody
             }

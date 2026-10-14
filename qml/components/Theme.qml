@@ -74,9 +74,14 @@ QtObject {
     readonly property int gap: 14
     readonly property int touch: 76   // minimum tap target, ~15 mm on this panel
 
-    // Big, legible type for arm's-length reading in daylight.
-    readonly property int fontSmall: 16
-    readonly property int fontBody: 22
-    readonly property int fontTitle: 30
+    // Type scale (docs/DESIGN.md). Big, legible type for arm's-length
+    // reading in daylight; nothing else should invent a size.
+    readonly property int fontLegend: 15      // instrument legends: caps, DemiBold, tracked
+    readonly property real legendTracking: 2
+    readonly property int fontSmall: 16       // times, units, secondary lines
+    readonly property int fontBody: 22        // artists, list rows, settings text
+    readonly property int fontTitle: 30       // page and card titles, Home track title
+    readonly property int fontHero: 40        // the Music page track title
+    readonly property int fontReadout: 40     // readout numerals
     readonly property int fontHuge: 64
 }

@@ -19,9 +19,8 @@ at 100% while they play. Local music uses the Pi's output volume via
 PipeWire's `wpctl` (or the player's own volume where wpctl doesn't exist,
 e.g. on a Mac).
 
-It also derives an accent colour and a pre-blurred backdrop from the
-current album art for the Music page; Spotify covers are downloaded and
-cached first.
+It also prepares the current cover as a rounded square for the album-art
+frame; Spotify covers are downloaded and cached first.
 """
 
 import hashlib
@@ -33,42 +32,18 @@ import time
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QRect, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QRadialGradient
+from PyQt6.QtCore import QObject, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 PHONE_RECONNECT_GRACE_S = 10
 
 
-def _soft_glow(img, out):
-    """The cover shrunk to a blur, faded out towards its edges: a soft halo
-    to sit behind the album art. A plain image can't fade its own edges in
-    QML without the effects module, so it's baked here once per cover."""
-    n = 64
-    small = img.scaled(n, n, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                       Qt.TransformationMode.SmoothTransformation)
-    small = small.copy((small.width() - n) // 2, (small.height() - n) // 2, n, n)
-    tiny = small.scaled(12, 12, Qt.AspectRatioMode.IgnoreAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-    glow = QImage(n, n, QImage.Format.Format_ARGB32_Premultiplied)
-    glow.fill(Qt.GlobalColor.transparent)
-    p = QPainter(glow)
-    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    p.drawImage(QRect(0, 0, n, n), tiny)                 # blur by up-scaling
-    fade = QRadialGradient(n / 2, n / 2, n / 2)
-    fade.setColorAt(0.0, QColor(0, 0, 0, 255))
-    fade.setColorAt(0.6, QColor(0, 0, 0, 170))
-    fade.setColorAt(1.0, QColor(0, 0, 0, 0))
-    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-    p.fillRect(glow.rect(), QBrush(fade))
-    p.end()
-    glow.save(str(out))
-
-
-def _rounded_card(img, out, size=600, radius_frac=0.06):
-    """The cover centre-cropped to a square with rounded corners, like a
-    record sleeve. Baked here because QML can't round an image's corners
-    without the effects module."""
+def _rounded_card(img, out, size=600, radius_frac=0.014):
+    """The cover centre-cropped to a square with slightly rounded corners,
+    ready to show as a framed print (AlbumArt.qml draws the border). Baked
+    here because QML can't round an image's corners without the effects
+    module."""
     sq = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation)
     sq = sq.copy((sq.width() - size) // 2, (sq.height() - size) // 2, size, size)
@@ -85,36 +60,17 @@ def _rounded_card(img, out, size=600, radius_frac=0.06):
     card.save(str(out))
 
 
-def art_derivatives(url):
-    """(accent colour, blurred backdrop URL, soft glow URL, rounded cover URL)
-    for an art file URL, or four ''."""
+def art_card(url):
+    """A file URL of the cover as a rounded square, or '' if it can't load."""
     path = QUrl(url).toLocalFile() if url else ""
     img = QImage(path) if path else QImage()
     if img.isNull():
-        return "", "", "", ""
-    # Averaging down to one pixel gives the dominant tone; nudge it so it
-    # reads as a colour on the dark UI rather than mud.
-    c = img.scaled(1, 1, Qt.AspectRatioMode.IgnoreAspectRatio,
-                   Qt.TransformationMode.SmoothTransformation).pixelColor(0, 0)
-    h, s, v, _ = c.getHsvF()
-    accent = QColor.fromHsvF(max(h, 0.0), min(1.0, s * 1.4 + 0.15), max(0.55, v)).name()
-    # A tiny image scaled up smoothly by the GPU looks like a heavy blur, at
-    # no runtime cost.
+        return ""
     ART_CACHE.mkdir(exist_ok=True)
-    key = hashlib.sha1(path.encode()).hexdigest()
-    out = ART_CACHE / (key + "-blur.png")
+    out = ART_CACHE / (hashlib.sha1(path.encode()).hexdigest() + "-card.png")
     if not out.exists():
-        img.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                   Qt.TransformationMode.SmoothTransformation).save(str(out))
-    glow = ART_CACHE / (key + "-glow.png")
-    if not glow.exists():
-        _soft_glow(img, glow)
-    card = ART_CACHE / (key + "-card.png")
-    if not card.exists():
-        _rounded_card(img, card)
-    return (accent, QUrl.fromLocalFile(str(out)).toString(),
-            QUrl.fromLocalFile(str(glow)).toString(),
-            QUrl.fromLocalFile(str(card)).toString())
+        _rounded_card(img, out)
+    return QUrl.fromLocalFile(str(out)).toString()
 
 
 def cached_art(url):
@@ -136,7 +92,7 @@ class MediaHub(QObject):
     volumeChanged = pyqtSignal()
     sourceChanged = pyqtSignal()
     queueChanged = pyqtSignal()
-    _artReady = pyqtSignal(str, str, str, str, str, str)   # source, art, accent, blur, glow, card
+    _artReady = pyqtSignal(str, str, str)   # source, art url, rounded card url
 
     def __init__(self, local, phone, spotify, volume=40, parent=None):
         super().__init__(parent)
@@ -144,7 +100,7 @@ class MediaHub(QObject):
         self._source = "local"
         self._system_volume = bool(shutil.which("wpctl"))
         self._volume = max(0, min(100, int(volume)))
-        self._art = {}                  # source -> (art, accent, blur, glow, card)
+        self._art = {}                  # source -> (art url, rounded card url)
         self._phone_connected_at = 0.0
         self._phone_name = phone.deviceName
 
@@ -233,31 +189,31 @@ class MediaHub(QObject):
     def _update_art(self, name):
         url = self._sources[name].art
         if name == "local":
-            self._apply_art(name, url, *art_derivatives(url))
+            self._apply_art(name, url, art_card(url))
             return
         if not url:
-            self._apply_art(name, "", "", "", "", "")
+            self._apply_art(name, "", "")
             return
 
         def work():
             try:
                 local = cached_art(url)
-                derived = art_derivatives(local)
-            except Exception:          # offline, bad URL: keep the remote URL
-                local, derived = url, ("", "", "", "")
+                card = art_card(local)
+            except Exception:          # offline, bad URL: no cover for now
+                local, card = url, ""
             try:
-                self._artReady.emit(name, local, *derived)
+                self._artReady.emit(name, local, card)
             except RuntimeError:       # app shutting down; nothing to update
                 pass
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_art(self, name, url, accent, blur, glow, card):
-        self._art[name] = (url, accent, blur, glow, card)
+    def _apply_art(self, name, url, card):
+        self._art[name] = (url, card)
         if name == self._source:
             self.trackChanged.emit()
 
     def _art_field(self, i):
-        return self._art.get(self._source, ("", "", "", "", ""))[i]
+        return self._art.get(self._source, ("", ""))[i]
 
     # ---- volume -----------------------------------------------------------
     def _apply_volume(self):
@@ -295,24 +251,9 @@ class MediaHub(QObject):
         return self._art_field(0)
 
     @pyqtProperty(str, notify=trackChanged)
-    def artColor(self):
-        """Accent colour taken from the album art, or '' when there's none."""
-        return self._art_field(1)
-
-    @pyqtProperty(str, notify=trackChanged)
-    def artBlur(self):
-        """Blurred album art for page backdrops, or ''."""
-        return self._art_field(2)
-
-    @pyqtProperty(str, notify=trackChanged)
     def artCard(self):
-        """The cover as a rounded square, ready to show, or ''."""
-        return self._art_field(4)
-
-    @pyqtProperty(str, notify=trackChanged)
-    def artGlow(self):
-        """Soft, edge-faded halo of the album art, or ''."""
-        return self._art_field(3)
+        """The cover as a rounded square, ready for the album-art frame, or ''."""
+        return self._art_field(1)
 
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):

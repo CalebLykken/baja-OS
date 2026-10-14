@@ -13,5 +13,7 @@ Splash 1.0 Splash.qml
 Icon 1.0 Icon.qml
 PageHost 1.0 PageHost.qml
 AlbumArt 1.0 AlbumArt.qml
-ArtBackdrop 1.0 ArtBackdrop.qml
 SourceBadge 1.0 SourceBadge.qml
+Legend 1.0 Legend.qml
+LevelBar 1.0 LevelBar.qml
+SegmentedControl 1.0 SegmentedControl.qml

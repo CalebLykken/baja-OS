@@ -1,6 +1,6 @@
 import QtQuick
 
-// Compact numeric readout: label on top, big value with unit below.
+// Compact numeric readout: a legend on top, a big value with its unit below.
 Column {
     id: r
     property string label
@@ -10,26 +10,22 @@ Column {
 
     spacing: 2
 
-    Label {
-        text: r.label.toUpperCase()
-        color: Theme.textDim
-        font.pixelSize: Theme.fontSmall - 3
-        font.letterSpacing: 1.5
-    }
+    Legend { text: r.label }
     Row {
-        spacing: 4
+        spacing: 6
         Label {
+            id: num
             numeric: true
             text: r.value
             color: r.warning ? Theme.warn : Theme.text
-            font.pixelSize: 40
+            font.pixelSize: Theme.fontReadout
             font.weight: Theme.numWeight
         }
         Label {
             text: r.unit
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall
-            anchors.baseline: parent.children[0].baseline
+            anchors.baseline: num.baseline
         }
     }
 }

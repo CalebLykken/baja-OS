@@ -2,7 +2,7 @@
 """Baja carputer dashboard: entry point.
 
 Runs the QML interface with mock vehicle and media data so the UI can be
-built and tested before real OBD-II, CarPlay and audio hardware is wired in.
+built and tested before real OBD-II and audio hardware is wired in.
 
     python3 main.py               # 1280x800 window (Mac / desktop)
     python3 main.py --fullscreen  # full screen (the Pi in the car)

@@ -1,25 +1,29 @@
 import QtQuick
 
-// Round touch button for transport controls (prev / play / next).
+// A switch-panel key: a rounded square with the style's border, an icon, and
+// a little travel when pressed. `primary` makes it the screen's one main key
+// (accent fill). Used for transport, volume and brightness.
 Rectangle {
     id: btn
     property string icon     // a name from Icon.qml
     property bool primary: false
-    property color fill: Theme.accent     // primary button colour (e.g. from album art)
     property int size: Theme.touch
     signal clicked()
 
     width: size
     height: size
-    radius: size / 2
-    color: primary ? (tap.pressed ? Qt.darker(fill, 1.3) : fill)
+    radius: Theme.radius
+    border.width: Theme.border
+    border.color: primary ? Theme.accent : Theme.line
+    color: primary ? (tap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent)
                    : (tap.pressed ? Theme.line : Theme.panelHi)
-    Behavior on color { ColorAnimation { duration: 400 } }
+    scale: tap.pressed ? 0.97 : 1
+    Behavior on scale { NumberAnimation { duration: 70 } }
 
     Icon {
         anchors.centerIn: parent
         name: btn.icon
-        size: btn.size * 0.5
+        size: btn.size * 0.46
         color: btn.primary ? Theme.bg : Theme.text
     }
 

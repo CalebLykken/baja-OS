@@ -1,42 +1,38 @@
 import QtQuick
 
-// Album art with rounded corners and a soft glow in the cover's own colours.
-//
-// Both images are prepared in Python (backend/hub.py) when the cover
-// changes: `source` is the cover cropped square with rounded corners
-// (media.artCard), `glowSource` is a soft, edge-faded halo of it
-// (media.artGlow) drawn larger behind. QML can't round or feather an image
-// without the effects module, so baking them keeps this to two plain
-// Images. With no cover, it shows a placeholder icon.
+// The album cover as a framed print sitting on the card: square, the style's
+// radius and border, and a hard offset shadow like a decal on a map. Matte,
+// no glow (docs/DESIGN.md). The cover arrives pre-cropped with rounded
+// corners from Python (media.artCard), since QML can't round an image's
+// corners without the effects module. With no cover, a quiet tile with an
+// icon stands in.
 Item {
     id: root
     property string source                 // rounded cover (media.artCard)
-    property string glowSource             // soft halo (media.artGlow)
     property string placeholder: "music"   // Icon name when there's no cover
 
     readonly property bool hasArt: cover.status === Image.Ready
 
-    Image {
-        anchors.centerIn: parent
-        width: parent.width * 1.45
-        height: parent.height * 1.45
-        source: root.glowSource
-        fillMode: Image.PreserveAspectCrop
-        smooth: true
-        opacity: root.hasArt && root.glowSource !== "" ? 0.55 : 0
-        Behavior on opacity { NumberAnimation { duration: 400 } }
+    // Hard offset shadow.
+    Rectangle {
+        x: 6; y: 8
+        width: parent.width; height: parent.height
+        radius: Theme.radius
+        color: Qt.darker(Theme.bg, 1.8)
+        opacity: 0.7
     }
 
+    // No cover: a quiet tile, not an accent.
     Rectangle {
         anchors.fill: parent
-        radius: width * 0.06
-        color: Theme.accentDim
+        radius: Theme.radius
+        color: Theme.panelHi
         visible: !root.hasArt
         Icon {
             anchors.centerIn: parent
             name: root.placeholder
-            color: Theme.accent
-            size: parent.width * 0.42
+            color: Theme.textDim
+            size: parent.width * 0.4
         }
     }
 
@@ -49,14 +45,14 @@ Item {
         asynchronous: true
         smooth: true
         mipmap: true
-        // A gentle scale-in when a new cover arrives.
-        onStatusChanged: if (status === Image.Ready) bump.restart()
-        NumberAnimation on scale {
-            id: bump
-            running: false
-            from: 0.94; to: 1.0
-            duration: 380
-            easing.type: Easing.OutBack
-        }
+    }
+
+    // The frame.
+    Rectangle {
+        anchors.fill: parent
+        radius: Theme.radius
+        color: "transparent"
+        border.width: Theme.border
+        border.color: Theme.line
     }
 }

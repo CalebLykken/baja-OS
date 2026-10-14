@@ -34,11 +34,10 @@ Item {
                 size: 34
                 color: btn.active ? Theme.accent : Theme.textDim
             }
-            Label {
+            Legend {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: btn.label.toUpperCase()
-                font.pixelSize: 13
-                font.letterSpacing: 1.5
+                text: btn.label
+                font.letterSpacing: 1        // tighter so SETTINGS fits the rail
                 color: btn.active ? Theme.text : Theme.textDim
             }
         }

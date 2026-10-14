@@ -67,11 +67,15 @@ All card content is inset 20 px. Gutters between cards are 14 px.
 ```
 Home
 ┌─────────────────────────────────────┐ ┌──────────────────────┐
-│ ┌──────────┐  Spotify               │ │  Maps                │
-│ │  cover   │  make it to the end    │ │                      │
-│ │  (print) │  Forrest Nolan         │ │  Offline map is      │
-│ └──────────┘  ▬▬▬▬▬▬▬▬▬▭▭▭  2:43 3:31 │ │  coming next         │
-│               [⏮] [ ⏸ ] [⏭]          │ │                      │
+│ ┌──────────┐                        │ │                      │
+│ │          │  Spotify               │ │        [map]         │
+│ │  cover   │  make it to the end    │ │        Maps          │
+│ │  (print) │  Forrest Nolan         │ │  An offline map of   │
+│ │          │                        │ │  Seattle is coming   │
+│ └──────────┘                        │ │  next                │
+│ ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▭▭▭▭▭▭▭▭▭▭▭▭▭▭▭ │ │                      │
+│ 2:43                           3:31 │ │                      │
+│          [⏮]  [ ⏸ ]  [⏭]            │ │                      │
 └─────────────────────────────────────┘ └──────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ BOOST -5.9 psi   COOLANT 140 °F   BATTERY 14.3 V   SPEED 34   │

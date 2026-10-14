@@ -27,7 +27,7 @@ Item {
 
     View3D {
         id: view
-        anchors.fill: parent
+        anchors { left: parent.left; right: parent.right; top: parent.top; bottom: readouts.top }
 
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Transparent
@@ -100,7 +100,7 @@ Item {
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
 
-    // Title, plus a few live readouts along the bottom.
+    // The truck's name, plus a few live readouts in the same strip as Home.
     Column {
         anchors { left: parent.left; top: parent.top; leftMargin: 8; topMargin: 4 }
         spacing: 2
@@ -116,19 +116,27 @@ Item {
         }
     }
 
-    RowLayout {
-        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 8; rightMargin: 8 }
-        Readout { Layout.fillWidth: true; label: "Speed"; value: Math.round(vehicle.speed); unit: "mph" }
-        Readout { Layout.fillWidth: true; label: "Gear"; value: vehicle.gear; unit: "" }
-        Readout {
-            Layout.fillWidth: true
-            label: "Boost"; value: vehicle.boost.toFixed(1); unit: "psi"
-            warning: vehicle.boost > 15
-        }
-        Readout {
-            Layout.fillWidth: true
-            label: "Coolant"; value: Math.round(vehicle.coolant); unit: "°F"
-            warning: vehicle.coolant > 230
+    Card {
+        id: readouts
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: 128
+
+        RowLayout {
+            anchors { fill: parent; margins: 20 }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: Math.round(vehicle.speed); unit: "mph" }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.gear; unit: "" }
+            Readout {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 1
+                label: "Boost"; value: vehicle.boost.toFixed(1); unit: "psi"
+                warning: vehicle.boost > 15
+            }
+            Readout {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 1
+                label: "Coolant"; value: Math.round(vehicle.coolant); unit: "°F"
+                warning: vehicle.coolant > 230
+            }
         }
     }
 }

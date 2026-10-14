@@ -2,19 +2,10 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// At-a-glance screen: now playing, the maps tile, and the key readouts,
-// over a blurred copy of the current album art.
+// At-a-glance screen: the music card, the maps tile, and the key readouts.
 Item {
     id: page
     signal navigate(int index)
-
-    readonly property real glass: backdrop.active ? 0.5 : 0
-
-    ArtBackdrop {
-        id: backdrop
-        anchors.fill: parent
-        strength: 0.45
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -29,7 +20,6 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 3
-                glass: page.glass
                 onOpenMusic: page.navigate(1)
             }
 
@@ -37,31 +27,32 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 2
-                heading: "Maps"
-                glass: page.glass
                 tappable: true
                 onTapped: page.navigate(2)
 
                 Column {
-                    anchors.centerIn: parent
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 20 }
                     spacing: 10
                     Icon {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        name: "navigation"
-                        color: Theme.accent
+                        name: "map"
+                        color: Theme.textDim
                         size: 64
                     }
                     Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "CarPlay"
-                        color: Theme.text
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        text: "Maps"
                         font.pixelSize: Theme.fontTitle
+                        font.weight: Font.DemiBold
                     }
                     Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "Connect iPhone to start"
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        text: "An offline map of Seattle\nis coming next"
                         color: Theme.textDim
-                        font.pixelSize: Theme.fontSmall
+                        font.pixelSize: Theme.fontBody
                     }
                 }
             }
@@ -70,14 +61,14 @@ Item {
         Card {
             Layout.fillWidth: true
             Layout.preferredHeight: 128
-            glass: page.glass
             tappable: true
             onTapped: page.navigate(3)
 
             RowLayout {
-                anchors { fill: parent; leftMargin: 28; rightMargin: 28 }
+                anchors { fill: parent; margins: 20 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                     label: "Boost"
                     value: vehicle.boost.toFixed(1)
                     unit: "psi"
@@ -85,6 +76,7 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                     label: "Coolant"
                     value: Math.round(vehicle.coolant)
                     unit: "°F"
@@ -92,6 +84,7 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                     label: "Battery"
                     value: vehicle.voltage.toFixed(1)
                     unit: "V"
@@ -99,6 +92,7 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1
                     label: "Speed"
                     value: Math.round(vehicle.speed)
                     unit: "mph"

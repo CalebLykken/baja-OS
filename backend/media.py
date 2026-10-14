@@ -1,7 +1,7 @@
 """Media playback exposed to the UI.
 
 `MediaPlayer` fakes a playlist so the music screens have something to show.
-Later this becomes a real player (MPD, a Bluetooth/AirPlay sink, or CarPlay
+Later this becomes a real player (MPD, a Bluetooth/AirPlay sink, or Spotify
 audio metadata), and `volumeUp`/`volumeDown` get wired to the dash knob.
 """
 

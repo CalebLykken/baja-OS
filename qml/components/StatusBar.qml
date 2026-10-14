@@ -33,14 +33,13 @@ Item {
         Rectangle {
             visible: typeof demoMode !== "undefined" && demoMode
             anchors.verticalCenter: parent.verticalCenter
-            width: demoText.width + 20; height: 28; radius: 14
+            width: demoText.width + 20; height: 30; radius: Theme.radius
             color: Theme.accentDim
-            Label {
+            Legend {
                 id: demoText
                 anchors.centerIn: parent
-                text: "DEMO DATA"
+                text: "Demo data"
                 color: Theme.accent
-                font.pixelSize: 12
                 font.letterSpacing: 1.5
             }
         }

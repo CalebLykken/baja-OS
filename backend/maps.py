@@ -16,6 +16,7 @@ Run it on its own to work on the map in a desktop browser:
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
+
+from backend import places
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = Path(os.environ.get("BAJA_MAPS_DIR", "~/.local/share/baja-os/maps")).expanduser()
@@ -120,13 +123,32 @@ def make_server(data_dir, port=0):
     return server
 
 
+# Plain words for the map's feature kinds where the tag isn't one.
+KIND_WORDS = {
+    "doityourself": "Hardware store", "fast_food": "Fast food", "locality": "Town",
+    "macrohood": "District", "neighbourhood": "Neighbourhood", "place_of_worship": "Place of worship",
+    "wholesale": "Warehouse store", "fuel": "Gas station", "charging_station": "EV charging",
+    "car_repair": "Car repair", "car_wash": "Car wash", "parking": "Parking",
+    "parking_entrance": "Parking", "stop": "Transit stop", "station": "Station",
+    "townhall": "Town hall", "social_facility": "Social services", "pitch": "Sports field",
+}
+
+
+def _describe(kind, area):
+    """'Park in Eastlake', 'Street in Belltown', 'Neighbourhood'."""
+    words = KIND_WORDS.get(kind, kind.replace("_", " ").capitalize())
+    return f"{words} in {area}" if area else words
+
+
 class MapService(QObject):
     """What QML needs for the Maps page: the page URL and whether a map is
     installed. `webEngine` says whether Qt WebEngine could be loaded at all.
     `update()` re-runs install-map.sh to fetch fresh OpenStreetMap data."""
 
     changed = pyqtSignal()
+    resultsChanged = pyqtSignal()
     _progress = pyqtSignal(str, bool)      # message, still running
+    _found = pyqtSignal(str, object)       # query, results
 
     def __init__(self, data_dir=DEFAULT_DATA_DIR, web_engine=False, parent=None):
         super().__init__(parent)
@@ -136,7 +158,10 @@ class MapService(QObject):
         self._info = {}
         self._updating = False
         self._update_message = ""
+        self._query = ""
+        self._results = []
         self._progress.connect(self._on_progress)
+        self._found.connect(self._on_found)
         self.refresh()
 
     def start(self):
@@ -172,7 +197,8 @@ class MapService(QObject):
             if bbox:
                 env.update(BBOX=bbox, REGION=self._info.get("region", "Seattle area"))
             steps = {"Getting the pmtiles": "Getting the download tool",
-                     "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons"}
+                     "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons",
+                     "Indexing places": "Indexing places for search"}
             try:
                 proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -193,6 +219,43 @@ class MapService(QObject):
             self._updating = False
             self.refresh()
         self.changed.emit()
+
+    # ---- place search -------------------------------------------------------
+    @pyqtSlot(str, float, float)
+    def search(self, text, lon, lat):
+        """Look `text` up in the offline place index, nearest to (lon, lat)
+        among equally good matches (0, 0 for no position)."""
+        self._query = text
+        if not text.strip():
+            self._on_found(text, [])
+            return
+        index = self._data_dir / places.INDEX_NAME
+        near = (lon, lat) if (lon or lat) else None
+
+        def work():
+            try:
+                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+                rows = places.search(db, text, near=near)
+                db.close()
+            except sqlite3.Error:
+                rows = []
+            self._found.emit(text, rows)
+        threading.Thread(target=work, name="place-search", daemon=True).start()
+
+    def _on_found(self, text, rows):
+        if text != self._query:
+            return                          # an older search finishing late
+        self._results = [dict(r, label=_describe(r["kind"], r["area"])) for r in rows]
+        self.resultsChanged.emit()
+
+    @pyqtProperty("QVariantList", notify=resultsChanged)
+    def results(self):
+        """[{name, label, lon, lat, distance (m, or -1)}] for the last search."""
+        return self._results
+
+    @pyqtProperty(bool, notify=changed)
+    def canSearch(self):
+        return (self._data_dir / places.INDEX_NAME).is_file()
 
     @pyqtProperty(bool, notify=changed)
     def updating(self):

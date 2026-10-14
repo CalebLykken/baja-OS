@@ -12,6 +12,10 @@
   /* The truck: an arrow in the accent colour, lying flat on the map. */
   .puck { width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.55)); }
   .puck path { fill: var(--accent, #ff7a1a); stroke: var(--bg, #14160f); stroke-width: 3; stroke-linejoin: round; }
+  /* A searched-for place: a pin in the accent colour. */
+  .pin { width: 44px; height: 56px; filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.55)); }
+  .pin path { fill: var(--accent, #ff7a1a); stroke: var(--bg, #14160f); stroke-width: 1.2; }
+  .pin circle { fill: var(--bg, #14160f); }
 </style>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>

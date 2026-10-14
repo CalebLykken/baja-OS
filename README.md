@@ -29,7 +29,9 @@ backend/hub.py       one `media` object over local files, the phone and Spotify
 backend/library.py   plays real files from --music-dir (default ~/Music)
 backend/bluetooth.py phone audio over Bluetooth (BlueZ, AVRCP)
 backend/spotify.py   Spotify Connect through Soloist's local API
-backend/maps.py      local web server for the offline map
+backend/maps.py      local web server for the offline map, and place search
+backend/places.py    builds and searches the offline place index
+backend/gps.py       position from gpsd, or a simulated drive in demo mode
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
 backend/system.py    temperature, fan, power warnings, restart and power
@@ -109,7 +111,9 @@ down from the dashboard need the polkit rule that `setup-pi.sh` installs.
 
 This cuts the Seattle area (Tacoma to Everett, Bremerton to North Bend) out of
 Protomaps' daily OpenStreetMap build, with the label fonts and icons, into
-`~/.local/share/baja-os/maps`. After that the map needs no internet. Set
+`~/.local/share/baja-os/maps`, then indexes every named place, business and
+street in it for the search key on the Maps page (`backend/places.py`). After
+that the map and search need no internet. Set
 `REGION` and `BBOX` for a different area (the script shows how). The map is
 MapLibre GL JS in Qt WebEngine, coloured from the current style, and starts the
 first time the Maps page opens.

@@ -88,7 +88,7 @@ class Gps(QObject):
         self._vehicle = vehicle
         self._demo = demo
         self._fix = None                 # dict: lat, lon, speed (m/s), heading, source
-        self._real_at = 0.0              # when the last real fix arrived
+        self._real_at = None             # when the last real fix arrived (monotonic)
         self._gpsd = False               # connected to gpsd
         self._report.connect(self._apply)
         self._route = None
@@ -133,8 +133,11 @@ class Gps(QObject):
             time.sleep(5)
 
     # ---- the simulated drive ----------------------------------------------------
+    def _real_fresh(self):
+        return self._real_at is not None and time.monotonic() - self._real_at < STALE_S
+
     def _demo_tick(self):
-        if time.monotonic() - self._real_at < STALE_S:
+        if self._real_fresh():
             return                           # a real fix wins
         mph = self._vehicle.speed if self._vehicle is not None else 30.0
         speed = mph * MPH_TO_MS
@@ -161,7 +164,7 @@ class Gps(QObject):
     def hasFix(self):
         if not self._fix:
             return False
-        return self._fix["source"] == "demo" or time.monotonic() - self._real_at < STALE_S
+        return self._fix["source"] == "demo" or self._real_fresh()
 
     @pyqtProperty(float, notify=changed)
     def lat(self):

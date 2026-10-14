@@ -289,6 +289,29 @@ function startFollowing(animate) {
     }
 }
 
+// ---- a searched-for place ----------------------------------------------------
+
+const pin = document.createElement("div");
+pin.className = "pin";
+pin.innerHTML = '<svg viewBox="0 0 22 28" width="44" height="56"><path d="M11 1C5.5 1 1 5.4 1 10.9 1 18.3 11 27 11 27s10-8.7 10-16.1C21 5.4 16.5 1 11 1z"/><circle cx="11" cy="10.5" r="3.6"/></svg>';
+const pinMarker = new maplibregl.Marker({ element: pin, anchor: "bottom" });
+
+function showPlace(lon, lat) {
+    touched = true;
+    setFollowing(false);
+    pinMarker.setLngLat([lon, lat]).addTo(map);
+    // Drop follow mode's offset first, or it adds to the framing margins.
+    map.jumpTo({ padding: { top: 0, bottom: 0, left: 0, right: 0 } });
+    const flat = { bearing: 0, pitch: 0, padding: { top: 130, bottom: 80, left: 80, right: 120 } };
+    if (shown) {
+        // Show the truck and the place together, so you can see which way it is.
+        const b = new maplibregl.LngLatBounds([shown.lon, shown.lat], [shown.lon, shown.lat]).extend([lon, lat]);
+        map.fitBounds(b, { ...flat, maxZoom: 16, duration: 1400 });
+    } else {
+        map.flyTo({ center: [lon, lat], zoom: 15.5, ...flat, duration: 1400 });
+    }
+}
+
 // Touching the map takes over from follow mode; the follow key gives it back.
 for (const ev of ["dragstart", "rotatestart", "pitchstart", "zoomstart"]) {
     map.on(ev, (e) => {
@@ -363,6 +386,8 @@ window.baja = {
         map.setStyle(styleFor(theme));
     },
     setPosition,
+    showPlace,
+    clearPlace() { pinMarker.remove(); },
     // While following, the zoom keys nudge the follow zoom instead of
     // breaking out of follow mode.
     zoomIn() {

@@ -192,6 +192,10 @@ phone locked; the dashboard controls work; it comes back after a reboot.
 - **Routing:** Valhalla on the Pi, with routing data for Washington (and maybe
   Oregon, Idaho and BC) built on the Mac using the same version.
 - **Destinations:**
+  - Done: offline search of everything named in the map (about 51,000
+    businesses and places plus every street, indexed in 16 s on the Pi,
+    searches in under 20 ms), with results ranked by name match and
+    distance, a pin, and the truck and the place framed together.
   - Saved places (home, work) and recent places.
   - Offline address and place search, from an index built on the Mac.
   - "Send to Baja": share a place from the phone.

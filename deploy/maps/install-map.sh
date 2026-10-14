@@ -10,6 +10,7 @@
 # Files go in $BAJA_MAPS_DIR (default ~/.local/share/baja-os/maps):
 #   basemap.pmtiles   the map tiles
 #   region.json       what's in it (shown on the Maps page)
+#   places.sqlite     names and positions for the offline search
 #   fonts/, sprites/  label glyphs and icons
 set -eu
 
@@ -87,5 +88,10 @@ json.dump({"region": region, "bbox": [float(v) for v in bbox.split(",")],
            "build": build.removesuffix(".pmtiles"), "maxzoom": int(maxzoom)},
           open(path, "w"), indent=2)
 EOF
+
+# The offline place search reads names out of the new map.
+echo "Indexing places for search..."
+APP=$(cd "$(dirname "$0")/../.." && pwd)
+(cd "$APP" && python3 -m backend.places build "$MAPS_DIR")
 
 echo "Done: $(du -sh "$MAPS_DIR/basemap.pmtiles" | cut -f1) map of $REGION in $MAPS_DIR"

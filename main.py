@@ -109,7 +109,9 @@ def main():
                      max_volume=settings.get_int("maxVolume", 100))
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
-    display = Display()
+    # Day/night brightness follows the sun where the truck is (Seattle
+    # until the GPS has a position).
+    display = Display(settings, location=lambda: (gps.lat, gps.lon) if gps.hasFix else (47.6062, -122.3321))
     network = Network()
     maps = MapService(args.maps_dir, web_engine)
     eq = Equalizer(settings)
@@ -159,6 +161,7 @@ def main():
     system.start()
     gps.start()
     routing.start()
+    display.start()
     network.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()

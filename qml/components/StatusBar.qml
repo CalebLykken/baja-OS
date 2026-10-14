@@ -62,7 +62,7 @@ Item {
         color: Theme.text
         font.pixelSize: Theme.fontTitle
         property date now: new Date()
-        text: Qt.formatTime(now, Units.timeFormat)
+        text: Units.timeText(now)
         Timer {
             interval: 5000; running: true; repeat: true
             onTriggered: clock.now = new Date()

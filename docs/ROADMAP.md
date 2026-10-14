@@ -43,7 +43,9 @@ system health and power, about) with working units and clock options.
 Known issues:
 
 - **Brightness:** only software dimming on the Pi 5. The backlight stays fully
-  on, so the screen glows at night.
+  on, so the screen still glows a little at night. It does now dim by itself
+  after sunset (the sun's position where the truck is) to a saved night
+  level, and back to the daylight level after sunrise.
 - **No GPS receiver yet:** gpsd and the map are ready for the GT-U7; until it's
   plugged in, the map follows a simulated drive around Seattle.
 - **Vehicle data is simulated.**

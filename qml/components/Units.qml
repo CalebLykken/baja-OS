@@ -18,7 +18,14 @@ QtObject {
     readonly property string boostUnit: metric ? "bar" : "psi"
     readonly property int boostDecimals: metric ? 2 : 1
 
-    readonly property string timeFormat: clock24 ? "H:mm" : "h:mm"
+    // "6:25" in 12-hour (no AM/PM, like a car clock) or "18:25" in 24-hour.
+    // (Qt's "h:mm" alone is 24-hour, so 12-hour is done by hand.)
+    function timeText(date) {
+        if (clock24) return Qt.formatTime(date, "H:mm")
+        var h = date.getHours() % 12 || 12
+        var m = date.getMinutes()
+        return h + ":" + (m < 10 ? "0" : "") + m
+    }
 
     // Distances for directions: feet then miles, or metres then kilometres.
     function distanceText(m) {
@@ -32,5 +39,5 @@ QtObject {
         var min = Math.max(1, Math.round(s / 60))
         return min < 60 ? min + " min" : Math.floor(min / 60) + " h " + (min % 60) + " min"
     }
-    function arrivalText(s) { return Qt.formatTime(new Date(Date.now() + s * 1000), timeFormat) }
+    function arrivalText(s) { return timeText(new Date(Date.now() + s * 1000)) }
 }

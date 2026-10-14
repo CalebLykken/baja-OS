@@ -7,6 +7,11 @@ background thread so dragging the slider never stalls the UI.
 
 When there is no DDC/CI screen (a Mac, or a panel that ignores it),
 `hardware` is False and the QML dims with a black overlay instead.
+
+There are two saved levels, daylight and night, and with `autoNight` on
+the screen switches between them by the sun's position where the truck is
+(after sunset it uses the night level). The slider sets whichever level
+is in use.
 """
 
 import fcntl
@@ -15,12 +20,16 @@ import os
 import threading
 import time
 
-from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+
+from backend import sun
 
 I2C_SLAVE = 0x0703
 DDC_ADDR = 0x37
 VCP_BRIGHTNESS = 0x10
 DDC_DELAY = 0.05  # DDC/CI wants ~50 ms between a command and the next one
+SEATTLE = (47.6062, -122.3321)
+DUSK = -2.0       # sun this far below the horizon counts as night
 
 
 def find_ddc_bus():
@@ -69,9 +78,15 @@ class DdcBrightness:
 
 class Display(QObject):
     brightnessChanged = pyqtSignal()
+    nightChanged = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, settings=None, location=None, parent=None):
         super().__init__(parent)
+        self._settings = settings
+        self._location = location or (lambda: SEATTLE)
+        self._night = False
+        self._auto = settings is None or str(settings.get("autoNight", "true")) == "true"
+        self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
         self._brightness = 80
         self._ddc = None
         self._max = 100
@@ -92,6 +107,30 @@ class Display(QObject):
             threading.Thread(target=self._writer, daemon=True).start()
         else:
             self._brightness = 100  # software dimming starts undimmed
+        self._levels = {
+            False: self._saved("brightnessDay", self._brightness),
+            True: self._saved("brightnessNight", 40),
+        }
+
+    def _saved(self, key, default):
+        if self._settings is None:
+            return default
+        try:
+            return max(5, min(100, int(self._settings.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    def start(self):
+        self._check_sun(force=True)
+        self._sun_check.start()
+
+    def _check_sun(self, force=False):
+        lat, lon = self._location()
+        night = self._auto and sun.altitude(lat, lon) < DUSK
+        if night != self._night or force:
+            self._night = night
+            self._apply(self._levels[night])
+            self.nightChanged.emit()
 
     def _writer(self):
         # Only the newest value matters, so a burst of slider moves collapses
@@ -118,6 +157,12 @@ class Display(QObject):
     @pyqtSlot(int)
     def setBrightness(self, value):
         value = max(5, min(100, int(value)))
+        self._levels[self._night] = value
+        if self._settings is not None:
+            self._settings.set("brightnessNight" if self._night else "brightnessDay", value)
+        self._apply(value)
+
+    def _apply(self, value):
         if value == self._brightness:
             return
         self._brightness = value
@@ -126,3 +171,32 @@ class Display(QObject):
             with self._wake:
                 self._pending = value
                 self._wake.notify()
+
+    # ---- day and night ----------------------------------------------------------
+    @pyqtProperty(bool, notify=nightChanged)
+    def night(self):
+        """True while the night level is in use."""
+        return self._night
+
+    @pyqtProperty(bool, notify=nightChanged)
+    def autoNight(self):
+        return self._auto
+
+    @pyqtSlot(bool)
+    def setAutoNight(self, on):
+        if on != self._auto:
+            self._auto = on
+            if self._settings is not None:
+                self._settings.set("autoNight", "true" if on else "false")
+            self._check_sun(force=True)
+
+    @pyqtProperty(float, notify=nightChanged)
+    def sunrise(self):
+        """Today's sunrise where the truck is, in ms since 1970 (0 if none)."""
+        rise, _ = sun.rise_set(*self._location())
+        return rise.timestamp() * 1000 if rise else 0.0
+
+    @pyqtProperty(float, notify=nightChanged)
+    def sunset(self):
+        _, sset = sun.rise_set(*self._location())
+        return sset.timestamp() * 1000 if sset else 0.0

@@ -134,7 +134,8 @@ Item {
         Scroller {
             Section {
                 Layout.fillWidth: true
-                heading: display.hardware ? "Brightness" : "Brightness (software dim)"
+                heading: (display.night ? "Brightness at night" : "Brightness in daylight")
+                         + (display.hardware ? "" : " (software dim)")
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 16
@@ -153,6 +154,21 @@ Item {
                         font.weight: Font.DemiBold
                     }
                     IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
+                }
+                SettingRow {
+                    label: "Dim after sunset"
+                    SegmentedControl {
+                        options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                        current: display.autoNight
+                        onPicked: (v) => display.setAutoNight(v)
+                    }
+                }
+                Note {
+                    readonly property string rise: display.sunrise > 0 ? Units.timeText(new Date(display.sunrise)) : ""
+                    readonly property string set: display.sunset > 0 ? Units.timeText(new Date(display.sunset)) : ""
+                    text: display.autoNight
+                          ? "Daylight and night each keep their own level; the slider sets the one in use. Today the sun sets at " + set + " and rises at " + rise + " where the truck is."
+                          : "One level all the time."
                 }
             }
             Section {

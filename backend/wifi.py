@@ -21,6 +21,8 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 SCAN_EVERY_MS = 15000
 WATCH_EVERY_MS = 10000
 TETHER_AFTER_S = 45          # this long with no Wi-Fi before trying the phone
@@ -126,7 +128,7 @@ class Wifi(QObject):
         def work():
             control = can_control()
             nets = scan(rescan=control)
-            self._scanned.emit(nets, saved_connections(), control)
+            safe_emit(self, "_scanned", nets, saved_connections(), control)
         threading.Thread(target=work, daemon=True).start()
 
     def _ensure_hotspot_address(self):
@@ -172,7 +174,7 @@ class Wifi(QObject):
 
         def work():
             msg, ok = fn()
-            self._finished.emit(msg, ok)
+            safe_emit(self, "_finished", msg, ok)
         threading.Thread(target=work, daemon=True).start()
 
     def _on_finished(self, message, ok):

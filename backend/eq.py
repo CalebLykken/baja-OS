@@ -13,6 +13,8 @@ import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 NODE = "baja_eq"
 LIMIT = 12                  # dB either way
 # (filter node, label, centre frequency in Hz)
@@ -87,7 +89,7 @@ class Equalizer(QObject):
 
     # ---- talking to PipeWire ------------------------------------------------
     def _check(self):
-        threading.Thread(target=lambda: self._found.emit(node_id()), daemon=True).start()
+        threading.Thread(target=lambda: safe_emit(self, "_found", node_id()), daemon=True).start()
 
     def _on_found(self, nid):
         was = self._node

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
 
@@ -126,7 +128,7 @@ class SystemInfo(QObject):
         def work():
             used, total = memory_mb()
             disk = shutil.disk_usage("/")
-            self._read_done.emit({
+            safe_emit(self, "_read_done", {
                 "temp": cpu_temp(), "fan": fan_rpm(), "power": power_state(),
                 "memUsed": used, "memTotal": total,
                 "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,

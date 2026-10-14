@@ -19,6 +19,8 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 POLL_MS = 1000
 PAIRING_SECONDS = 120
 
@@ -137,7 +139,7 @@ class BluetoothAudio(QObject):
                 _busctl("set-property", "org.bluez", path, "org.bluez.Device1", "Trusted", "b", "true")
             except (OSError, subprocess.SubprocessError):
                 pass
-        self._polled.emit(state)
+        safe_emit(self, "_polled", state)
 
     def _apply(self, state):
         self._busy = False

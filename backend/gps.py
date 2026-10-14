@@ -16,6 +16,8 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
+from backend import safe_emit
+
 GPSD = ("127.0.0.1", 2947)
 ROUTE = Path(__file__).with_name("demo_route.json")
 EARTH_M = 6371000.0
@@ -116,7 +118,7 @@ class Gps(QObject):
                 with socket.create_connection(GPSD, timeout=5) as s:
                     s.sendall(b'?WATCH={"enable":true,"json":true}\n')
                     s.settimeout(30)
-                    self._report.emit({"gpsd": True})
+                    safe_emit(self, "_report", {"gpsd": True})
                     for line in s.makefile("r", encoding="utf-8", errors="replace"):
                         try:
                             msg = json.loads(line)
@@ -125,7 +127,7 @@ class Gps(QObject):
                         if msg.get("class") != "TPV":
                             continue
                         if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:
-                            self._report.emit({
+                            safe_emit(self, "_report", {
                                 "lat": msg["lat"], "lon": msg["lon"],
                                 "speed": msg.get("speed", 0.0),
                                 "heading": msg.get("track"),
@@ -133,7 +135,7 @@ class Gps(QObject):
                             })
             except OSError:
                 pass
-            self._report.emit({"gpsd": False})
+            safe_emit(self, "_report", {"gpsd": False})
             time.sleep(5)
 
     # ---- the simulated drive ----------------------------------------------------

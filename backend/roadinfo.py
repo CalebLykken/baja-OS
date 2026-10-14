@@ -13,6 +13,8 @@ import urllib.request
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
+from backend import safe_emit
+
 ROUTER = "http://127.0.0.1:8002"
 CHECK_EVERY_MS = 3000
 MOVING_MS = 2.0           # below this the fixes are too close together to match
@@ -68,7 +70,7 @@ class RoadInfo(QObject):
                     name = (last.get("names") or [""])[0]
             except (OSError, urllib.error.URLError, ValueError):
                 pass                                  # no match this time: keep the last one
-            self._matched.emit(limit, name)
+            safe_emit(self, "_matched", limit, name)
         threading.Thread(target=work, name="road-match", daemon=True).start()
 
     def _on_matched(self, limit, name):

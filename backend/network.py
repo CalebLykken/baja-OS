@@ -12,6 +12,8 @@ import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
+from backend import safe_emit
+
 CHECK_EVERY_MS = 5000
 PROBE_HOST = ("1.1.1.1", 53)  # Cloudflare DNS: answers quickly when online
 
@@ -77,7 +79,7 @@ class Network(QObject):
         threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self):
-        self._result.emit(local_ip(), wifi_name(), is_online())
+        safe_emit(self, "_result", local_ip(), wifi_name(), is_online())
 
     def _apply(self, ip, ssid, online):
         self._busy = False

@@ -35,6 +35,8 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QImage, QPainter
 
+from backend import safe_emit
+
 from backend import places
 from backend.vendor.qrcodegen import QrCode
 
@@ -438,7 +440,7 @@ class PhoneSend(QObject):
         self._failures[ip] = [count + 1, first]
 
     def deliver(self, place):
-        self.received.emit(place)          # queued over to the UI thread
+        safe_emit(self, "received", place)          # queued over to the UI thread
 
     # ---- what QML sees -------------------------------------------------------------------
     @pyqtSlot(str, result=str)

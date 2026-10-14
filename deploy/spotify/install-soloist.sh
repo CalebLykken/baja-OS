@@ -5,11 +5,12 @@
 # key exists.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-"$HERE/update-soloist.sh"
+# Units first, so the updater's restart finds the service.
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/share/soloist" "$HOME/.cache/soloist"
 cp "$HERE"/baja-soloist.service "$HERE"/baja-soloist-update.service \
    "$HERE"/baja-soloist-update.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
+"$HERE/update-soloist.sh"
 systemctl --user enable --now baja-soloist-update.timer
 systemctl --user enable baja-soloist.service
 if [ -f "$HOME/.config/baja-os/soloist.env" ]; then

@@ -22,8 +22,8 @@ terms, and in-car safety and hardware. What changed, and why, is at the end.
 - **GPS:** a GT-U7 (u-blox 7) USB module for development; upgrade to an enclosed
   u-blox 8 puck if city reception is poor.
 - Bluetooth audio from the phone and local files stay as fallbacks.
-- **Hands-free calling** is planned: a microphone, with calls through the car
-  speakers (S6, H6).
+- **Calls stay on the phone** (decided 2026-10-14): no microphone or
+  hands-free calling; the Pi stays a music receiver only (A2DP).
 - **No parked/moving lockouts** (decided 2026-10-14): this is a personal
   project, so typing, lists and 3D stay available all the time. Big
   driving-mode sizes, the hardware mute and night dimming stay.
@@ -205,11 +205,6 @@ dashboard alone, including a missed turn, in airplane mode.
   of Spotify.
 - Optional FM radio (USB tuner or RTL-SDR), to replace the factory radio and
   for emergency broadcasts.
-- **Hands-free calls (HFP):** a USB or I2S microphone, PipeWire echo
-  cancellation, incoming-call screen with answer/decline, the music paused
-  during calls, and the call audio through the car speakers. Washington law only
-  allows minimal touching of a handheld phone while driving, so this keeps calls
-  legal without touching the phone.
 
 ---
 
@@ -261,9 +256,7 @@ transistor with a flyback diode.
     temperatures on a hot day.
   - High-endurance SD card or NVMe.
   - Anti-glare film or a small hood for daylight.
-- **H6. Microphone** for hands-free calls (planned), mounted near the
-  headliner or A-pillar, away from vents. **Optional:** backup camera, FM
-  tuner, u-blox 8 GPS puck.
+- **H6. Optional:** backup camera, FM tuner, u-blox 8 GPS puck.
 
 ---
 
@@ -303,8 +296,8 @@ None right now.
 
 Answered 2026-10-14: Spotify Premium; buy the GPS (GT-U7); internet is the
 hotspot first, Bluetooth tethering second; ask TomTom for written permission
-(draft in `docs/tomtom-request.md`); add hands-free calling; no parked/moving
-lockouts; the Pi goes in a cooler spot with its active cooler.
+(draft in `docs/tomtom-request.md`); calls stay on the phone; no
+parked/moving lockouts; the Pi goes in a cooler spot with its active cooler.
 
 ---
 
@@ -334,5 +327,6 @@ lockouts; the Pi goes in a cooler spot with its active cooler.
 - **Safety rules rewritten** against NHTSA's guidelines, with larger
   driving-mode sizes.
 - **Follow-up (2026-10-14):** dropped the parked/moving lockouts and the
-  parking-brake input at your request; added hands-free calling and a
-  microphone; Pi placement is flexible since it has an active cooler.
+  parking-brake input at your request; calls stay on the phone (no microphone
+  or hands-free calling); Pi placement is flexible since it has an active
+  cooler.

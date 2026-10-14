@@ -21,23 +21,26 @@ Item {
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Speed  ·  gear " + vehicle.gear; unit: "mph"
-            value: vehicle.speed; minValue: 0; maxValue: 120
+            label: "Speed  ·  gear " + vehicle.gear; unit: Units.speedUnit
+            value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Boost"; unit: "psi"; decimals: 1
-            value: vehicle.boost; minValue: -20; maxValue: 20; warnAbove: 15
+            label: "Boost"; unit: Units.boostUnit; decimals: Units.boostDecimals
+            value: Units.boost(vehicle.boost); minValue: Units.boost(-20); maxValue: Units.boost(20)
+            warnAbove: Units.boost(15)
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Coolant"; unit: "°F"
-            value: vehicle.coolant; minValue: 100; maxValue: 260; warnAbove: 230
+            label: "Coolant"; unit: Units.tempUnit
+            value: Units.temp(vehicle.coolant); minValue: Units.temp(100); maxValue: Units.temp(260)
+            warnAbove: Units.temp(230)
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Intake"; unit: "°F"
-            value: vehicle.intake; minValue: 0; maxValue: 200; warnAbove: 150
+            label: "Intake"; unit: Units.tempUnit
+            value: Units.temp(vehicle.intake); minValue: Units.temp(0); maxValue: Units.temp(200)
+            warnAbove: Units.temp(150)
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

@@ -4,7 +4,10 @@
 #   - Installs the packages Baja OS needs (Qt, audio, 3D, Bluetooth, boot screen)
 #   - Bluetooth: shows up to phones as "Baja OS" (car audio), pairing only
 #     while you press Pair phone in Settings, phone audio through PipeWire
-#   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off
+#   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off,
+#     and the dashboard may join networks (the phone's hotspot), use the phone
+#     over Bluetooth as a backup, and reboot or shut down the Pi (polkit)
+#   - The equalizer in front of the speakers (a user PipeWire filter)
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
 #   - Baja OS as a system service started at boot
@@ -70,6 +73,13 @@ while read -r con; do
     nmcli con modify "$con" connection.autoconnect-retries 0 802-11-wireless.powersave 2
     echo "   $con: retry forever, power saving off"
 done
+# The dashboard is a service, not a desktop login, so polkit needs telling
+# that it may change networks (and reboot or shut down from Settings).
+sed "s|@USER@|$USER_NAME|g" "$HERE/polkit/50-baja-os.rules" > /etc/polkit-1/rules.d/50-baja-os.rules
+chmod 644 /etc/polkit-1/rules.d/50-baja-os.rules
+
+echo "== Equalizer"
+sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" sh "$HERE/audio/install-eq.sh"
 
 echo "== Quiet boot"
 for f in cmdline.txt config.txt; do

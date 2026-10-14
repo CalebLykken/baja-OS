@@ -71,16 +71,16 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Boost"
-                    value: vehicle.boost.toFixed(1)
-                    unit: "psi"
+                    value: Units.boost(vehicle.boost).toFixed(Units.boostDecimals)
+                    unit: Units.boostUnit
                     warning: vehicle.boost > 15
                 }
                 Readout {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Coolant"
-                    value: Math.round(vehicle.coolant)
-                    unit: "°F"
+                    value: Math.round(Units.temp(vehicle.coolant))
+                    unit: Units.tempUnit
                     warning: vehicle.coolant > 230
                 }
                 Readout {
@@ -95,8 +95,8 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Speed"
-                    value: Math.round(vehicle.speed)
-                    unit: "mph"
+                    value: Math.round(Units.speed(vehicle.speed))
+                    unit: Units.speedUnit
                 }
             }
         }

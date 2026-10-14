@@ -1,0 +1,12 @@
+[Unit]
+Description=Baja OS equalizer (PipeWire filter chain)
+After=pipewire.service wireplumber.service
+BindsTo=pipewire.service
+
+[Service]
+ExecStart=/usr/bin/pipewire -c baja-eq.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=pipewire.service

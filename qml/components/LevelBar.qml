@@ -29,6 +29,7 @@ Item {
     MouseArea {
         enabled: bar.interactive
         anchors { fill: parent; topMargin: -18; bottomMargin: -18 }
+        preventStealing: true          // don't let a scrolling page take the drag
         function apply(x) { bar.moved(Math.max(0, Math.min(1, x / width))) }
         onPressed: (mouse) => apply(mouse.x)
         onPositionChanged: (mouse) => apply(mouse.x)

@@ -17,7 +17,8 @@ Volume follows the active source, like a car stereo. Phone and Spotify keep
 their own volume (synced with the phone's slider), and the Pi's output sits
 at 100% while they play. Local music uses the Pi's output volume via
 PipeWire's `wpctl` (or the player's own volume where wpctl doesn't exist,
-e.g. on a Mac).
+e.g. on a Mac). `maxVolume` is a ceiling on the Pi's output for every source
+(for headphones): the sliders still run 0-100, and 100 means the ceiling.
 
 It also prepares the current cover as a rounded square for the album-art
 frame; Spotify covers are downloaded and cached first.
@@ -94,12 +95,15 @@ class MediaHub(QObject):
     queueChanged = pyqtSignal()
     _artReady = pyqtSignal(str, str, str)   # source, art url, rounded card url
 
-    def __init__(self, local, phone, spotify, volume=40, parent=None):
+    maxVolumeChanged = pyqtSignal()
+
+    def __init__(self, local, phone, spotify, volume=40, max_volume=100, parent=None):
         super().__init__(parent)
         self._sources = {"local": local, "phone": phone, "spotify": spotify}
         self._source = "local"
         self._system_volume = bool(shutil.which("wpctl"))
         self._volume = max(0, min(100, int(volume)))
+        self._max = max(30, min(100, int(max_volume)))
         self._art = {}                  # source -> (art url, rounded card url)
         self._phone_connected_at = 0.0
         self._phone_name = phone.deviceName
@@ -217,13 +221,14 @@ class MediaHub(QObject):
 
     # ---- volume -----------------------------------------------------------
     def _apply_volume(self):
+        ceiling = self._max / 100
         if self._system_volume:
-            level = "1.00" if self._remote_volume else f"{self._volume / 100:.2f}"
+            level = ceiling if self._remote_volume else self._volume / 100 * ceiling
             threading.Thread(target=lambda: subprocess.run(
-                ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", level],
+                ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{level:.3f}"],
                 capture_output=True, timeout=3), daemon=True).start()
         else:
-            self._sources["local"].setVolume(self._volume)
+            self._sources["local"].setVolume(round(self._volume * ceiling))
 
     # ---- properties (same names as the players, plus source info) ---------
     @pyqtProperty(str, notify=sourceChanged)
@@ -284,6 +289,19 @@ class MediaHub(QObject):
     @pyqtProperty(int, notify=volumeChanged)
     def volume(self):
         return self._active.volume if self._remote_volume else self._volume
+
+    @pyqtProperty(int, notify=maxVolumeChanged)
+    def maxVolume(self):
+        """Ceiling on the Pi's output, 30-100 (% of full)."""
+        return self._max
+
+    @pyqtSlot(int)
+    def setMaxVolume(self, value):
+        value = max(30, min(100, int(value)))
+        if value != self._max:
+            self._max = value
+            self._apply_volume()
+            self.maxVolumeChanged.emit()
 
     @property
     def local_volume(self):

@@ -34,8 +34,11 @@ Running on the Pi 5: dashboard (Home, Music, Maps, Gauges, Truck, Settings),
 four styles with Trail as the default, settings saved, network status, 55-60
 fps, Baja OS boot screen, start at boot, crash and freeze recovery (service
 watchdog plus the Pi's hardware watchdog), local music, Bluetooth phone audio
-with track info and two-way volume, Spotify through Soloist, and an offline
-map of the Seattle area.
+with track info and two-way volume, Spotify through Soloist, an offline
+map of the Seattle area, a 5-band equalizer, Wi-Fi joining from Settings with
+an on-screen keyboard (for the phone's hotspot) and Bluetooth tethering as the
+backup, and Settings in sections (display, sound, Wi-Fi, Bluetooth, map,
+system health and power, about) with working units and clock options.
 
 Known issues:
 
@@ -95,7 +98,7 @@ The groundwork every later phase depends on, done first.
 - **Pages load on demand:** load heavy pages (Truck, later Map) the first time
   they're opened, and preload the 3D model during the splash.
 - **Secrets file:** `/data/baja-os/secrets.json`, never in git.
-- **Deploy script:** `deploy/push.sh` syncs to the Pi and restarts it.
+- **Deploy script:** `deploy/push.sh` syncs to the Pi and restarts it. Done.
 
 **Done when:** pulling the plug and rebooting 20 times loses nothing; a forced
 crash recovers by itself; the Pi gets online and gets a GPS fix with no phone

@@ -1,0 +1,25 @@
+// Baja OS: the dashboard runs as a service, outside any desktop login, so
+// polkit would normally refuse it. Let this one user (@USER@):
+//   - join and forget Wi-Fi networks, scan, and bring up Bluetooth
+//     tethering to the phone (NetworkManager)
+//   - reboot and shut down the Pi from Settings (logind)
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "@USER@") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+        "org.freedesktop.NetworkManager.settings.modify.own",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.login1.reboot-multiple-sessions",
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions"
+    ];
+    if (allowed.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

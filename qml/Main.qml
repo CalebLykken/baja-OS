@@ -35,12 +35,22 @@ Window {
             Theme.style = startStyle
         else if (typeof settings !== "undefined")
             Theme.style = settings.get("style", "trail")
+        // QSettings hands booleans back as strings.
+        if (typeof settings !== "undefined") {
+            Units.metric = String(settings.get("metric", "false")) === "true"
+            Units.clock24 = String(settings.get("clock24", "false")) === "true"
+        }
     }
     Connections {
         target: Theme
         function onStyleChanged() {
             if (typeof settings !== "undefined") settings.set("style", Theme.style)
         }
+    }
+    Connections {
+        target: Units
+        function onMetricChanged() { settings.set("metric", Units.metric ? "true" : "false") }
+        function onClock24Changed() { settings.set("clock24", Units.clock24 ? "true" : "false") }
     }
 
     Backdrop { anchors.fill: parent }

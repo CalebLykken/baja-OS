@@ -123,18 +123,18 @@ Item {
 
         RowLayout {
             anchors { fill: parent; margins: 20 }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: Math.round(vehicle.speed); unit: "mph" }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: Math.round(Units.speed(vehicle.speed)); unit: Units.speedUnit }
             Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.gear; unit: "" }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                label: "Boost"; value: vehicle.boost.toFixed(1); unit: "psi"
+                label: "Boost"; value: Units.boost(vehicle.boost).toFixed(Units.boostDecimals); unit: Units.boostUnit
                 warning: vehicle.boost > 15
             }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                label: "Coolant"; value: Math.round(vehicle.coolant); unit: "°F"
+                label: "Coolant"; value: Math.round(Units.temp(vehicle.coolant)); unit: Units.tempUnit
                 warning: vehicle.coolant > 230
             }
         }

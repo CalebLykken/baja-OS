@@ -19,10 +19,11 @@ Item {
         anchors.centerIn: parent
         color: Theme.text
         font.pixelSize: Theme.fontTitle
-        text: Qt.formatTime(new Date(), "h:mm")
+        property date now: new Date()
+        text: Qt.formatTime(now, Units.timeFormat)
         Timer {
             interval: 5000; running: true; repeat: true
-            onTriggered: clock.text = Qt.formatTime(new Date(), "h:mm")
+            onTriggered: clock.now = new Date()
         }
     }
 
@@ -45,7 +46,7 @@ Item {
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
-            text: Math.round(vehicle.coolant) + "°F"
+            text: Math.round(Units.temp(vehicle.coolant)) + Units.tempUnit
             color: vehicle.coolant > 230 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }

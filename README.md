@@ -30,6 +30,9 @@ backend/library.py   plays real files from --music-dir (default ~/Music)
 backend/bluetooth.py phone audio over Bluetooth (BlueZ, AVRCP)
 backend/spotify.py   Spotify Connect through Soloist's local API
 backend/maps.py      local web server for the offline map
+backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
+backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
+backend/system.py    temperature, fan, power warnings, restart and power
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
 qml/Main.qml         window: nav rail + status bar + pages
 qml/pages/           Home, Music, Maps, Gauges, Truck, Settings
@@ -77,6 +80,27 @@ Put audio files (mp3, m4a, flac, ogg, wav) in `~/Music` on the Pi, or pass
 With no files there, the Music page plays the demo playlist. Audio goes to the
 default PipeWire output (the Pi's 3.5 mm jack).
 
+## Equalizer
+
+Five bands (bass, low mid, mid, presence, treble) with presets, on the Music
+page (the equalizer key) and in Settings > Sound. PipeWire does the filtering
+in front of the speakers, so it applies to Spotify, the phone and local files
+alike. `setup-pi.sh` installs it; on its own:
+
+```bash
+./deploy/audio/install-eq.sh            # no sudo; --remove takes it out again
+```
+
+## Wi-Fi and the phone's hotspot
+
+Settings > Wi-Fi lists nearby networks; tap one and type its password on the
+on-screen keyboard. For an iPhone hotspot, turn on Personal Hotspot and keep
+that screen open while you join. Networks joined this way retry forever, so
+the Pi picks the hotspot up by itself whenever the phone is in the truck. If
+there's no Wi-Fi for a minute, it uses the paired phone over Bluetooth instead
+(Settings > Wi-Fi > Phone as backup). Joining networks, rebooting and shutting
+down from the dashboard need the polkit rule that `setup-pi.sh` installs.
+
 ## Offline map
 
 ```bash
@@ -121,9 +145,13 @@ restored on the next start. `--style` overrides the saved style for one run.
 
 ## Deploying updates
 
+From the Mac:
+
 ```bash
-git pull && sudo systemctl restart baja-os
+./deploy/push.sh        # copies to baja.local, stamps the version, restarts
 ```
+
+Or on the Pi: `git pull && sudo systemctl restart baja-os`.
 
 ## Next steps
 

@@ -57,6 +57,14 @@ WebEngineView {
     }
     Timer { id: reloadTimer; interval: 1000; onTriggered: web.reload() }
 
+    // New map data (Settings > Map > Update): load it.
+    Connections {
+        target: maps
+        property string build: maps.build
+        function onChanged() {
+            if (maps.build !== build && maps.ready) { build = maps.build; web.reload() }
+        }
+    }
     Connections {
         target: Theme
         function onStyleChanged() { web.call("setTheme(" + JSON.stringify(web.themeTokens()) + ")") }

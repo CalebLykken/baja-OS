@@ -17,3 +17,10 @@ SourceBadge 1.0 SourceBadge.qml
 Legend 1.0 Legend.qml
 LevelBar 1.0 LevelBar.qml
 SegmentedControl 1.0 SegmentedControl.qml
+singleton Units 1.0 Units.qml
+TextButton 1.0 TextButton.qml
+Section 1.0 Section.qml
+SignalBars 1.0 SignalBars.qml
+EqSlider 1.0 EqSlider.qml
+EqualizerPanel 1.0 EqualizerPanel.qml
+Keyboard 1.0 Keyboard.qml

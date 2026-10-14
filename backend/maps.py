@@ -16,6 +16,7 @@ Run it on its own to work on the map in a desktop browser:
 import json
 import os
 import re
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -121,9 +122,11 @@ def make_server(data_dir, port=0):
 
 class MapService(QObject):
     """What QML needs for the Maps page: the page URL and whether a map is
-    installed. `webEngine` says whether Qt WebEngine could be loaded at all."""
+    installed. `webEngine` says whether Qt WebEngine could be loaded at all.
+    `update()` re-runs install-map.sh to fetch fresh OpenStreetMap data."""
 
     changed = pyqtSignal()
+    _progress = pyqtSignal(str, bool)      # message, still running
 
     def __init__(self, data_dir=DEFAULT_DATA_DIR, web_engine=False, parent=None):
         super().__init__(parent)
@@ -131,6 +134,9 @@ class MapService(QObject):
         self._web_engine = web_engine
         self._server = None
         self._info = {}
+        self._updating = False
+        self._update_message = ""
+        self._progress.connect(self._on_progress)
         self.refresh()
 
     def start(self):
@@ -151,6 +157,57 @@ class MapService(QObject):
         if info != self._info:
             self._info = info
             self.changed.emit()
+
+    @pyqtSlot()
+    def update(self):
+        """Download fresh map data for the same area (needs internet)."""
+        if self._updating:
+            return
+        self._updating = True
+        self._progress.emit("Starting", True)
+        bbox = ",".join(str(v) for v in self._info.get("bbox", [])) or None
+
+        def work():
+            env = dict(os.environ, BAJA_MAPS_DIR=str(self._data_dir))
+            if bbox:
+                env.update(BBOX=bbox, REGION=self._info.get("region", "Seattle area"))
+            steps = {"Getting the pmtiles": "Getting the download tool",
+                     "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons"}
+            try:
+                proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, env=env)
+                for line in proc.stdout:
+                    for prefix, message in steps.items():
+                        if line.startswith(prefix):
+                            self._progress.emit(message, True)
+                ok = proc.wait() == 0
+            except OSError:
+                ok = False
+            self._progress.emit("Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
+        threading.Thread(target=work, name="map-update", daemon=True).start()
+
+    def _on_progress(self, message, running):
+        self._update_message = message
+        if not running:
+            self._updating = False
+            self.refresh()
+        self.changed.emit()
+
+    @pyqtProperty(bool, notify=changed)
+    def updating(self):
+        return self._updating
+
+    @pyqtProperty(str, notify=changed)
+    def updateMessage(self):
+        return self._update_message
+
+    @pyqtProperty(float, notify=changed)
+    def sizeMb(self):
+        try:
+            return (self._data_dir / "basemap.pmtiles").stat().st_size / 1e6
+        except OSError:
+            return 0.0
 
     @pyqtProperty(bool, constant=True)
     def webEngine(self):

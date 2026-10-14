@@ -2,210 +2,724 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// Settings. Brightness drives the panel; units and about are placeholders.
+// Settings in sections down the left (Display, Sound, Wi-Fi, Bluetooth, Map,
+// System, About), with the chosen section's cards on the right; long ones
+// scroll. Joining a Wi-Fi network opens a password sheet with the on-screen
+// keyboard.
 Item {
     id: page
+    objectName: "settingsPage"
     signal navigate(int index)
 
-    // Saved between runs; QSettings hands booleans back as strings.
-    property bool metric: typeof settings !== "undefined"
-                          && String(settings.get("metric", "false")) === "true"
-    onMetricChanged: if (typeof settings !== "undefined") settings.set("metric", metric ? "true" : "false")
+    property int section: 0
+    readonly property var sections: [
+        { icon: "brightness", label: "Display" },
+        { icon: "volume", label: "Sound" },
+        { icon: "wifi", label: "Wi-Fi" },
+        { icon: "bluetooth", label: "Bluetooth" },
+        { icon: "map", label: "Map" },
+        { icon: "memory", label: "System" },
+        { icon: "info", label: "About" }
+    ]
+    function mmss(s) { return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
 
-    ColumnLayout {
-        anchors.fill: parent
-        spacing: Theme.gap
+    // Scan for networks only while the Wi-Fi section is on screen.
+    readonly property bool wifiShown: visible && section === 2
+    onWifiShownChanged: if (typeof wifi !== "undefined") wifi.setScanning(wifiShown)
 
-        Card {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 120
-            heading: display.hardware ? "Brightness" : "Brightness (software dim)"
+    // ---- the section list ------------------------------------------------
+    Column {
+        id: list
+        width: 232
+        anchors { left: parent.left; top: parent.top }
+        spacing: 8
 
-            RowLayout {
-                anchors { fill: parent; leftMargin: 20; rightMargin: 20; topMargin: 36 }
-                spacing: 16
-                IconButton { icon: "remove"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
-
-                LevelBar {
-                    Layout.fillWidth: true
-                    value: display.brightness / 100
-                    onMoved: (v) => display.setBrightness(Math.round(v * 100))
-                }
-                Label {
-                    Layout.preferredWidth: 64
-                    horizontalAlignment: Text.AlignRight
-                    text: display.brightness + "%"
-                    font.family: Theme.numFont
-                    font.pixelSize: Theme.fontBody
-                    font.weight: Font.DemiBold
-                }
-                IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
-            }
-        }
-
-        // Style and units share a row to leave room for Bluetooth.
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 120
-            Layout.fillHeight: false   // the cards inside fill it; it mustn't grow
-            spacing: Theme.gap
-
-            Card {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                heading: "Style"
-
-                SegmentedControl {
-                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                    options: Theme.styleNames.map(n => ({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n }))
-                    current: Theme.style
-                    onPicked: (v) => Theme.style = v
-                }
-            }
-
-            Card {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                heading: "Units"
-
-                SegmentedControl {
-                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                    options: [{ label: "mph, °F", value: false }, { label: "km/h, °C", value: true }]
-                    current: page.metric
-                    onPicked: (v) => page.metric = v
-                }
-            }
-        }
-
-        Card {
-            id: btCard
-            Layout.fillWidth: true
-            Layout.preferredHeight: 120
-            heading: "Bluetooth"
-            visible: typeof bluetooth !== "undefined" && bluetooth.available
-
-            property int secondsLeft: 0
-            Timer {
-                interval: 1000; repeat: true; triggeredOnStart: true
-                running: btCard.visible && bluetooth.pairing
-                onTriggered: btCard.secondsLeft = bluetooth.pairingSecondsLeft
-            }
-            function mmss(s) { return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
-
-            Row {
-                anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                spacing: 14
-                Icon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: "bluetooth"
-                    size: 30
-                    color: bluetooth.deviceName !== "" || bluetooth.pairing ? Theme.accent : Theme.textDim
-                }
-                Label {
-                    anchors.verticalCenter: parent.verticalCenter
-                    font.pixelSize: Theme.fontBody
-                    text: !bluetooth.adapterPresent ? "Bluetooth is off"
-                          : bluetooth.pairing ? "Visible as “Baja OS”: pair from your phone (" + btCard.mmss(btCard.secondsLeft) + ")"
-                          : bluetooth.deviceName !== "" ? "Connected: " + bluetooth.deviceName
-                          : "No phone connected"
-                }
-            }
-
+        Repeater {
+            model: page.sections
             Rectangle {
-                visible: bluetooth.adapterPresent
-                anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter; verticalCenterOffset: 14 }
-                width: pairText.width + 48
-                height: 56
+                readonly property bool selected: page.section === index
+                width: list.width
+                height: 64
                 radius: Theme.radius
-                border.width: Theme.border
-                border.color: bluetooth.pairing ? Theme.line : Theme.accent
-                color: bluetooth.pairing ? (pairTap.pressed ? Theme.line : Theme.panelHi)
-                                         : (pairTap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent)
-                scale: pairTap.pressed ? 0.97 : 1
-                Label {
-                    id: pairText
-                    anchors.centerIn: parent
-                    text: bluetooth.pairing ? "Stop pairing" : "Pair phone"
-                    color: bluetooth.pairing ? Theme.text : Theme.bg
-                    font.pixelSize: Theme.fontBody - 2
-                    font.weight: Font.DemiBold
+                color: selected ? Theme.panelHi : (tap.pressed ? Theme.panel : "transparent")
+                border.width: selected ? Theme.border : 0
+                border.color: Theme.line
+
+                Rectangle {
+                    visible: parent.selected
+                    anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
+                    width: 4
+                    height: parent.height - 26
+                    radius: 2
+                    color: Theme.accent
                 }
-                TapHandler { id: pairTap; onTapped: bluetooth.setPairing(!bluetooth.pairing) }
+                Row {
+                    anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
+                    spacing: 16
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: modelData.icon
+                        size: 28
+                        color: parent.parent.selected ? Theme.accent : Theme.textDim
+                    }
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.label
+                        color: parent.parent.selected ? Theme.text : Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                        font.weight: parent.parent.selected ? Font.DemiBold : Font.Normal
+                    }
+                }
+                TapHandler { id: tap; onTapped: page.section = index }
             }
         }
+    }
 
-        Card {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            heading: "About"
+    // ---- the chosen section ----------------------------------------------
+    Loader {
+        id: content
+        anchors { left: list.right; leftMargin: Theme.gap; right: parent.right; top: parent.top; bottom: parent.bottom }
+        sourceComponent: [displaySection, soundSection, wifiSection, bluetoothSection,
+                          mapSection, systemSection, aboutSection][page.section]
+    }
 
-            Column {
-                anchors { left: parent.left; top: parent.top; leftMargin: 20; topMargin: 52 }
-                spacing: 8
-                Label { text: "Baja OS"; color: Theme.text; font.pixelSize: Theme.fontTitle; font.weight: Font.DemiBold }
-                Label { text: "2005 Subaru Baja Turbo carputer"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
-                Label {
-                    text: demoMode ? "Running on simulated vehicle and media data" : "Live data"
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                }
-                Label {
-                    // e.g. "Map: Seattle area, OpenStreetMap of 14 Oct 2026"
-                    readonly property string built: typeof maps === "undefined" || maps.build.length !== 8 ? ""
-                        : new Date(+maps.build.slice(0, 4), +maps.build.slice(4, 6) - 1, +maps.build.slice(6))
-                              .toLocaleDateString(Qt.locale("en_GB"), "d MMM yyyy")
-                    text: typeof maps === "undefined" || !maps.ready ? "Map: not installed"
-                          : "Map: " + maps.region + ", OpenStreetMap of " + built
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                }
-                Label {
-                    text: typeof spotify === "undefined" || !spotify.available ? "Spotify: not set up"
-                          : !spotify.linked ? "Spotify: pick “" + (spotify.deviceName || "Baja") + "” in the Spotify app to link"
-                          : "Spotify: linked as “" + spotify.deviceName + "”"
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
+    // A scrolling column of cards, with a thin bar showing where you are.
+    component Scroller: Flickable {
+        id: flick
+        default property alias cards: col.data
+        contentHeight: col.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+
+        ColumnLayout {
+            id: col
+            width: flick.width - (flick.contentHeight > flick.height ? 14 : 0)
+            spacing: Theme.gap
+        }
+        Rectangle {
+            visible: flick.contentHeight > flick.height
+            parent: flick
+            anchors.right: parent.right
+            y: flick.visibleArea.yPosition * flick.height
+            width: 4
+            height: flick.visibleArea.heightRatio * flick.height
+            radius: 2
+            color: Theme.line
+        }
+    }
+
+    // A labelled row: what it is on the left, the control on the right.
+    component SettingRow: RowLayout {
+        property alias label: rowLabel.text
+        Layout.fillWidth: true
+        spacing: 16
+        Label {
+            id: rowLabel
+            Layout.preferredWidth: 220
+            font.pixelSize: Theme.fontBody
+        }
+    }
+
+    component Note: Label {
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        color: Theme.textDim
+        font.pixelSize: Theme.fontSmall
+    }
+
+    // =====================================================================
+    Component {
+        id: displaySection
+        Scroller {
+            Section {
+                Layout.fillWidth: true
+                heading: display.hardware ? "Brightness" : "Brightness (software dim)"
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 16
+                    IconButton { icon: "remove"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
+                    LevelBar {
+                        Layout.fillWidth: true
+                        value: display.brightness / 100
+                        onMoved: (v) => display.setBrightness(Math.round(v * 100))
+                    }
+                    Label {
+                        Layout.preferredWidth: 64
+                        horizontalAlignment: Text.AlignRight
+                        text: display.brightness + "%"
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
                 }
             }
+            Section {
+                Layout.fillWidth: true
+                heading: "Look"
+                SettingRow {
+                    label: "Style"
+                    SegmentedControl {
+                        options: Theme.styleNames.map(n => ({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n }))
+                        current: Theme.style
+                        onPicked: (v) => Theme.style = v
+                    }
+                }
+                SettingRow {
+                    label: "Start-up animation"
+                    SegmentedControl {
+                        property bool on: typeof settings === "undefined" || String(settings.get("splash", "true")) === "true"
+                        options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                        current: on
+                        onPicked: (v) => { on = v; settings.set("splash", v ? "true" : "false") }
+                    }
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Units and clock"
+                SettingRow {
+                    label: "Units"
+                    SegmentedControl {
+                        options: [{ label: "mph, °F, psi", value: false }, { label: "km/h, °C, bar", value: true }]
+                        current: Units.metric
+                        onPicked: (v) => Units.metric = v
+                    }
+                }
+                SettingRow {
+                    label: "Clock"
+                    SegmentedControl {
+                        options: [{ label: "12-hour", value: false }, { label: "24-hour", value: true }]
+                        current: Units.clock24
+                        onPicked: (v) => Units.clock24 = v
+                    }
+                }
+            }
+        }
+    }
 
-            // Network: online state, Wi-Fi name and the address to SSH to.
-            Column {
-                anchors { left: parent.horizontalCenter; top: parent.top; topMargin: 52 }
-                spacing: 8
-                readonly property bool known: typeof network !== "undefined" && network.checked
+    // =====================================================================
+    Component {
+        id: soundSection
+        Scroller {
+            Section {
+                Layout.fillWidth: true
+                heading: "Equalizer"
+                EqualizerPanel {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 400
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Loudest volume"
+                Note { text: "The most the Pi will play, whatever the source. Handy with headphones: the volume slider still goes to 100, and 100 means this." }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 16
+                    IconButton { icon: "remove"; size: 60; onClicked: media.setMaxVolume(media.maxVolume - 5) }
+                    LevelBar {
+                        Layout.fillWidth: true
+                        segments: 14
+                        value: (media.maxVolume - 30) / 70
+                        onMoved: (v) => media.setMaxVolume(Math.round((30 + v * 70) / 5) * 5)
+                    }
+                    Label {
+                        Layout.preferredWidth: 64
+                        horizontalAlignment: Text.AlignRight
+                        text: media.maxVolume + "%"
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    IconButton { icon: "add"; size: 60; onClicked: media.setMaxVolume(media.maxVolume + 5) }
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Spotify"
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontBody
+                    text: typeof spotify === "undefined" || !spotify.available ? "Not set up on this Pi"
+                          : spotify.linked ? "Linked as “" + spotify.deviceName + "”"
+                          : "Waiting to be picked in the Spotify app"
+                }
+                Note { text: "In the Spotify app on your phone, tap the devices icon and pick “" + (typeof spotify !== "undefined" && spotify.deviceName || "Baja") + "” to play through the truck." }
+            }
+        }
+    }
 
+    // =====================================================================
+    Component {
+        id: wifiSection
+        Scroller {
+            Section {
+                Layout.fillWidth: true
                 Row {
                     spacing: 12
+                    readonly property bool known: typeof network !== "undefined" && network.checked
                     Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         width: 14; height: 14; radius: 7
-                        color: !parent.parent.known ? Theme.textDim
-                               : network.online ? Theme.ok : Theme.warn
+                        color: !parent.known ? Theme.textDim : network.online ? Theme.ok : Theme.warn
                     }
                     Label {
-                        text: !parent.parent.known ? "Checking network…"
-                              : network.online ? "Online" : (network.ip ? "No internet" : "Offline")
+                        text: !parent.known ? "Checking the connection"
+                              : network.online ? "Online" : (network.ip ? "Connected, but no internet" : "Offline")
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }
                 }
                 Label {
-                    visible: parent.known
-                    text: network.ssid ? "Wi-Fi: " + network.ssid : "Wi-Fi: not connected"
-                    color: Theme.textDim
                     font.pixelSize: Theme.fontBody
+                    color: Theme.textDim
+                    text: wifi.tetherActive ? "Using " + wifi.tetherPhone + " over Bluetooth"
+                          : network.ssid ? "On " + network.ssid + (network.ip ? ", " + network.ip : "")
+                          : "Not on Wi-Fi"
+                }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Networks nearby"
+
+                Label {
+                    visible: wifi.available && !wifi.canControl
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.accent
+                    font.pixelSize: Theme.fontBody
+                    text: "To join networks from here, run deploy/setup-pi.sh once on the Pi."
                 }
                 Label {
-                    visible: parent.known
-                    text: "IP: " + (network.ip || "none")
-                    color: Theme.textDim
+                    visible: wifi.message !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
                     font.pixelSize: Theme.fontBody
+                    text: wifi.message
+                }
+
+                Repeater {
+                    model: wifi.networks
+                    Rectangle {
+                        id: netRow
+                        readonly property bool joining: wifi.busy === modelData.ssid
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 64
+                        radius: Theme.radius
+                        color: modelData.active ? Theme.panelHi : (rowTap.pressed ? Theme.panelHi : "transparent")
+                        border.width: modelData.active ? Theme.border : 0
+                        border.color: Theme.line
+
+                        SignalBars {
+                            id: bars
+                            anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+                            signal: modelData.signal
+                            lit: modelData.active ? Theme.accent : Theme.text
+                        }
+                        Label {
+                            anchors { left: bars.right; leftMargin: 18; right: status.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                            text: modelData.ssid
+                            elide: Text.ElideRight
+                            font.pixelSize: Theme.fontBody
+                            font.weight: modelData.active ? Font.DemiBold : Font.Normal
+                        }
+                        Row {
+                            id: status
+                            anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                            spacing: 14
+                            Label {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: text !== ""
+                                text: netRow.joining ? "Joining" : modelData.active ? "Connected" : modelData.saved ? "Saved" : ""
+                                color: modelData.active ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: Font.DemiBold
+                            }
+                            Icon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: modelData.secure
+                                name: "lock"
+                                size: 22
+                                color: Theme.textDim
+                            }
+                            TextButton {
+                                visible: modelData.saved && wifi.canControl
+                                implicitHeight: 48
+                                text: "Forget"
+                                onClicked: wifi.forget(modelData.ssid)
+                            }
+                        }
+                        TapHandler {
+                            id: rowTap
+                            enabled: !modelData.active && wifi.canControl && wifi.busy === ""
+                            onTapped: {
+                                if (modelData.saved || !modelData.secure) wifi.join(modelData.ssid, "")
+                                else joinSheet.open(modelData.ssid)
+                            }
+                        }
+                    }
+                }
+                Note {
+                    visible: wifi.available
+                    text: wifi.networks.length === 0 ? "Looking for networks"
+                          : "For your phone's hotspot: turn on Personal Hotspot and keep that screen open, then tap the phone's name here. After that the Pi joins it by itself."
+                }
+                Note {
+                    visible: !wifi.available
+                    text: "Wi-Fi is managed by the computer this is running on."
+                }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Phone as backup"
+                Note {
+                    text: wifi.tetherPhone !== ""
+                          ? "When there's no Wi-Fi for a minute, use " + wifi.tetherPhone + " over Bluetooth for internet (Personal Hotspot needs to be on). It lets go again once Wi-Fi is back."
+                          : "Pair your phone under Bluetooth first; then it can be the backup connection."
+                }
+                SegmentedControl {
+                    enabled: wifi.tetherPhone !== ""
+                    opacity: enabled ? 1 : 0.5
+                    options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                    current: wifi.tethering
+                    onPicked: (v) => wifi.setTethering(v)
+                }
+            }
+        }
+    }
+
+    // =====================================================================
+    Component {
+        id: bluetoothSection
+        Scroller {
+            Section {
+                id: btCard
+                Layout.fillWidth: true
+                heading: "Phone"
+                property int secondsLeft: 0
+                Timer {
+                    interval: 1000; repeat: true; triggeredOnStart: true
+                    running: bluetooth.pairing
+                    onTriggered: btCard.secondsLeft = bluetooth.pairingSecondsLeft
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 14
+                    Icon {
+                        name: "bluetooth"
+                        size: 30
+                        color: bluetooth.deviceName !== "" || bluetooth.pairing ? Theme.accent : Theme.textDim
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: !bluetooth.available ? "Bluetooth isn't available here"
+                              : !bluetooth.adapterPresent ? "Bluetooth is off"
+                              : bluetooth.pairing ? "Visible as “Baja OS”: pair from your phone (" + page.mmss(btCard.secondsLeft) + ")"
+                              : bluetooth.deviceName !== "" ? "Connected: " + bluetooth.deviceName
+                              : "No phone connected"
+                    }
+                    TextButton {
+                        visible: bluetooth.available && bluetooth.adapterPresent
+                        primary: !bluetooth.pairing
+                        text: bluetooth.pairing ? "Stop pairing" : "Pair phone"
+                        onClicked: bluetooth.setPairing(!bluetooth.pairing)
+                    }
+                }
+                Note {
+                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”. Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
+                }
+            }
+        }
+    }
+
+    // =====================================================================
+    Component {
+        id: mapSection
+        Scroller {
+            Section {
+                id: mapCard
+                Layout.fillWidth: true
+                heading: "Offline map"
+                readonly property string built: typeof maps === "undefined" || maps.build.length !== 8 ? ""
+                    : new Date(+maps.build.slice(0, 4), +maps.build.slice(4, 6) - 1, +maps.build.slice(6))
+                          .toLocaleDateString(Qt.locale("en_GB"), "d MMMM yyyy")
+                Label {
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                    text: maps.ready ? maps.region : "No map installed"
                 }
                 Label {
-                    visible: parent.known && network.ip !== ""
+                    visible: maps.ready
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "OpenStreetMap data from " + mapCard.built + ", " + Math.round(maps.sizeMb) + " MB on the Pi. Works with no signal."
+                }
+                RowLayout {
+                    spacing: 16
+                    TextButton {
+                        icon: "refresh"
+                        text: maps.ready ? "Update map" : "Download map"
+                        enabled: !maps.updating && network.online
+                        onClicked: maps.update()
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                        text: maps.updating || maps.updateMessage !== "" ? maps.updateMessage
+                              : network.online ? "Downloads about 130 MB" : "Needs internet"
+                    }
+                }
+            }
+        }
+    }
+
+    // =====================================================================
+    Component {
+        id: systemSection
+        Scroller {
+            Section {
+                Layout.fillWidth: true
+                heading: "Health"
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 3
+                    rowSpacing: 18
+                    columnSpacing: 16
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Temperature"
+                        value: system.temp < 0 ? "–" : Math.round(Units.temp(system.temp * 9 / 5 + 32))
+                        unit: system.temp < 0 ? "" : Units.tempUnit
+                        warning: system.temp > 75
+                    }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Fan"
+                        value: system.fan < 0 ? "–" : system.fan
+                        unit: system.fan < 0 ? "" : "rpm"
+                    }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Uptime"
+                        value: system.uptime || "–"
+                        unit: ""
+                    }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Memory used"
+                        value: system.memTotal > 0 ? (system.memUsed / 1024).toFixed(1) : "–"
+                        unit: system.memTotal > 0 ? "of " + Math.round(system.memTotal / 1024) + " GB" : ""
+                    }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Storage free"
+                        value: system.diskTotal > 0 ? Math.round(system.diskFree) : "–"
+                        unit: system.diskTotal > 0 ? "of " + Math.round(system.diskTotal) + " GB" : ""
+                    }
+                    Item { Layout.fillWidth: true; Layout.preferredWidth: 1 }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontBody
+                    color: system.power !== "" ? Theme.warn : Theme.textDim
+                    text: system.power !== "" ? system.power : "Power supply and temperature are fine"
+                }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Restart and power"
+                RowLayout {
+                    spacing: 14
+                    TextButton { icon: "refresh"; text: "Restart dashboard"; onClicked: system.restartDashboard() }
+                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
+                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
+                }
+                Note {
+                    visible: !system.canPower
+                    text: "To reboot or shut down from here, run deploy/setup-pi.sh once on the Pi."
+                }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Version"
+                Label {
+                    font.pixelSize: Theme.fontBody
+                    text: "Baja OS " + (system.version || "(unknown version)")
+                }
+                Label {
+                    visible: network.ip !== ""
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
                     text: "ssh " + network.user + "@" + network.ip
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
+                }
+            }
+        }
+    }
+
+    // A key that needs a second tap within a few seconds, for actions that
+    // can't be undone.
+    component ConfirmButton: TextButton {
+        id: cb
+        property string confirmText
+        property string plainText
+        signal confirmed()
+        property bool armed: false
+        Component.onCompleted: plainText = text
+        onArmedChanged: text = armed ? confirmText : plainText
+        onClicked: {
+            if (armed) { armed = false; confirmed() }
+            else { armed = true; disarm.restart() }
+        }
+        Timer { id: disarm; interval: 4000; onTriggered: cb.armed = false }
+    }
+
+    // =====================================================================
+    Component {
+        id: aboutSection
+        Scroller {
+            Section {
+                Layout.fillWidth: true
+                Label { text: "Baja OS"; font.pixelSize: Theme.fontHero; font.weight: Font.DemiBold }
+                Label { text: "The dashboard for a 2005 Subaru Baja Turbo"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
+                Label {
+                    visible: typeof demoMode !== "undefined" && demoMode
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.accent
+                    font.pixelSize: Theme.fontBody
+                    text: "Gauges show simulated data until the OBD-II adapter is connected."
+                }
+            }
+            Section {
+                Layout.fillWidth: true
+                heading: "Made with"
+                Repeater {
+                    model: [
+                        "Map data © OpenStreetMap contributors (ODbL)",
+                        "Map tiles from Protomaps, drawn with MapLibre GL JS",
+                        "Music from Spotify, played by Spotify's Soloist",
+                        "Qt 6 and PyQt6; icons from Material Design (Apache 2.0)",
+                        "Type: URW Gothic"
+                    ]
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        color: Theme.textDim
+                        text: modelData
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- joining a Wi-Fi network: password and keyboard --------------------
+    Rectangle {
+        id: joinSheet
+        objectName: "joinSheet"
+        property string ssid: ""
+        property string password: ""
+        property bool reveal: false
+        function open(name) { ssid = name; password = ""; reveal = false }
+        function close() { ssid = ""; password = "" }
+
+        anchors.fill: parent
+        visible: ssid !== ""
+        color: Theme.bg
+        // Swallow taps so nothing underneath reacts.
+        MouseArea { anchors.fill: parent }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.gap
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 14
+                Label {
+                    Layout.fillWidth: true
+                    text: "Join “" + joinSheet.ssid + "”"
+                    elide: Text.ElideRight
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                TextButton { text: "Cancel"; onClicked: joinSheet.close() }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 14
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 64
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.width: Theme.border
+                    border.color: Theme.accent
+                    Label {
+                        id: field
+                        anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
+                        width: Math.min(implicitWidth, parent.width - 50)
+                        clip: true
+                        horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
+                        text: joinSheet.password === "" ? ""
+                              : joinSheet.reveal ? joinSheet.password : "•".repeat(joinSheet.password.length)
+                        font.pixelSize: Theme.fontTitle
+                    }
+                    Label {
+                        visible: joinSheet.password === ""
+                        anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter }
+                        text: "Password"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                    // Blinking caret.
+                    Rectangle {
+                        x: field.x + field.width + 3
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 2
+                        height: 34
+                        color: Theme.accent
+                        SequentialAnimation on opacity {
+                            running: joinSheet.visible
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0; duration: 500; easing.type: Easing.InOutQuad }
+                            NumberAnimation { to: 1; duration: 500; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                }
+                IconButton {
+                    size: 64
+                    icon: joinSheet.reveal ? "visibility_off" : "visibility"
+                    onClicked: joinSheet.reveal = !joinSheet.reveal
+                }
+            }
+
+            Keyboard {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.maximumHeight: 440
+                doneLabel: "Join"
+                doneEnabled: joinSheet.password.length >= 8      // WPA passwords are 8+
+                onTyped: (ch) => joinSheet.password += ch
+                onBackspace: joinSheet.password = joinSheet.password.slice(0, -1)
+                onDone: {
+                    wifi.join(joinSheet.ssid, joinSheet.password)
+                    joinSheet.close()
                 }
             }
         }

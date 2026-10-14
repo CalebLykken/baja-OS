@@ -25,14 +25,17 @@ from PyQt6.QtQml import QQmlApplicationEngine
 
 from backend.bluetooth import BluetoothAudio
 from backend.display import Display
+from backend.eq import Equalizer
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
+from backend.system import SystemInfo
 from backend.systemd import Watchdog
 from backend.vehicle import VehicleData
+from backend.wifi import Wifi
 
 ROOT = Path(__file__).resolve().parent
 
@@ -97,12 +100,18 @@ def main():
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio()
     spotify = SpotifyPlayer()
-    media = MediaHub(make_media_player(args.music_dir), bluetooth, spotify,
-                     volume=settings.get_int("volume", 40))
+    local = make_media_player(args.music_dir)
+    media = MediaHub(local, bluetooth, spotify,
+                     volume=settings.get_int("volume", 40),
+                     max_volume=settings.get_int("maxVolume", 100))
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
+    media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
     display = Display()
     network = Network()
     maps = MapService(args.maps_dir, web_engine)
+    eq = Equalizer(settings)
+    wifi = Wifi(settings)
+    system = SystemInfo()
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
@@ -113,10 +122,14 @@ def main():
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("network", network)
     ctx.setContextProperty("maps", maps)
+    ctx.setContextProperty("eq", eq)
+    ctx.setContextProperty("wifi", wifi)
+    ctx.setContextProperty("system", system)
     ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
-    ctx.setContextProperty("showSplash", not args.no_splash)
+    ctx.setContextProperty("showSplash", not args.no_splash
+                           and str(settings.get("splash", "true")) == "true")
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))
     if not engine.rootObjects():
@@ -130,11 +143,18 @@ def main():
     vehicle.start()
     media.start()
     maps.start()
+    eq.start()
+    wifi.start()
+    system.start()
     network.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
     code = app.exec()
+    # Background threads (Spotify, Bluetooth, art) can still signal while
+    # Python tears objects down; a signal into a deleted object would abort.
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system):
+        obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine
     return code

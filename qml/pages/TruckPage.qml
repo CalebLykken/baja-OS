@@ -37,7 +37,9 @@ Item {
             // A generated photo-studio environment (dark room, big soft
             // panels). Metallic car paint gets its colour from reflecting
             // surroundings; with lights alone it renders nearly black.
-            lightProbe: Texture { source: Qt.resolvedUrl("../assets/studio.hdr") }
+            // Pre-filtered once with Qt's balsam (tools/make_studio_hdr.py):
+            // filtering the .hdr at runtime froze the Pi for 7 s.
+            lightProbe: Texture { source: Qt.resolvedUrl("../assets/studio.ktx") }
             probeExposure: 1.1
             probeOrientation: Qt.vector3d(0, -page.spin, 0)   // reflections stay put as it turns
         }

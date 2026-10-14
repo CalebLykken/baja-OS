@@ -2,6 +2,15 @@
 (soft overhead box, two side strips, a warm rim) that lights the Truck page.
 
     python3 tools/make_studio_hdr.py qml/assets/studio.hdr
+
+Then pre-filter it into the cubemap the page actually loads, with Qt's
+balsam from the same Qt version as the Pi (pip install PySide6==6.8.2
+ships it as PySide6/balsam):
+
+    balsam -o qml/assets qml/assets/studio.hdr      # writes studio.ktx
+
+Loading the .hdr directly makes Qt filter it on the Pi's CPU, which froze
+the Truck page for 7 s the first time it opened.
 """
 import math
 import sys

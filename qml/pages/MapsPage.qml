@@ -14,6 +14,9 @@ Item {
     property bool mapReady: false
     property string problem: ""
     onVisibleChanged: if (visible) { opened = true; if (hasMaps) maps.refresh() }
+    // Start the map in the background a little after start-up, so it's
+    // ready (and following the truck) the first time the page opens.
+    Timer { interval: 6000; running: true; onTriggered: page.opened = true }
 
     readonly property bool hasMaps: typeof maps !== "undefined"
     readonly property bool hasFix: typeof gps !== "undefined" && gps.hasFix

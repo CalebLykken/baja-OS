@@ -44,8 +44,8 @@ Known issues:
 
 - **Brightness:** only software dimming on the Pi 5. The backlight stays fully
   on, so the screen glows at night.
-- **Truck page:** stalls about 3 s the first time it opens.
-- **No GPS yet.**
+- **No GPS receiver yet:** gpsd and the map are ready for the GT-U7; until it's
+  plugged in, the map follows a simulated drive around Seattle.
 - **Vehicle data is simulated.**
 
 ## Milestone M1: first drive
@@ -96,7 +96,10 @@ The groundwork every later phase depends on, done first.
   dimming down to near-off, plus a screen-off action. Required before night
   driving.
 - **Pages load on demand:** load heavy pages (Truck, later Map) the first time
-  they're opened, and preload the 3D model during the splash.
+  they're opened, and preload the 3D model during the splash. Done
+  differently: the Truck page's 7 s first-open freeze was Qt filtering the
+  studio lighting on the CPU, so it now loads a pre-filtered cubemap (70 ms);
+  the map starts in the background 6 s after start-up.
 - **Secrets file:** `/data/baja-os/secrets.json`, never in git.
 - **Deploy script:** `deploy/push.sh` syncs to the Pi and restarts it. Done.
 

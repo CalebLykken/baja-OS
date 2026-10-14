@@ -189,6 +189,13 @@ Item {
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody
                 }
+                Label {
+                    text: typeof spotify === "undefined" || !spotify.available ? "Spotify: not set up"
+                          : !spotify.linked ? "Spotify: pick “" + (spotify.deviceName || "Baja") + "” in the Spotify app to link"
+                          : "Spotify: linked as “" + spotify.deviceName + "”"
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                }
             }
 
             // Network: online state, Wi-Fi name and the address to SSH to.

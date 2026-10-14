@@ -1,0 +1,23 @@
+# Spotify Soloist: Spotify's official headless Spotify Connect player.
+# Shows up in the Spotify app as "Baja" (SOLOIST_NAME) and plays through
+# PipeWire. Its local WebSocket API (loopback only, it has no auth) is what
+# backend/spotify.py talks to. Installed by deploy/spotify/install-soloist.sh
+# as a user service, so it shares the PipeWire session.
+[Unit]
+Description=Spotify Soloist for Baja OS
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=%h/.config/baja-os/soloist.env
+# The API key is a flag (Soloist has no env var for it), so it's visible in
+# `ps` on this single-user Pi; it's never written to the repo or logs.
+ExecStart=/bin/sh -c 'exec "%h/.local/opt/soloist/soloist" -n "$${SOLOIST_NAME:-Baja}" -k "$SOLOIST_KEY" -D "%h/.local/share/soloist" -C "%h/.cache/soloist" -z 500 -w 127.0.0.1:47240'
+Restart=always
+RestartSec=5
+# Exit 10 = this build expired; the updater fetches a fresh one.
+ExecStopPost=/bin/sh -c '[ "$EXIT_STATUS" = 10 ] && systemctl --user start baja-soloist-update.service || true'
+
+[Install]
+WantedBy=default.target

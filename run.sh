@@ -39,10 +39,16 @@ if [ -n "$QT_QPA_PLATFORM" ]; then
     exec python3 main.py $FULLSCREEN "$@"
 fi
 
+started=$(date +%s)
 QT_QPA_PLATFORM=eglfs python3 main.py $FULLSCREEN "$@"
 status=$?
-# Only a startup failure should fall back. Qt aborts (exit 134) when eglfs
-# can't initialise; Ctrl-C/kill on eglfs exits 1 via Qt's console handler.
-[ $status -eq 134 ] || exit $status
+# Only a startup failure should fall back: Qt aborts (exit 134) when eglfs
+# can't initialise. A crash later also aborts with 134 (PyQt turns an
+# unhandled Python exception into an abort), so fall back only if it died
+# within the first 10 s; otherwise exit and let systemd restart us.
+# Ctrl-C/kill on eglfs exits 1 via Qt's console handler.
+if [ $status -ne 134 ] || [ $(( $(date +%s) - started )) -gt 10 ]; then
+    exit $status
+fi
 echo "eglfs failed (exit $status); falling back to linuxfb" >&2
 QT_QPA_PLATFORM=linuxfb exec python3 main.py $FULLSCREEN "$@"

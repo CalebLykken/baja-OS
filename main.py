@@ -29,6 +29,8 @@ from backend.hub import MediaHub
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.settings import Settings
+from backend.spotify import SpotifyPlayer
+from backend.systemd import Watchdog
 from backend.vehicle import VehicleData
 
 ROOT = Path(__file__).resolve().parent
@@ -76,9 +78,10 @@ def main():
     # for real ones (OBD-II reader, audio player) without touching the UI.
     vehicle = VehicleData()
     settings = Settings()
-    # Local music and the phone (Bluetooth) behind one `media` object.
+    # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio()
-    media = MediaHub(make_media_player(args.music_dir), bluetooth,
+    spotify = SpotifyPlayer()
+    media = MediaHub(make_media_player(args.music_dir), bluetooth, spotify,
                      volume=settings.get_int("volume", 40))
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     display = Display()
@@ -89,6 +92,7 @@ def main():
     ctx.setContextProperty("vehicle", vehicle)
     ctx.setContextProperty("media", media)
     ctx.setContextProperty("bluetooth", bluetooth)
+    ctx.setContextProperty("spotify", spotify)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("network", network)
     ctx.setContextProperty("demoMode", True)
@@ -108,6 +112,9 @@ def main():
     vehicle.start()
     media.start()
     network.start()
+    # Tell systemd we're up, then keep its watchdog fed from the UI thread.
+    watchdog = Watchdog()
+    watchdog.start()
     code = app.exec()
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

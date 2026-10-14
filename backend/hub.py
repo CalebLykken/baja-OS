@@ -1,18 +1,27 @@
 """The one `media` object the UI talks to.
 
-Wraps the local player (library or demo) and the phone over Bluetooth and
-forwards whichever is active, with the same properties and slots the QML
-already uses. The phone takes over when it starts playing (local music
-pauses); tapping a song in the queue switches back.
+Fronts three sources and forwards whichever is active, with the same
+properties and slots the QML already uses:
 
-Volume follows the active source, like a car stereo: while the phone plays,
-the bar is the phone's own volume (Bluetooth absolute volume, in sync with
-the phone's buttons) and the Pi's output sits at 100%; for local music it's
-the Pi's output volume via PipeWire's `wpctl` (or the player's own volume
-where wpctl doesn't exist, e.g. on a Mac).
+- `local`:   files on the Pi (or the demo playlist)
+- `phone`:   the phone over Bluetooth (A2DP + AVRCP)
+- `spotify`: Spotify Connect on the Pi (Soloist)
 
-It also derives two things from the current album art for the Music page:
-an accent colour and a pre-blurred backdrop image.
+Switching: whichever source most recently started playing takes over and the
+others are paused. Tapping a song in the local queue switches back to local.
+One exception: right after the phone (re)connects over Bluetooth, iPhones
+often resume playback by themselves; for a few seconds that doesn't count as
+"started playing" while Spotify is the active source.
+
+Volume follows the active source, like a car stereo. Phone and Spotify keep
+their own volume (synced with the phone's slider), and the Pi's output sits
+at 100% while they play. Local music uses the Pi's output volume via
+PipeWire's `wpctl` (or the player's own volume where wpctl doesn't exist,
+e.g. on a Mac).
+
+It also derives an accent colour and a pre-blurred backdrop from the
+current album art for the Music page; Spotify covers are downloaded and
+cached first.
 """
 
 import hashlib
@@ -20,12 +29,15 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
+import urllib.request
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QImage
 
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
+PHONE_RECONNECT_GRACE_S = 10
 
 
 def art_derivatives(url):
@@ -50,70 +62,111 @@ def art_derivatives(url):
     return accent, QUrl.fromLocalFile(str(out)).toString()
 
 
+def cached_art(url):
+    """A local file URL for `url`: file URLs as-is, http(s) downloaded once."""
+    if not url or not url.startswith("http"):
+        return url
+    ART_CACHE.mkdir(exist_ok=True)
+    out = ART_CACHE / (hashlib.sha1(url.encode()).hexdigest() + ".img")
+    if not out.exists():
+        with urllib.request.urlopen(url, timeout=10) as r:
+            out.write_bytes(r.read())
+    return QUrl.fromLocalFile(str(out)).toString()
+
+
 class MediaHub(QObject):
     trackChanged = pyqtSignal()
     positionChanged = pyqtSignal()
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     sourceChanged = pyqtSignal()
+    queueChanged = pyqtSignal()
+    _artReady = pyqtSignal(str, str, str, str)   # source, art url, accent, blur
 
-    def __init__(self, local, phone, volume=40, parent=None):
+    def __init__(self, local, phone, spotify, volume=40, parent=None):
         super().__init__(parent)
-        self._local = local
-        self._phone = phone
+        self._sources = {"local": local, "phone": phone, "spotify": spotify}
         self._source = "local"
         self._system_volume = bool(shutil.which("wpctl"))
         self._volume = max(0, min(100, int(volume)))
-        self._art_accent, self._art_blur = "", ""
+        self._art = {}                  # source -> (art url, accent, blur)
+        self._phone_connected_at = 0.0
+        self._phone_name = phone.deviceName
 
-        for sig in ("trackChanged", "positionChanged", "playingChanged"):
-            getattr(local, sig).connect(lambda s=sig: self._forward("local", s))
-            getattr(phone, sig).connect(lambda s=sig: self._forward("phone", s))
-        local.trackChanged.connect(self._update_art)
-        phone.playingChanged.connect(self._phone_playing_changed)
+        for name, src in self._sources.items():
+            for sig in ("trackChanged", "positionChanged", "playingChanged"):
+                getattr(src, sig).connect(lambda n=name, s=sig: self._forward(n, s))
+            src.playingChanged.connect(lambda n=name: self._source_playing_changed(n))
+            src.trackChanged.connect(lambda n=name: self._update_art(n))
         phone.trackChanged.connect(self._phone_player_changed)
-        phone.volumeChanged.connect(self._phone_volume_changed)
+        phone.changed.connect(self._phone_connection_changed)
+        phone.volumeChanged.connect(lambda: self._remote_volume_changed("phone"))
+        spotify.volumeChanged.connect(lambda: self._remote_volume_changed("spotify"))
+        spotify.changed.connect(self._spotify_changed)
+        spotify.queueChanged.connect(self.queueChanged)
+        self._artReady.connect(self._apply_art)
 
         if self._system_volume:
             local.setVolume(100)          # master volume lives in PipeWire
         self._apply_volume()
-        self._update_art()
+        self._update_art("local")
 
     def start(self):
-        self._local.start()
-        self._phone.start()
+        for src in self._sources.values():
+            src.start()
 
     # ---- source switching -------------------------------------------------
     @property
     def _active(self):
-        return self._phone if self._source == "phone" else self._local
+        return self._sources[self._source]
 
     @property
-    def _phone_volume(self):
-        return self._source == "phone" and self._phone.hasVolume
+    def _remote_volume(self):
+        """True when the active source keeps its own volume (phone, Spotify)."""
+        return self._source != "local" and self._active.hasVolume
 
     def _set_source(self, source):
         if source != self._source:
             self._source = source
             self._apply_volume()
-            self.sourceChanged.emit()
-            self.volumeChanged.emit()
-            self.trackChanged.emit()
-            self.positionChanged.emit()
-            self.playingChanged.emit()
+            for sig in ("sourceChanged", "volumeChanged", "trackChanged",
+                        "positionChanged", "playingChanged", "queueChanged"):
+                getattr(self, sig).emit()
 
-    def _phone_playing_changed(self):
-        if self._phone.playing:
-            if self._local.playing:
-                self._local.togglePlay()
-            self._set_source("phone")
+    def _pause_others(self, keep):
+        for name, src in self._sources.items():
+            if name != keep and src.playing:
+                if hasattr(src, "pause"):
+                    src.pause()
+                else:
+                    src.togglePlay()
+
+    def _source_playing_changed(self, name):
+        if not self._sources[name].playing or name == self._source:
+            return
+        if (name == "phone" and self._source == "spotify"
+                and time.monotonic() - self._phone_connected_at < PHONE_RECONNECT_GRACE_S):
+            return       # an iPhone auto-resuming after reconnecting
+        self._pause_others(keep=name)
+        self._set_source(name)
+
+    def _phone_connection_changed(self):
+        name = self._sources["phone"].deviceName
+        if name and not self._phone_name:
+            self._phone_connected_at = time.monotonic()
+        self._phone_name = name
 
     def _phone_player_changed(self):
-        if not self._phone.hasPlayer and self._source == "phone":
+        if not self._sources["phone"].hasPlayer and self._source == "phone":
             self._set_source("local")
 
-    def _phone_volume_changed(self):
-        if self._phone_volume:
+    def _spotify_changed(self):
+        sp = self._sources["spotify"]
+        if self._source == "spotify" and not (sp.available and sp.active):
+            self._set_source("local")    # moved to another device, or Soloist stopped
+
+    def _remote_volume_changed(self, name):
+        if name == self._source and self._remote_volume:
             self._apply_volume()      # the Pi's output goes to 100% once known
             self.volumeChanged.emit()
 
@@ -121,31 +174,56 @@ class MediaHub(QObject):
         if origin == self._source:
             getattr(self, signal).emit()
 
-    def _update_art(self):
-        self._art_accent, self._art_blur = art_derivatives(self._local.art)
-        if self._source == "local":
+    # ---- album art --------------------------------------------------------
+    def _update_art(self, name):
+        url = self._sources[name].art
+        if name == "local":
+            accent, blur = art_derivatives(url)
+            self._apply_art(name, url, accent, blur)
+            return
+        if not url:
+            self._apply_art(name, "", "", "")
+            return
+
+        def work():
+            try:
+                local = cached_art(url)
+                accent, blur = art_derivatives(local)
+            except Exception:          # offline, bad URL: keep the remote URL
+                local, accent, blur = url, "", ""
+            self._artReady.emit(name, local, accent, blur)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_art(self, name, url, accent, blur):
+        self._art[name] = (url, accent, blur)
+        if name == self._source:
             self.trackChanged.emit()
+
+    def _art_field(self, i):
+        return self._art.get(self._source, ("", "", ""))[i]
 
     # ---- volume -----------------------------------------------------------
     def _apply_volume(self):
         if self._system_volume:
-            # Phone audio: the phone sets the level, so the Pi stays at full.
-            level = "1.00" if self._phone_volume else f"{self._volume / 100:.2f}"
+            level = "1.00" if self._remote_volume else f"{self._volume / 100:.2f}"
             threading.Thread(target=lambda: subprocess.run(
                 ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", level],
                 capture_output=True, timeout=3), daemon=True).start()
         else:
-            self._local.setVolume(self._volume)
+            self._sources["local"].setVolume(self._volume)
 
     # ---- properties (same names as the players, plus source info) ---------
     @pyqtProperty(str, notify=sourceChanged)
     def source(self):
-        """'local' or 'phone'."""
+        """'local', 'phone' or 'spotify'."""
         return self._source
 
     @pyqtProperty(str, notify=sourceChanged)
     def sourceName(self):
-        return self._phone.deviceName if self._source == "phone" else ""
+        """Who's playing, for the badge: the phone's name, or 'Spotify'."""
+        if self._source == "phone":
+            return self._sources["phone"].deviceName
+        return "Spotify" if self._source == "spotify" else ""
 
     @pyqtProperty(str, notify=trackChanged)
     def title(self):
@@ -157,17 +235,17 @@ class MediaHub(QObject):
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):
-        return self._local.art if self._source == "local" else ""
+        return self._art_field(0)
 
     @pyqtProperty(str, notify=trackChanged)
     def artColor(self):
         """Accent colour taken from the album art, or '' when there's none."""
-        return self._art_accent if self._source == "local" else ""
+        return self._art_field(1)
 
     @pyqtProperty(str, notify=trackChanged)
     def artBlur(self):
         """Blurred album art for page backdrops, or ''."""
-        return self._art_blur if self._source == "local" else ""
+        return self._art_field(2)
 
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):
@@ -175,11 +253,17 @@ class MediaHub(QObject):
 
     @pyqtProperty(int, notify=trackChanged)
     def index(self):
-        return self._local.index if self._source == "local" else -1
+        return self._sources["local"].index if self._source == "local" else -1
 
     @pyqtProperty("QVariantList", constant=True)
     def queue(self):
-        return self._local.queue
+        """The local music library (tap to play)."""
+        return self._sources["local"].queue
+
+    @pyqtProperty("QVariantList", notify=queueChanged)
+    def upNext(self):
+        """What Spotify plays next (display only)."""
+        return self._sources["spotify"].upNext if self._source == "spotify" else []
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):
@@ -191,11 +275,11 @@ class MediaHub(QObject):
 
     @pyqtProperty(int, notify=volumeChanged)
     def volume(self):
-        return self._phone.volume if self._phone_volume else self._volume
+        return self._active.volume if self._remote_volume else self._volume
 
     @property
     def local_volume(self):
-        """The Pi's own volume (what's saved between runs); the phone keeps its own."""
+        """The Pi's own volume (what's saved between runs); phone and Spotify keep their own."""
         return self._volume
 
     # ---- controls ---------------------------------------------------------
@@ -213,16 +297,15 @@ class MediaHub(QObject):
 
     @pyqtSlot(int)
     def playIndex(self, index):
-        if self._source == "phone" and self._phone.playing:
-            self._phone.pause()
+        self._pause_others(keep="local")
         self._set_source("local")
-        self._local.playIndex(index)
+        self._sources["local"].playIndex(index)
 
     @pyqtSlot(int)
     def setVolume(self, value):
         value = max(0, min(100, int(value)))
-        if self._phone_volume:
-            self._phone.setVolume(value)
+        if self._remote_volume:
+            self._active.setVolume(value)
             return
         if value != self._volume:
             self._volume = value

@@ -47,15 +47,17 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 glass: page.hasBackdrop ? 0.45 : 0
-                // While the phone plays, the list is still here: tap a song
-                // to switch back to the Pi's own music.
-                heading: media.source === "phone" ? "Library · tap a song to switch" : "Queue"
+                // Spotify: what it plays next (display only). Otherwise the
+                // Pi's own music; while the phone plays, tap a song to switch.
+                readonly property bool spotifyQueue: media.source === "spotify"
+                heading: spotifyQueue ? "Up next on Spotify"
+                         : media.source === "phone" ? "Library · tap a song to switch" : "Queue"
 
                 ListView {
                     id: queue
                     anchors { fill: parent; margins: 12; topMargin: 48 }
                     clip: true
-                    model: media.queue
+                    model: parent.spotifyQueue ? media.upNext : media.queue
                     boundsBehavior: Flickable.StopAtBounds
 
                     delegate: Rectangle {
@@ -108,7 +110,10 @@ Item {
                                 elide: Text.ElideRight
                             }
                         }
-                        TapHandler { id: rowTap; onTapped: media.playIndex(index) }
+                        TapHandler {
+                            id: rowTap
+                            onTapped: if (media.source !== "spotify") media.playIndex(index)
+                        }
                     }
                 }
             }

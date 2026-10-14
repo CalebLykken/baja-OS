@@ -28,7 +28,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     pipewire pipewire-pulse wireplumber plymouth \
     fonts-urw-base35 fonts-liberation fonts-dejavu-core \
     qml6-module-qtquick3d qml6-module-qtquick3d-assetutils qt6-quick3d-assetimporters-plugin \
-    bluez bluez-tools libspa-0.2-bluetooth
+    bluez bluez-tools libspa-0.2-bluetooth \
+    python3-pyqt6.qtwebengine qml6-module-qtwebengine python3-pyqt6.qtwebsockets
 # The user's PipeWire session (audio) runs at boot without anyone logging in,
 # with the PulseAudio-compatible socket that Qt Multimedia plays through.
 loginctl enable-linger "$USER_NAME"
@@ -95,6 +96,17 @@ fi
 # (plymouth deactivate) and only then quits it, so there's no black gap.
 rm -f /etc/systemd/system/plymouth-quit.service.d/baja-retain-splash.conf
 systemctl mask plymouth-quit.service plymouth-quit-wait.service
+
+echo "== Hardware watchdog"
+# If the whole system hangs (not just the app), the Pi's hardware watchdog
+# reboots it. systemd feeds it every few seconds.
+mkdir -p /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/baja-watchdog.conf <<CONF
+[Manager]
+RuntimeWatchdogSec=15
+RebootWatchdogSec=2min
+CONF
+systemctl daemon-reexec                    # pick up the new manager settings
 
 echo "== Baja OS service"
 sed -e "s|@USER@|$USER_NAME|g" -e "s|@UID@|$USER_ID|g" -e "s|@APP@|$APP|g" \

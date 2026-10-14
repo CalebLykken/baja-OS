@@ -17,13 +17,19 @@ Card {
     heading: "Now playing"
 
     readonly property bool fromPhone: media.source === "phone"
+    readonly property bool fromSpotify: media.source === "spotify"
     readonly property color tint: media.artColor !== "" ? media.artColor : Theme.accent
 
     Row {
-        visible: np.fromPhone
+        visible: np.fromPhone || np.fromSpotify
         anchors { right: parent.right; top: parent.top; rightMargin: 20; topMargin: 12 }
         spacing: 6
-        Icon { name: "bluetooth"; size: 20; color: Theme.accent; anchors.verticalCenter: parent.verticalCenter }
+        Icon {
+            name: np.fromSpotify ? "music" : "bluetooth"
+            size: 20
+            color: np.fromSpotify ? "#1ed760" : Theme.accent     // Spotify green
+            anchors.verticalCenter: parent.verticalCenter
+        }
         Label {
             anchors.verticalCenter: parent.verticalCenter
             text: media.sourceName || "Phone"

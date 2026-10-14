@@ -205,6 +205,11 @@ class BluetoothAudio(QObject):
         p = self._player or {}
         return p.get("artist") or self.deviceName or ""
 
+    @pyqtProperty(str, notify=trackChanged)
+    def art(self):
+        """Always '': AVRCP doesn't carry cover art in practice."""
+        return ""
+
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):
         return (self._player or {}).get("duration_ms", 0) // 1000

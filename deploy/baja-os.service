@@ -11,6 +11,8 @@
 
 [Unit]
 Description=Baja OS dashboard
+# Never stop retrying: a black screen in the car is worse than a crash loop.
+StartLimitIntervalSec=0
 After=systemd-user-sessions.service plymouth-start.service user@@UID@.service
 Wants=user@@UID@.service
 
@@ -25,10 +27,17 @@ ExecStart=@APP@/run.sh
 # the text console and the app loses it ("Could not queue DRM page flip").
 # Deactivated, Plymouth just idles. It's quit only once the app has stopped.
 ExecStopPost=+-/usr/bin/plymouth quit
-Restart=on-failure
+
+# Come back from anything: crashes (any exit code), and hangs. The app sends
+# READY once its window is up and then pings the watchdog from the UI
+# thread (backend/systemd.py); if the UI freezes for 20 s it's restarted.
+# The app is a child of run.sh, hence NotifyAccess=all.
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=90
+WatchdogSec=20
+Restart=always
 RestartSec=3
-# Qt's eglfs exits 1 when stopped; don't count a deliberate stop as a crash.
-SuccessExitStatus=1
 
 [Install]
 WantedBy=multi-user.target

@@ -31,7 +31,7 @@ def _v(variant):
 def parse_objects(objects):
     """Reduce BlueZ's GetManagedObjects data to what the UI needs."""
     state = {"adapter": None, "discoverable": False, "device": None, "player": None,
-             "to_trust": [], "transport": None, "volume": None}
+             "to_trust": [], "transport": None, "volume": None, "paired": []}
     devices = {}
     for path, ifaces in objects.items():
         if "org.bluez.Adapter1" in ifaces and state["adapter"] is None:
@@ -65,6 +65,11 @@ def parse_objects(objects):
                 "duration_ms": int(_v(track.get("Duration")) or 0),
             }
     connected = [(p, d) for p, d in devices.items() if _v(d.get("Connected"))]
+    state["paired"] = sorted(
+        ({"path": p, "name": _v(d.get("Alias")) or _v(d.get("Name")) or _v(d.get("Address")) or "Device",
+          "connected": bool(_v(d.get("Connected")))}
+         for p, d in devices.items() if _v(d.get("Paired"))),
+        key=lambda d: (not d["connected"], d["name"].lower()))
     if state["player"] and state["player"]["device"] in devices:
         path = state["player"]["device"]
         state["device"] = _v(devices[path].get("Alias")) or _v(devices[path].get("Name")) or "Phone"
@@ -139,8 +144,8 @@ class BluetoothAudio(QObject):
         old, old_player = self._state, self._player
         self._state, self._player = state, state["player"]
         p, o = self._player, old_player or {}
-        if (old["adapter"], old["discoverable"], old["device"]) != \
-                (state["adapter"], state["discoverable"], state["device"]):
+        if (old["adapter"], old["discoverable"], old["device"], old["paired"]) != \
+                (state["adapter"], state["discoverable"], state["device"], state["paired"]):
             self.changed.emit()
         # Ignore polls that raced a change we just sent, so the bar doesn't
         # jump back while the phone catches up.
@@ -191,6 +196,11 @@ class BluetoothAudio(QObject):
     @pyqtProperty(str, notify=changed)
     def deviceName(self):
         return self._state["device"] or ""
+
+    @pyqtProperty("QVariantList", notify=changed)
+    def paired(self):
+        """Paired devices: [{path, name, connected}], connected first."""
+        return self._state["paired"]
 
     @pyqtProperty(bool, notify=trackChanged)
     def hasPlayer(self):
@@ -271,6 +281,26 @@ class BluetoothAudio(QObject):
             "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
             "Volume", "q", str(raw)), daemon=True).start()
         self.volumeChanged.emit()
+
+    @pyqtSlot(str)
+    def connectDevice(self, path):
+        if path.startswith("/org/bluez/"):
+            threading.Thread(target=lambda: _busctl("call", "org.bluez", path, "org.bluez.Device1",
+                                                    "Connect", timeout=25), daemon=True).start()
+
+    @pyqtSlot(str)
+    def disconnectDevice(self, path):
+        if path.startswith("/org/bluez/"):
+            threading.Thread(target=lambda: _busctl("call", "org.bluez", path, "org.bluez.Device1",
+                                                    "Disconnect", timeout=10), daemon=True).start()
+
+    @pyqtSlot(str)
+    def forgetDevice(self, path):
+        """Unpair: the phone has to pair again to come back."""
+        adapter = self._state["adapter"]
+        if adapter and path.startswith(adapter + "/"):
+            threading.Thread(target=lambda: _busctl("call", "org.bluez", adapter, "org.bluez.Adapter1",
+                                                    "RemoveDevice", "o", path), daemon=True).start()
 
     @pyqtSlot(bool)
     def setPairing(self, on):

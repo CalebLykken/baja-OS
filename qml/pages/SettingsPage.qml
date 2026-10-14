@@ -436,6 +436,52 @@ Item {
                     text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”. Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
                 }
             }
+
+            Section {
+                visible: bluetooth.available && bluetooth.paired.length > 0
+                Layout.fillWidth: true
+                heading: "Paired"
+                Repeater {
+                    model: bluetooth.paired
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 14
+                        Icon {
+                            name: "phone"
+                            size: 28
+                            color: modelData.connected ? Theme.accent : Theme.textDim
+                        }
+                        Column {
+                            Layout.fillWidth: true
+                            Label {
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: modelData.name
+                                font.pixelSize: Theme.fontBody
+                                font.weight: modelData.connected ? Font.DemiBold : Font.Normal
+                            }
+                            Label {
+                                text: modelData.connected ? "Connected" : "Not connected"
+                                color: modelData.connected ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
+                        }
+                        TextButton {
+                            text: modelData.connected ? "Disconnect" : "Connect"
+                            onClicked: modelData.connected ? bluetooth.disconnectDevice(modelData.path)
+                                                           : bluetooth.connectDevice(modelData.path)
+                        }
+                        ConfirmButton {
+                            icon: "delete"
+                            text: "Forget"
+                            confirmText: "Tap again to forget"
+                            danger: true
+                            onConfirmed: bluetooth.forgetDevice(modelData.path)
+                        }
+                    }
+                }
+                Note { text: "Forgetting a phone means pairing it again to use it here." }
+            }
         }
     }
 

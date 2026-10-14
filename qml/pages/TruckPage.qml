@@ -1,13 +1,15 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick3D
-import QtQuick3D.AssetUtils
 import "../components"
+import "../assets/truck"
 
 // The Baja in 3D: turns slowly on its own, drag sideways to spin it. Only
 // renders while this page is on screen (PageHost hides it otherwise), so
-// it costs nothing the rest of the time. The model is the portfolio's
-// baja.glb with trim, interior and tyres simplified (~123k triangles).
+// it costs nothing the rest of the time. The model is baja-3d.glb (~123k
+// triangles) converted to Qt's own mesh files, which load at once, with
+// its materials put right (tools/convert_truck.py): glossy gold paint,
+// grey cladding, tinted glass, and BAJA plates.
 Item {
     id: page
     signal navigate(int index)
@@ -25,6 +27,17 @@ Item {
     }
     Timer { id: resume; interval: 2500 }
 
+    // A soft pool of light on the floor under the truck, so it stands on
+    // something (flat and fixed, like the camera: costs nothing to draw).
+    Image {
+        anchors { horizontalCenter: view.horizontalCenter; top: view.top; topMargin: view.height * 0.6 }
+        width: Math.min(view.width * 0.85, 940)
+        height: width * 0.25
+        // Light on a dark page, shade on a light one.
+        source: Qt.resolvedUrl(Theme.dark ? "../assets/truck/floor.png" : "../assets/truck/floor-shade.png")
+        opacity: Theme.dark ? 0.12 : 0.14
+    }
+
     View3D {
         id: view
         anchors { left: parent.left; right: parent.right; top: parent.top; bottom: readouts.top }
@@ -33,6 +46,7 @@ Item {
             backgroundMode: SceneEnvironment.Transparent
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
+            specularAAEnabled: true          // no sparkle along glossy edges
             tonemapMode: SceneEnvironment.TonemapModeFilmic
             // A generated photo-studio environment (dark room, big soft
             // panels). Metallic car paint gets its colour from reflecting
@@ -40,29 +54,47 @@ Item {
             // Pre-filtered once with Qt's balsam (tools/make_studio_hdr.py):
             // filtering the .hdr at runtime froze the Pi for 7 s.
             lightProbe: Texture { source: Qt.resolvedUrl("../assets/studio.ktx") }
-            probeExposure: 1.1
+            probeExposure: 1.25
             probeOrientation: Qt.vector3d(0, -page.spin, 0)   // reflections stay put as it turns
         }
 
         // Model units are metres; scale to centimetres, Quick 3D's defaults.
         PerspectiveCamera {
-            position: Qt.vector3d(0, 175, 640)
-            eulerRotation.x: -10
+            position: Qt.vector3d(0, 140, 490)
+            eulerRotation.x: -9
             fieldOfView: 38
         }
 
         // The studio environment does most of the lighting; one key light
         // adds definition and a warm rim separates the truck from the page.
-        DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 0.8 }
+        DirectionalLight { eulerRotation: Qt.vector3d(-55, -25, 0); brightness: 1.1 }
         DirectionalLight { eulerRotation: Qt.vector3d(-25, 170, 0); brightness: 0.5; color: "#ffe2c4" }
 
         Node {
             eulerRotation.y: page.spin
 
-            RuntimeLoader {
-                id: truck
-                source: Qt.resolvedUrl("../assets/baja-3d.glb")
-                scale: Qt.vector3d(100, 100, 100)
+            Node {
+                scale: Qt.vector3d(100, 100, 100)          // metres to centimetres
+                BajaModel {}
+                // Its plates: the model's size and place, with BAJA on.
+                Model {
+                    source: "#Rectangle"
+                    position: Qt.vector3d(0.0035, 0.5108, 2.4245)
+                    scale: Qt.vector3d(0.0052, 0.0011, 1)
+                    materials: plate
+                }
+                Model {
+                    source: "#Rectangle"
+                    position: Qt.vector3d(-0.0035, 0.7608, -2.3365)
+                    eulerRotation.y: 180
+                    scale: Qt.vector3d(0.0052, 0.0011, 1)
+                    materials: plate
+                }
+                PrincipledMaterial {
+                    id: plate
+                    baseColorMap: Texture { source: Qt.resolvedUrl("../assets/truck/plate.png"); generateMipmaps: true; mipFilter: Texture.Linear }
+                    roughness: 0.45
+                }
             }
 
             // Soft pre-drawn contact shadow that turns with the truck: looks
@@ -80,14 +112,6 @@ Item {
                 }
             }
         }
-    }
-
-    Label {
-        visible: truck.status === RuntimeLoader.Error
-        anchors.centerIn: parent
-        text: "Couldn't load the 3D model"
-        color: Theme.textDim
-        font.pixelSize: Theme.fontBody
     }
 
     // Drag sideways anywhere to spin the truck.

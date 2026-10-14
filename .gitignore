@@ -11,3 +11,4 @@ venv/
 !qml/assets/*.hdr
 !qml/assets/*.ktx
 .version
+!qml/assets/truck/*.png

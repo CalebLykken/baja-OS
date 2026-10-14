@@ -38,6 +38,9 @@ TimeoutStartSec=90
 WatchdogSec=20
 Restart=always
 RestartSec=3
+# A frozen app can't act on SIGTERM; force-kill after 5 s instead of the
+# default 90 so a hang costs seconds, not a minute and a half.
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target

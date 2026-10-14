@@ -25,6 +25,8 @@ from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 from backend import places
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +39,7 @@ TYPES = {
     ".css": "text/css",
     ".json": "application/json",
     ".png": "image/png",
+    ".webp": "image/webp",
     ".pbf": "application/x-protobuf",
     ".pmtiles": "application/octet-stream",
     ".geojson": "application/geo+json",
@@ -212,7 +215,7 @@ class MapService(QObject):
         if self._updating:
             return
         self._updating = True
-        self._progress.emit("Starting", True)
+        safe_emit(self, "_progress", "Starting", True)
         bbox = ",".join(str(v) for v in self._info.get("bbox", [])) or None
 
         def work():
@@ -229,11 +232,11 @@ class MapService(QObject):
                 for line in proc.stdout:
                     for prefix, message in steps.items():
                         if line.startswith(prefix):
-                            self._progress.emit(message, True)
+                            safe_emit(self, "_progress", message, True)
                 ok = proc.wait() == 0
             except OSError:
                 ok = False
-            self._progress.emit("Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
+            safe_emit(self, "_progress", "Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
         threading.Thread(target=work, name="map-update", daemon=True).start()
 
     def _on_progress(self, message, running):
@@ -277,7 +280,7 @@ class MapService(QObject):
                 db.close()
             except sqlite3.Error:
                 pass
-            self._found.emit(text, rows[:12])
+            safe_emit(self, "_found", text, rows[:12])
         threading.Thread(target=work, name="place-search", daemon=True).start()
 
     @pyqtSlot(str, float, float)
@@ -294,7 +297,7 @@ class MapService(QObject):
                 db.close()
             except sqlite3.Error:
                 rows = []
-            self._found.emit(key, rows)
+            safe_emit(self, "_found", key, rows)
         threading.Thread(target=work, name="place-nearby", daemon=True).start()
 
     def _on_found(self, text, rows):

@@ -21,12 +21,15 @@ import urllib.request
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend import safe_emit
+
 ROUTER = "http://127.0.0.1:8002"
 OFF_ROUTE_M = 60          # this far from the line ...
 OFF_ROUTE_FIXES = 3       # ... for this many fixes in a row means a new route
 REROUTE_EVERY_S = 10
 ARRIVED_M = 35
 FAST_MS = 20              # above ~45 mph, warn about turns from further out
+THEN_M = 300              # a turn this soon after the next one is shown with it
 
 # Early warnings: (metres, how to say it), imperial and metric.
 ALERTS = {
@@ -127,6 +130,16 @@ class Route:
                 return m
         return self.maneuvers[-1]
 
+    def then_maneuver(self):
+        """The maneuver after the next one, when it comes right after it."""
+        nxt = self.next_maneuver()
+        i = self.maneuvers.index(nxt)
+        if i + 1 >= len(self.maneuvers):
+            return None
+        m = self.maneuvers[i + 1]
+        gap = self.cum[m["begin_shape_index"]] - self.cum[nxt["begin_shape_index"]]
+        return m if gap < THEN_M else None
+
     @property
     def remaining(self):
         return max(0.0, self.length - self.along)
@@ -170,7 +183,7 @@ class Router(QObject):
                     ok = r.status == 200
             except (OSError, urllib.error.URLError):
                 ok = False
-            self._status.emit(ok)
+            safe_emit(self, "_status", ok)
         threading.Thread(target=work, daemon=True).start()
 
     def _on_status(self, ok):
@@ -203,15 +216,15 @@ class Router(QObject):
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=20) as r:
                     data = json.loads(r.read())
-                self._got.emit(data, "", name, reroute)
+                safe_emit(self, "_got", data, "", name, reroute)
             except urllib.error.HTTPError as e:
                 try:
                     msg = json.loads(e.read()).get("error", "")
                 except ValueError:
                     msg = ""
-                self._got.emit(None, msg or "No route found", name, reroute)
+                safe_emit(self, "_got", None, msg or "No route found", name, reroute)
             except (OSError, urllib.error.URLError, ValueError):
-                self._got.emit(None, "Routing isn't running", name, reroute)
+                safe_emit(self, "_got", None, "Routing isn't running", name, reroute)
         threading.Thread(target=work, name="route", daemon=True).start()
 
     def _on_route(self, data, error, name, reroute):
@@ -374,6 +387,12 @@ class Router(QObject):
         if self._arrived:
             return "place"
         return MANEUVER_ICONS.get(self._route.next_maneuver().get("type"), "straight")
+
+    @pyqtProperty(str, notify=progressChanged)
+    def thenIcon(self):
+        """The turn right after the next one, if it's close ("Then ↰"), else ''."""
+        m = self._route.then_maneuver() if self._route and not self._arrived else None
+        return MANEUVER_ICONS.get(m.get("type"), "straight") if m else ""
 
     @pyqtProperty(float, notify=progressChanged)
     def distanceToTurn(self):

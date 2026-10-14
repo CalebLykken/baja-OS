@@ -6,17 +6,17 @@
 <title>Baja OS map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
 <style>
-  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #14160f; }
+  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1b1d; }
   /* The dashboard draws its own keys and attribution over the map. */
   .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
-  /* The truck: an orange arrow lying flat on the map, with a light edge so
-     it stands out on the orange route. Colours follow the day/night look. */
-  .puck { width: 46px; height: 46px; filter: drop-shadow(0 3px 2px var(--shadow, rgba(0, 0, 0, 0.5))); }
-  .puck path { fill: var(--arrow, #ff7a1a); stroke: var(--arrow-edge, #e9dfc4); stroke-width: 3; stroke-linejoin: round; }
-  /* A picked place: a pin. */
+  /* The truck: one frame of car.webp, the 3D model seen from the side it's
+     facing (map.js picks the frame). It carries its own soft shadow. */
+  .puck { width: 84px; height: 84px; pointer-events: none; }
+  .car { width: 84px; height: 84px; background: url(car.webp) no-repeat; will-change: transform; }
+  /* A picked place: a red pin, like Apple Maps. */
   .pin { width: 44px; height: 56px; filter: drop-shadow(0 3px 2px var(--shadow, rgba(0, 0, 0, 0.5))); }
-  .pin path { fill: var(--arrow, #ff7a1a); stroke: var(--arrow-edge, #e9dfc4); stroke-width: 1.2; }
-  .pin circle { fill: var(--arrow-edge, #e9dfc4); }
+  .pin path { fill: var(--pin, #ff3b30); stroke: var(--pin-edge, #ffffff); stroke-width: 1.2; }
+  .pin circle { fill: var(--pin-edge, #ffffff); }
 </style>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>

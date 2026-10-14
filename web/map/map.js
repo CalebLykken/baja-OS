@@ -1,18 +1,18 @@
 // The Baja OS map: MapLibre GL JS drawing the offline Protomaps extract that
 // backend/maps.py serves from /data.
 //
-// Two looks, like the car maps it borrows from: a light one by day and a
-// dark one at night (QML picks by the sun, or Settings forces one). Both
-// are nearly neutral: land, a quiet water tone, barely-tinted parks, and
-// roads that carry the hierarchy; orange is only the route and the truck.
-// Labels are drawn larger than stock to read from the driver's seat, and
-// while following the truck the map drops what doesn't help driving
-// (shops, buildings, footpaths, one-way arrows).
+// Two looks after Apple Maps: a light one by day and a dark one at night
+// (QML picks by the sun, or Settings forces one). Labels are drawn larger
+// than stock to read from the driver's seat, and while following the truck
+// the map drops what doesn't help driving (shops, buildings, footpaths,
+// one-way arrows). Traffic lights and stop signs show only on a route.
 //
-// The truck is an arrow that glides between fixes. Following tilts the map
-// heading-up with the truck low on screen and clear of the dashboard's
-// panels (setInsets). QML drives it all through `window.baja` and listens
-// for console messages that start with "baja:".
+// The truck is a small 3D model of the Baja (pre-rendered from every side,
+// see tools/render_car_sprites.py) that glides between fixes and turns
+// with the road. Following tilts the map heading-up with the truck low on
+// screen and clear of the dashboard's panels (setInsets). QML drives it
+// all through `window.baja` and listens for console messages that start
+// with "baja:".
 
 import * as maplibregl from "./vendor/maplibre-gl.mjs";
 import { layers, namedFlavor } from "./vendor/basemaps.mjs";
@@ -27,76 +27,84 @@ function post(kind, data = {}) {
 
 // ---- the two looks ----------------------------------------------------------------
 
-const INK = "#14160f";               // the dashboard's Basin: night background, casings, halos
-const NL = "#201f1c";                // night land
+// After Apple Maps: soft green parks, clear blue water, white streets and
+// yellow freeways by day; the same in deep greys, navy and amber at night.
+// The route is Apple's blue; nothing else on the map is that colour.
+
+const NL = "#212225";                // night land
 const NIGHT = {
-    background: INK, earth: NL,
-    park_a: "#1c211d", park_b: "#1c211d", wood_a: "#1c211d", wood_b: "#1c211d", scrub_a: NL, scrub_b: NL,
-    water: "#10171c",
-    buildings: "#2e2c28",
-    industrial: NL, hospital: NL, school: NL, pedestrian: NL, beach: NL, sand: NL, aerodrome: NL,
-    zoo: NL, military: NL, glacier: NL,
-    runway: "#2c2a27", pier: "#302e2b",
-    other: "#2c2a27", minor_service: "#34322e", minor_a: "#302e2b", minor_b: "#3e3c38",
-    link: "#5c5851", major: "#5c5851", highway: "#7c766e",
-    minor_service_casing: NL, minor_casing: NL, link_casing: NL,
-    major_casing_early: INK, major_casing_late: INK, highway_casing_early: INK, highway_casing_late: INK,
-    tunnel_other: "#2a2926", tunnel_minor: "#2a2926", tunnel_link: "#3a3834", tunnel_major: "#3a3834",
-    tunnel_highway: "#4c4943",
+    background: "#1a1b1d", earth: NL,
+    park_a: "#1f2d24", park_b: "#20342a", wood_a: "#1f2d24", wood_b: "#20342a",
+    scrub_a: "#212a24", scrub_b: "#212a24",
+    water: "#162538",
+    buildings: "#2c2d31",
+    hospital: "#2b2326", industrial: "#242528", school: "#28262a", pedestrian: "#26272a",
+    beach: "#2a2924", sand: "#2a2924", aerodrome: "#26252d", zoo: "#1f2d24", military: "#26262a",
+    glacier: "#2a2b2e",
+    runway: "#333439", pier: "#34353a",
+    other: "#2e2f33", minor_service: "#36373c", minor_a: "#3b3c41", minor_b: "#46474d",
+    link: "#7a6236", major: "#55575e", highway: "#94733a",
+    minor_service_casing: NL, minor_casing: NL, link_casing: "#2a2418",
+    major_casing_early: "#1a1b1d", major_casing_late: "#1a1b1d",
+    highway_casing_early: "#3a2c14", highway_casing_late: "#3a2c14",
+    tunnel_other: "#2a2b2e", tunnel_minor: "#2f3034", tunnel_link: "#4a3f2b", tunnel_major: "#3c3d42",
+    tunnel_highway: "#5a4a2e",
     tunnel_other_casing: NL, tunnel_minor_casing: NL, tunnel_link_casing: NL, tunnel_major_casing: NL,
     tunnel_highway_casing: NL,
-    bridges_other: "#2c2a27", bridges_minor: "#3e3c38", bridges_link: "#5c5851", bridges_major: "#5c5851",
-    bridges_highway: "#7c766e",
-    bridges_other_casing: INK, bridges_minor_casing: INK, bridges_link_casing: INK, bridges_major_casing: INK,
-    bridges_highway_casing: INK,
-    railway: "#46433d", boundaries: "#4f4b44",
-    roads_label_minor: "#999284", roads_label_minor_halo: NL,
-    roads_label_major: "#c9c1ad", roads_label_major_halo: INK,
-    ocean_label: "#5e6c75",
-    subplace_label: "#8f897c", subplace_label_halo: INK,
-    city_label: "#e9dfc4", city_label_halo: INK,
-    state_label: "#6f695f", state_label_halo: INK, country_label: "#8f897c",
-    address_label: "#7d776c", address_label_halo: NL,
-    pois: { blue: "#999284", green: "#999284", lapis: "#999284", pink: "#999284", red: "#999284",
-            slategray: "#999284", tangerine: "#999284", turquoise: "#999284" },
-    landcover: { grassland: NL, barren: NL, urban_area: NL, farmland: NL, glacier: NL, scrub: NL,
-                 forest: "#1c211d" },
+    bridges_other: "#2e2f33", bridges_minor: "#46474d", bridges_link: "#7a6236", bridges_major: "#55575e",
+    bridges_highway: "#94733a",
+    bridges_other_casing: "#151618", bridges_minor_casing: "#151618", bridges_link_casing: "#151618",
+    bridges_major_casing: "#151618", bridges_highway_casing: "#151618",
+    railway: "#45464b", boundaries: "#55565c",
+    roads_label_minor: "#a2a3a8", roads_label_minor_halo: NL,
+    roads_label_major: "#d8d8dc", roads_label_major_halo: "#1a1b1d",
+    ocean_label: "#5d7a99",
+    subplace_label: "#8e8e93", subplace_label_halo: "#1a1b1d",
+    city_label: "#efeff2", city_label_halo: "#1a1b1d",
+    state_label: "#77787d", state_label_halo: "#1a1b1d", country_label: "#8e8e93",
+    address_label: "#7c7d82", address_label_halo: NL,
+    pois: { blue: "#a2a3a8", green: "#a2a3a8", lapis: "#a2a3a8", pink: "#a2a3a8", red: "#a2a3a8",
+            slategray: "#a2a3a8", tangerine: "#a2a3a8", turquoise: "#a2a3a8" },
+    landcover: { grassland: "#212a24", barren: NL, urban_area: NL, farmland: "#212a24", glacier: NL,
+                 scrub: "#212a24", forest: "#1f2d24" },
 };
 
-const DL = "#e8e4dc";                // day land
+const DL = "#f3f0ea";                // day land
 const DAY = {
-    background: "#d9d5cc", earth: DL,
-    park_a: "#dbe2d1", park_b: "#dbe2d1", wood_a: "#dbe2d1", wood_b: "#dbe2d1", scrub_a: DL, scrub_b: DL,
-    water: "#a9c4d3",
-    buildings: "#d4cfc4",
-    industrial: DL, hospital: DL, school: DL, pedestrian: DL, beach: DL, sand: DL, aerodrome: DL,
-    zoo: DL, military: DL, glacier: DL,
-    runway: "#dedad2", pier: "#ffffff",
-    other: "#f4f2ee", minor_service: "#f8f6f2", minor_a: "#f6f4f0", minor_b: "#ffffff",
-    link: "#ffffff", major: "#ffffff", highway: "#d0cabd",
-    minor_service_casing: "#d2cdc3", minor_casing: "#d2cdc3", link_casing: "#d2cdc3",
-    major_casing_early: "#b3ada1", major_casing_late: "#b3ada1",
-    highway_casing_early: "#8a8478", highway_casing_late: "#8a8478",
-    tunnel_other: "#f1efea", tunnel_minor: "#f1efea", tunnel_link: "#f1efea", tunnel_major: "#f1efea",
-    tunnel_highway: "#e0dbd1",
-    tunnel_other_casing: "#cfcac0", tunnel_minor_casing: "#cfcac0", tunnel_link_casing: "#cfcac0",
-    tunnel_major_casing: "#cfcac0", tunnel_highway_casing: "#cfcac0",
-    bridges_other: "#ffffff", bridges_minor: "#ffffff", bridges_link: "#ffffff", bridges_major: "#ffffff",
-    bridges_highway: "#d0cabd",
-    bridges_other_casing: "#b3ada1", bridges_minor_casing: "#b3ada1", bridges_link_casing: "#b3ada1",
-    bridges_major_casing: "#9d978b", bridges_highway_casing: "#7a7469",
-    railway: "#8f897d", boundaries: "#a39d91",
-    roads_label_minor: "#67625a", roads_label_minor_halo: "#ffffff",
-    roads_label_major: "#403c35", roads_label_major_halo: "#ffffff",
-    ocean_label: "#4d6878",
-    subplace_label: "#686258", subplace_label_halo: DL,
-    city_label: "#24221e", city_label_halo: "#f4f1eb",
-    state_label: "#8a8478", state_label_halo: DL, country_label: "#686258",
-    address_label: "#7d776c", address_label_halo: "#ffffff",
-    pois: { blue: "#67625a", green: "#67625a", lapis: "#67625a", pink: "#67625a", red: "#67625a",
-            slategray: "#67625a", tangerine: "#67625a", turquoise: "#67625a" },
-    landcover: { grassland: DL, barren: DL, urban_area: DL, farmland: DL, glacier: DL, scrub: DL,
-                 forest: "#dbe2d1" },
+    background: "#ebe7df", earth: DL,
+    park_a: "#d2e9c8", park_b: "#c6e4bb", wood_a: "#d6eacc", wood_b: "#cbe6c0",
+    scrub_a: "#dfeed6", scrub_b: "#dfeed6",
+    water: "#a5d0f3",
+    buildings: "#e3dfd7",
+    hospital: "#f6e0e0", industrial: "#ebe8e3", school: "#f2eadb", pedestrian: "#efece6",
+    beach: "#f6efd6", sand: "#f4eedb", aerodrome: "#e9e5ef", zoo: "#d2e9c8", military: "#ece8e4",
+    glacier: "#ffffff",
+    runway: "#dcd9e2", pier: "#ffffff",
+    other: "#f7f5f1", minor_service: "#fbfaf8", minor_a: "#fdfcfa", minor_b: "#ffffff",
+    link: "#fcd98c", major: "#ffffff", highway: "#f9c45a",
+    minor_service_casing: "#dcd7ce", minor_casing: "#d6d1c7", link_casing: "#dfac52",
+    major_casing_early: "#cbc5b9", major_casing_late: "#cbc5b9",
+    highway_casing_early: "#d99a35", highway_casing_late: "#d99a35",
+    tunnel_other: "#f1efea", tunnel_minor: "#f1efea", tunnel_link: "#f7e2b4", tunnel_major: "#f1efea",
+    tunnel_highway: "#f5d79c",
+    tunnel_other_casing: "#d6d1c7", tunnel_minor_casing: "#d6d1c7", tunnel_link_casing: "#e2c48c",
+    tunnel_major_casing: "#d6d1c7", tunnel_highway_casing: "#e2c48c",
+    bridges_other: "#ffffff", bridges_minor: "#ffffff", bridges_link: "#fcd98c", bridges_major: "#ffffff",
+    bridges_highway: "#f9c45a",
+    bridges_other_casing: "#bdb7ab", bridges_minor_casing: "#bdb7ab", bridges_link_casing: "#d09030",
+    bridges_major_casing: "#b3ada1", bridges_highway_casing: "#c98a2a",
+    railway: "#c4bfb6", boundaries: "#b5afa5",
+    roads_label_minor: "#5f5f63", roads_label_minor_halo: "#ffffff",
+    roads_label_major: "#3a3a3d", roads_label_major_halo: "#ffffff",
+    ocean_label: "#4a7fb0",
+    subplace_label: "#7c7c80", subplace_label_halo: DL,
+    city_label: "#1d1d1f", city_label_halo: "#f8f6f2",
+    state_label: "#8e8e93", state_label_halo: DL, country_label: "#6e6e73",
+    address_label: "#86868b", address_label_halo: "#ffffff",
+    pois: { blue: "#5f5f63", green: "#5f5f63", lapis: "#5f5f63", pink: "#5f5f63", red: "#5f5f63",
+            slategray: "#5f5f63", tangerine: "#5f5f63", turquoise: "#5f5f63" },
+    landcover: { grassland: "#dfeed6", barren: DL, urban_area: DL, farmland: "#e4efd9", glacier: "#ffffff",
+                 scrub: "#dfeed6", forest: "#d6eacc" },
 };
 
 // Labels in Overpass, after the US highway-sign lettering: made for
@@ -104,12 +112,12 @@ const DAY = {
 const FONTS = { regular: "Overpass Regular", bold: "Overpass SemiBold", italic: "Overpass Italic" };
 
 const LOOKS = {
-    night: { flavor: { ...namedFlavor("dark"), ...NIGHT, ...FONTS }, sprite: "dark", page: INK,
-             route: "#ff7a1a", routeCasing: INK, arrow: "#ff7a1a", arrowEdge: "#e9dfc4",
-             shadow: "rgba(20, 22, 15, 0.6)" },
-    day: { flavor: { ...namedFlavor("light"), ...DAY, ...FONTS }, sprite: "light", page: "#d9d5cc",
-           route: "#f26a0c", routeCasing: "#8a3a06", arrow: "#f26a0c", arrowEdge: "#ffffff",
-           shadow: "rgba(0, 0, 0, 0.35)" },
+    night: { flavor: { ...namedFlavor("dark"), ...NIGHT, ...FONTS }, sprite: "dark", page: "#1a1b1d",
+             route: "#2f8cff", routeCasing: "#0a4296", pin: "#ff453a", pinEdge: "#ffffff",
+             shadow: "rgba(0, 0, 0, 0.6)" },
+    day: { flavor: { ...namedFlavor("light"), ...DAY, ...FONTS }, sprite: "light", page: "#ebe7df",
+           route: "#1a7cf5", routeCasing: "#0b52b8", pin: "#ff3b30", pinEdge: "#ffffff",
+           shadow: "rgba(0, 0, 0, 0.3)" },
 };
 
 // Stock label sizes are for a phone in the hand; these read from the seat.
@@ -188,8 +196,8 @@ function styleFor(m) {
 function applyPageColours(m) {
     const look = LOOKS[m], css = document.documentElement.style;
     document.body.style.background = look.page;
-    css.setProperty("--arrow", look.arrow);
-    css.setProperty("--arrow-edge", look.arrowEdge);
+    css.setProperty("--pin", look.pin);
+    css.setProperty("--pin-edge", look.pinEdge);
     css.setProperty("--shadow", look.shadow);
 }
 
@@ -201,6 +209,7 @@ let mode = query.get("mode") === "day" ? "day" : "night";
 applyPageColours(mode);
 
 const region = await fetch(`${origin}/data/region.json`).then(r => r.json()).catch(() => null);
+const CAR = await fetch("car.json").then(r => r.json()).catch(() => null);      // the truck's frames
 // Keep the camera over the extract, with a little room past its edges.
 const [w, s, e, n] = region ? region.bbox : [-122.7, 47.1, -121.7, 48.1];
 const pad = 0.15;
@@ -244,12 +253,48 @@ function framePadding() {
 
 // ---- the truck and follow mode ----------------------------------------------------
 
+// The truck: a small 3D model of the Baja, pre-rendered from 64 directions
+// at three camera tilts (tools/render_car_sprites.py) into one picture,
+// car.webp. drawCar() shows the frame for the way the truck points on
+// screen and how far the map is tilted, and turns it the last few degrees,
+// so it looks like a real car on the road for the cost of one picture.
+const CAR_SIZE = 84;                         // CSS px per frame (car ~74 px long)
 const puck = document.createElement("div");
 puck.className = "puck";
-puck.innerHTML = '<svg viewBox="0 0 46 46" width="46" height="46"><path d="M23 4 L38 40 L23 32 L8 40 Z"/></svg>';
-const marker = new maplibregl.Marker({ element: puck, rotationAlignment: "map", pitchAlignment: "map" });
+const car = document.createElement("div");
+car.className = "car";
+puck.appendChild(car);
+if (CAR) {
+    car.style.backgroundSize = `${CAR.cols * CAR_SIZE}px ${CAR.rows * CAR_SIZE}px`;
+}
+const marker = new maplibregl.Marker({ element: puck, rotationAlignment: "viewport", pitchAlignment: "viewport" });
+let carFrame = -1, carTilt = -1;
 
-let shown = null;            // where the arrow is drawn: {lon, lat, heading, speed}
+function drawCar() {
+    if (!shown || !CAR) return;
+    const pitch = map.getPitch();
+    let t = 0;
+    CAR.tilts.forEach((tilt, i) => { if (pitch >= tilt.minPitch) t = i; });
+    const per = 360 / CAR.headings;
+    const rel = ((shown.heading - map.getBearing()) % 360 + 360) % 360;
+    const k = Math.round(rel / per);
+    const index = t * CAR.headings + (k % CAR.headings);
+    if (index !== carFrame) {
+        carFrame = index;
+        car.style.backgroundPosition =
+            `${-(index % CAR.cols) * CAR_SIZE}px ${-Math.floor(index / CAR.cols) * CAR_SIZE}px`;
+    }
+    car.style.transform = `rotate(${(rel - k * per).toFixed(2)}deg)`;
+    if (t !== carTilt) {
+        // The frame is centred on the middle of the truck; its wheels sit
+        // a little lower, on the spot it's at.
+        carTilt = t;
+        marker.setOffset([0, -CAR.tilts[t].drop * CAR_SIZE / CAR.frame]);
+    }
+}
+
+let shown = null;            // where the truck is drawn: {lon, lat, heading, speed}
+map.on("move", drawCar);
 let from = null, to = null, fixAt = 0, span = 1000, frame = 0;
 let touched = false, easingUntil = 0;
 let followZoom = 16.4, zoomBias = 0, approach = Infinity;
@@ -275,7 +320,7 @@ function followCamera(now) {
                  zoom: followZoom, padding: followPadding() });
 }
 
-// The name of the road under the arrow, checked about once a second.
+// The name of the road under the truck, checked about once a second.
 let road = "", roadCheckedAt = 0;
 const ROAD_LAYERS = ["roads_minor", "roads_minor_service", "roads_link", "roads_major",
                      "roads_highway", "roads_bridges_minor", "roads_bridges_link",
@@ -306,12 +351,14 @@ function step(now) {
     const f = Math.min(1, (now - fixAt) / span);
     shown = { lon: from.lon + (to.lon - from.lon) * f, lat: from.lat + (to.lat - from.lat) * f,
               heading: turn(from.heading, to.heading, f), speed: to.speed };
-    marker.setLngLat([shown.lon, shown.lat]).setRotation(shown.heading);
+    marker.setLngLat([shown.lon, shown.lat]);
     trimRoute(now);
+    refreshControls(false);
     if (following) {
         followCamera(now);
         checkRoad(now);
     }
+    drawCar();
     if (f < 1) frame = requestAnimationFrame(step);
 }
 
@@ -320,10 +367,11 @@ function setPosition(lon, lat, heading, speed) {
     const fix = { lon, lat, heading, speed };
     if (!shown) {
         shown = fix;
-        marker.setLngLat([lon, lat]).setRotation(heading).addTo(map);
+        marker.setLngLat([lon, lat]).addTo(map);
+        drawCar();
         if (!touched) startFollowing(true);
     }
-    // Glide from where the arrow is now to the new fix over about the time
+    // Glide from where the truck is now to the new fix over about the time
     // between fixes, so it never stops and never jumps.
     span = fixAt ? Math.min(2000, Math.max(300, now - fixAt)) : 1000;
     from = { ...shown };
@@ -436,18 +484,95 @@ map.on("styleimagemissing", (ev) => {
     if (kind && !map.hasImage(ev.id)) map.addImage(ev.id, controlIcon(kind), { pixelRatio: 2 });
 });
 
+// Like Apple Maps, only while driving a route, and only the lights and
+// signs along it (the next few km): exactly the ones you'll meet.
+let allControls = [];
+const grid = new Map();                    // ~400 m cells -> indexes into allControls
+const CELL = 0.004;
+const cellOf = (lon, lat) => `${Math.floor(lon / CELL)},${Math.floor(lat / CELL)}`;
+let shownControls = [], controlsAt = 0;
+let guiding = false;                       // driving a route (not just looking at one)
+
+fetch(`${origin}/data/controls.geojson`).then(r => r.json()).then(fc => {
+    allControls = fc.features.map(f => ({ lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], k: f.properties.k }));
+    allControls.forEach((c, i) => {
+        const key = cellOf(c.lon, c.lat);
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(i);
+    });
+    refreshControls(true);
+}).catch(() => {});
+
+function metres(aLon, aLat, bLon, bLat) {
+    const k = Math.cos(aLat * Math.PI / 180) * 111320;
+    return Math.hypot((bLon - aLon) * k, (bLat - aLat) * 110540);
+}
+
+function around(lon, lat, radius, into) {
+    const reach = Math.ceil(radius / 300);
+    const cx = Math.floor(lon / CELL), cy = Math.floor(lat / CELL);
+    for (let x = cx - reach; x <= cx + reach; x++) {
+        for (let y = cy - reach; y <= cy + reach; y++) {
+            for (const i of grid.get(`${x},${y}`) || []) {
+                const c = allControls[i];
+                if (metres(lon, lat, c.lon, c.lat) <= radius) into.add(i);
+            }
+        }
+    }
+    return into;
+}
+
+// Lights and signs within ~18 m of the route, for the next 4 km of it.
+function alongRoute(coords, from) {
+    const found = new Set();
+    let ahead = 0;
+    for (let i = Math.max(0, from); i < coords.length - 1 && ahead < 4000; i++) {
+        const [ax, ay] = coords[i], [bx, by] = coords[i + 1];
+        const len = metres(ax, ay, bx, by);
+        ahead += len;
+        // Check points every ~20 m along the segment.
+        const steps = Math.max(1, Math.ceil(len / 20));
+        for (let s = 0; s <= steps; s++) {
+            const f = s / steps;
+            around(ax + (bx - ax) * f, ay + (by - ay) * f, 18, found);
+        }
+    }
+    return found;
+}
+
+function refreshControls(force) {
+    const now = performance.now();
+    if (!allControls.length || (!force && now - controlsAt < 2000)) return;
+    controlsAt = now;
+    let list = [];
+    if (guiding && routeCoords) {
+        // From the truck on, so lights it has passed drop away.
+        const ahead = shown ? [[shown.lon, shown.lat], ...routeCoords.slice(trimFrom + 1)] : routeCoords;
+        list = [...alongRoute(ahead, 0)].map(i => allControls[i]);
+    }
+    if (!force && list.length === shownControls.length && list.every((c, j) => c === shownControls[j])) return;
+    shownControls = list;
+    const src = map.getSource("controls");
+    if (src) src.setData({ type: "FeatureCollection", features: list.map(c => (
+        { type: "Feature", properties: { k: c.k }, geometry: { type: "Point", coordinates: [c.lon, c.lat] } })) });
+}
+
 function addControls() {
     if (!map.getSource("controls")) {
-        map.addSource("controls", { type: "geojson", data: `${origin}/data/controls.geojson` });
+        map.addSource("controls", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     }
     if (!map.getLayer("controls")) {
         const firstLabel = map.getStyle().layers.find(l => l.type === "symbol");
         map.addLayer({
-            id: "controls", type: "symbol", source: "controls", minzoom: 15.5,
+            id: "controls", type: "symbol", source: "controls", minzoom: 13,
             layout: {
                 "icon-image": ["match", ["get", "k"], "signal", "ctl-signal", "stop", "ctl-stop", "ctl-yield"],
-                "icon-size": ["interpolate", ["linear"], ["zoom"], 15.5, 0.45, 17.5, 0.7, 19, 1],
-                "icon-padding": 6,
+                "icon-size": ["interpolate", ["linear"], ["zoom"], 13, 0.55, 15, 0.78, 17, 1, 19, 1.2],
+                // Always drawn, and never in the way of street names: they
+                // matter more than any label collision rule.
+                "icon-allow-overlap": true,
+                "icon-ignore-placement": true,
+                "symbol-sort-key": ["match", ["get", "k"], "signal", 0, "stop", 1, 2],
             },
         }, firstLabel ? firstLabel.id : undefined);
     }
@@ -456,13 +581,20 @@ function addControls() {
 function drawControls() {
     try {
         addControls();
+        refreshControls(true);
     } catch (err) {
         setTimeout(drawControls, 250);
     }
 }
 map.on("load", drawControls);
-// A style change (day/night) drops added layers; put them back.
-map.on("styledata", () => { if (map.loaded() && !map.getLayer("controls")) drawControls(); });
+// A style change (day/night) drops added layers; put them back. (Not
+// waiting for map.loaded(): while following, tiles are always loading.)
+let controlsPending = false;
+map.on("styledata", () => {
+    if (controlsPending || map.getLayer("controls")) return;
+    controlsPending = true;
+    setTimeout(() => { controlsPending = false; drawControls(); }, 0);
+});
 
 // ---- the route --------------------------------------------------------------------
 
@@ -548,17 +680,19 @@ function addRoute() {
         const round = { "line-join": "round", "line-cap": "round" };
         map.addLayer({ id: "route-casing", type: "line", source: "route", layout: round,
                        paint: { "line-gradient": routeGradient(look.routeCasing, reveal),
-                                "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 10, 6, 13, 9, 16, 15, 19, 21] } },
+                                "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 10, 7, 13, 11, 16, 19, 19, 28] } },
                      before);
         map.addLayer({ id: "route-line", type: "line", source: "route", layout: round,
                        paint: { "line-gradient": routeGradient(look.route, reveal),
-                                "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 10, 4, 13, 6, 16, 10, 19, 14] } },
+                                "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 10, 5, 13, 8, 16, 14, 19, 21] } },
                      before);
     }
 }
 
 function clearRoute() {
+    guiding = false;
     routeCoords = null;
+    refreshControls(true);
     for (const id of ["route-line", "route-casing"]) if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource("route")) map.removeSource("route");
 }
@@ -643,6 +777,7 @@ window.baja = {
     clearPlace() { pinMarker.remove(); },
     // The whole route, framed beside the place card, before Go.
     previewRoute(coords) {
+        guiding = false;
         routeCoords = coords;
         trimFrom = 0;
         trimmedAt = 0;
@@ -654,10 +789,12 @@ window.baja = {
     },
     // Driving it: draw it; QML starts following.
     showRoute(coords) {
+        guiding = true;
         routeCoords = coords;
         trimFrom = 0;
         trimmedAt = 0;
         drawRoute();
+        refreshControls(true);
     },
     clearRoute,
     // The rest of the route in one view (the Overview key).

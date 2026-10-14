@@ -49,6 +49,21 @@ Item {
     readonly property int panelWidth: 500
     readonly property bool panelShown: panel !== "" && !navigating
 
+    // Apple Maps' look for everything over the map: white cards by day, dark
+    // grey ones at night, system blue for what's active, green Go, red End.
+    readonly property bool dark: Theme.dark
+    readonly property color cPanel: dark ? "#2c2c2e" : "#ffffff"
+    readonly property color cPanelHi: dark ? "#3a3a3c" : "#f2f2f7"
+    readonly property color cLine: dark ? "#48484a" : "#e5e5ea"
+    readonly property color cText: dark ? "#ffffff" : "#1c1c1e"
+    readonly property color cDim: dark ? "#98989f" : "#6c6c70"
+    readonly property color cBlue: dark ? "#0a84ff" : "#007aff"
+    readonly property color cGreen: dark ? "#30d158" : "#34c759"
+    readonly property color cRed: dark ? "#ff453a" : "#ff3b30"
+    readonly property color cBanner: dark ? "#2c2c2e" : "#1c1c1e"   // the next turn: dark in both
+    readonly property color cBannerLow: dark ? "#3a3a3c" : "#2c2c2e"   // its "Then" strip
+    readonly property int cRadius: 26
+
 
     // ---- Home and recent places, saved between runs ------------------------------
     function loadJson(key, fallback) {
@@ -152,7 +167,7 @@ Item {
     Item {
         id: frame
         anchors.fill: parent
-        Rectangle { anchors.fill: parent; color: Theme.bg }
+        Rectangle { anchors.fill: parent; color: page.dark ? "#1a1b1d" : "#ebe7df" }   // the map's own ground
         Item { id: slot; anchors.fill: parent }
         Connections {
             target: page.map
@@ -174,7 +189,7 @@ Item {
             Icon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 name: "map"
-                color: Theme.textDim
+                color: page.cDim
                 size: 120
             }
             MapLabel {
@@ -191,7 +206,7 @@ Item {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                color: Theme.textDim
+                color: page.cDim
                 font.pixelSize: Theme.fontBody
                 text: !page.hasMaps || !maps.webEngine ? "Run deploy/setup-pi.sh on the Pi to install it"
                       : !maps.ready ? "Run deploy/maps/install-map.sh on the Pi to download the Seattle area"
@@ -202,22 +217,20 @@ Item {
 
         // ================================================================================
         // Browsing: "Where to?"
-        Rectangle {
+        Sheet {
             id: whereTo
             visible: page.mapReady && !page.panelShown && !page.navigating && !page.typing
             x: 16; y: 16
             width: 440
             height: 100
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
+            radius: page.cRadius
+            color: page.cPanel
             scale: whereTap.pressed ? 0.98 : 1
             Behavior on scale { NumberAnimation { duration: 80 } }
             Row {
                 anchors { left: parent.left; leftMargin: 26; verticalCenter: parent.verticalCenter }
                 spacing: 18
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "search"; size: 44; color: Theme.accent }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "search"; size: 44; color: page.cDim }
                 MapLabel {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Where to?"
@@ -228,28 +241,26 @@ Item {
             TapHandler { id: whereTap; onTapped: page.openSearch() }
         }
         // One tap home, beside it.
-        Rectangle {
+        Sheet {
             visible: whereTo.visible && page.home !== null
             anchors { left: whereTo.right; leftMargin: 14; top: whereTo.top }
             width: homeRow.implicitWidth + 48
             height: 100
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
+            radius: page.cRadius
+            color: page.cPanel
             scale: homeTap.pressed ? 0.98 : 1
             Row {
                 id: homeRow
                 anchors.centerIn: parent
                 spacing: 14
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "home"; size: 40; color: Theme.accent }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "home"; size: 40; color: page.cBlue }
                 Column {
                     anchors.verticalCenter: parent.verticalCenter
                     MapLabel { text: "Home"; font.pixelSize: Theme.fontBody; font.weight: Font.DemiBold }
                     MapLabel {
                         visible: text !== ""
                         text: Units.distanceText(page.distanceTo(page.home))
-                        color: Theme.textDim
+                        color: page.cDim
                         font.pixelSize: Theme.fontSmall
                     }
                 }
@@ -259,7 +270,7 @@ Item {
 
         // ================================================================================
         // The panel down the left: search, results, a picked place.
-        Rectangle {
+        Sheet {
             id: sidePanel
             readonly property bool shown: page.mapReady && page.panelShown
             x: shown ? 16 : -width - 40
@@ -270,10 +281,8 @@ Item {
             y: 16
             width: page.panelWidth
             height: (page.typing ? keyboard.y - 16 : parent.height) - 32
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
+            radius: page.cRadius
+            color: page.cPanel
             MouseArea { anchors.fill: parent }            // the map underneath doesn't react
 
             // ---- the header: search box (or a title), back and close ----
@@ -300,16 +309,16 @@ Item {
                     visible: page.panel === "search"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 96
-                    radius: Theme.radius
-                    color: Theme.bg
-                    border.width: Theme.border
-                    border.color: page.typing ? Theme.accent : Theme.line
+                    radius: 18
+                    color: page.cPanelHi
+                    border.width: page.typing ? 3 : 0
+                    border.color: page.cBlue
                     Icon {
                         id: glass
                         anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
                         name: "search"
                         size: 38
-                        color: Theme.textDim
+                        color: page.cDim
                     }
                     MapLabel {
                         id: typed
@@ -324,7 +333,7 @@ Item {
                         visible: page.query === ""
                         anchors { left: glass.right; leftMargin: 14; verticalCenter: parent.verticalCenter }
                         text: "Where to?"
-                        color: Theme.textDim
+                        color: page.cDim
                         font.pixelSize: Theme.fontTitle
                     }
                     Rectangle {                          // caret
@@ -333,7 +342,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         width: 3
                         height: 44
-                        color: Theme.accent
+                        color: page.cBlue
                         SequentialAnimation on opacity {
                             running: page.typing
                             loops: Animation.Infinite
@@ -392,10 +401,13 @@ Item {
                             onHit: page.choose(modelData)
                         }
                     }
-                    Legend {
+                    MapLabel {
                         Layout.topMargin: 14
-                        Layout.bottomMargin: 4
-                        text: "Nearby"
+                        Layout.bottomMargin: 6
+                        Layout.leftMargin: 6
+                        text: "Find nearby"
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.Bold
                     }
                     GridLayout {
                         Layout.fillWidth: true
@@ -406,21 +418,19 @@ Item {
                             model: [
                                 { key: "gas", label: "Gas" }, { key: "food", label: "Food" },
                                 { key: "coffee", label: "Coffee" }, { key: "parking", label: "Parking" },
-                                { key: "charging", label: "EV charging" }, { key: "groceries", label: "Groceries" }
+                                { key: "charging", label: "Charging" }, { key: "groceries", label: "Groceries" }
                             ]
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 100
-                                radius: Theme.radius
-                                color: catTap.pressed ? Theme.line : Theme.panelHi
-                                border.width: Theme.border
-                                border.color: Theme.line
+                                radius: 18
+                                color: catTap.pressed ? page.cLine : page.cPanelHi
                                 scale: catTap.pressed ? 0.97 : 1
                                 Behavior on scale { NumberAnimation { duration: 70 } }
                                 Row {
                                     anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
                                     spacing: 14
-                                    Icon { anchors.verticalCenter: parent.verticalCenter; name: modelData.key; size: 40; color: Theme.accent }
+                                    Icon { anchors.verticalCenter: parent.verticalCenter; name: modelData.key; size: 40; color: page.cBlue }
                                     MapLabel {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.label
@@ -458,7 +468,7 @@ Item {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: "Nothing by that name in the offline map"
-                    color: Theme.textDim
+                    color: page.cDim
                     font.pixelSize: Theme.fontBody
                 }
             }
@@ -484,7 +494,7 @@ Item {
                         width: parent.width
                         elide: Text.ElideRight
                         text: page.place ? page.place.label || "" : ""
-                        color: Theme.textDim
+                        color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
                     Item { width: 1; height: 18 }
@@ -501,14 +511,14 @@ Item {
                         wrapMode: Text.WordWrap
                         text: page.hasRouting ? Units.distanceText(routing.remainingDistance) + ", arrive "
                                                 + Units.arrivalText(routing.remainingTime) : ""
-                        color: Theme.textDim
+                        color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
                     MapLabel {
                         visible: !page.hasRouting || !routing.previewing
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        color: Theme.textDim
+                        color: page.cDim
                         font.pixelSize: Theme.fontBody
                         text: !page.hasRouting || !routing.available
                               ? Units.distanceText(page.distanceTo(page.place)) + " away. Directions need deploy/maps/install-routing.sh on the Pi."
@@ -519,26 +529,21 @@ Item {
                     }
                 }
 
-                // Go, at the bottom where a thumb finds it.
+                // Go, at the bottom where a thumb finds it: Apple's green.
                 Rectangle {
                     visible: page.hasRouting && routing.previewing
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
                     height: 116
-                    radius: Theme.radius
-                    color: goTap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent
+                    radius: 22
+                    color: goTap.pressed ? Qt.darker(page.cGreen, 1.2) : page.cGreen
                     scale: goTap.pressed ? 0.98 : 1
                     Behavior on scale { NumberAnimation { duration: 70 } }
-                    Row {
+                    MapLabel {
                         anchors.centerIn: parent
-                        spacing: 16
-                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "navigation"; size: 48; color: Theme.bg }
-                        MapLabel {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "Go"
-                            color: Theme.bg
-                            font.pixelSize: Theme.fontHero
-                            font.weight: Font.Bold
-                        }
+                        text: "Go"
+                        color: "white"
+                        font.pixelSize: Theme.fontHero
+                        font.weight: Font.Bold
                     }
                     TapHandler { id: goTap; onTapped: page.go() }
                 }
@@ -546,8 +551,9 @@ Item {
         }
 
         // ================================================================================
-        // Driving a route: the next turn, top-left.
-        Rectangle {
+        // Driving a route: the next turn, top-left, on a dark card in both
+        // looks (as in Apple Maps): the biggest, clearest thing on screen.
+        Sheet {
             id: turnCard
             readonly property bool shown: page.mapReady && page.navigating
             x: shown ? 16 : -width - 40
@@ -557,11 +563,10 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 200 } }
             y: 16
             width: page.panelWidth
-            height: turnContent.implicitHeight + 40
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.accent
+            height: turnContent.implicitHeight + 44 + (thenStrip.visible ? thenStrip.height : 0)
+            Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            color: page.cBanner
+            clip: false
 
             // A new step fades in, so the change is noticed but not jarring.
             property string step: page.hasRouting ? routing.instruction : ""
@@ -570,13 +575,13 @@ Item {
 
             RowLayout {
                 id: turnContent
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 22 }
                 spacing: 18
                 Icon {
                     Layout.alignment: Qt.AlignTop
                     name: page.hasRouting && routing.computing ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
                     size: 112
-                    color: Theme.accent
+                    color: "white"
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -585,7 +590,9 @@ Item {
                         visible: page.hasRouting && !routing.arrived && !routing.computing
                         numeric: true
                         text: page.hasRouting ? Units.distanceText(routing.distanceToTurn) : ""
+                        color: "white"
                         font.pixelSize: Theme.fontHuge
+                        font.weight: Font.DemiBold
                         lineHeight: 0.9
                     }
                     MapLabel {
@@ -594,16 +601,53 @@ Item {
                         maximumLineCount: 3
                         elide: Text.ElideRight
                         text: !page.hasRouting ? "" : routing.computing ? "Finding a new route" : routing.instruction
+                        color: "white"
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
+                    }
+                }
+            }
+
+            // "Then ↰": a turn that comes right after this one.
+            Item {
+                id: thenStrip
+                visible: page.hasRouting && routing.thenIcon !== "" && !routing.computing
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 76
+                Rectangle {                              // rounded at the bottom only
+                    anchors.fill: parent
+                    radius: page.cRadius
+                    color: page.cBannerLow
+                }
+                Rectangle {
+                    anchors { left: parent.left; right: parent.right; top: parent.top }
+                    height: page.cRadius
+                    color: page.cBannerLow
+                }
+                Row {
+                    anchors { left: parent.left; leftMargin: 28; verticalCenter: parent.verticalCenter }
+                    spacing: 14
+                    MapLabel {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Then"
+                        color: "#ebebf5"
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: page.hasRouting && routing.thenIcon !== "" ? routing.thenIcon : "straight"
+                        size: 52
+                        color: "white"
                     }
                 }
             }
             TapHandler { onTapped: page.map.call("recenter()") }
         }
 
-        // ... and arrival, bottom-left.
-        Rectangle {
+        // ... and the trip, bottom-left: arrival, time left, distance left.
+        Sheet {
+            id: tripCard
             readonly property bool shown: page.mapReady && page.navigating
             x: shown ? 16 : -width - 40
             opacity: shown ? 1 : 0
@@ -613,32 +657,39 @@ Item {
             anchors { bottom: parent.bottom; bottomMargin: 16 }
             width: page.panelWidth
             height: 132
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
+            readonly property real timeLeft: page.hasRouting ? routing.remainingTime : 0
+            readonly property string distance: page.hasRouting ? Units.distanceText(routing.remainingDistance) : ""
             RowLayout {
-                anchors { fill: parent; leftMargin: 22; rightMargin: 16 }
-                spacing: 14
-                Column {
-                    Layout.fillWidth: true
-                    MapLabel {
-                        text: page.hasRouting ? Units.arrivalText(routing.remainingTime) : ""
-                        numeric: true
-                        font.pixelSize: Theme.fontHero
-                    }
-                    MapLabel {
-                        text: page.hasRouting ? Units.durationText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontBody
-                    }
+                anchors { fill: parent; leftMargin: 14; rightMargin: 16 }
+                spacing: 0
+                TripStat {
+                    Layout.preferredWidth: 130
+                    value: page.hasRouting ? Units.arrivalText(tripCard.timeLeft) : ""
+                    label: "arrival"
                 }
-                TextButton {
-                    text: "End"
-                    danger: true
-                    implicitWidth: 150
-                    implicitHeight: 100
-                    onClicked: page.endRoute()
+                TripStat {
+                    readonly property int minutes: Math.max(1, Math.round(tripCard.timeLeft / 60))
+                    value: minutes < 60 ? String(minutes)
+                                        : Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0")
+                    label: minutes < 60 ? "min" : "hr"
+                }
+                TripStat {
+                    value: tripCard.distance.split(" ")[0]
+                    label: tripCard.distance.split(" ")[1] || ""
+                }
+                Rectangle {                               // End: Apple's red
+                    Layout.preferredWidth: 120
+                    Layout.preferredHeight: 100
+                    radius: 22
+                    color: endTap.pressed ? Qt.darker(page.cRed, 1.2) : page.cRed
+                    MapLabel {
+                        anchors.centerIn: parent
+                        text: "End"
+                        color: "white"
+                        font.pixelSize: Theme.fontTitle
+                        font.weight: Font.Bold
+                    }
+                    TapHandler { id: endTap; onTapped: page.endRoute() }
                 }
             }
         }
@@ -678,26 +729,23 @@ Item {
                 border.color: "#d92b2b"
                 Text { anchors.centerIn: parent; text: parent.parent.limit; font.pixelSize: 52; font.bold: true; color: "black" }
             }
-            Rectangle {                                   // speed now
+            Sheet {                                       // speed now
                 width: 112
                 height: 108
-                radius: Theme.radius
-                color: parent.over ? Theme.warn : Theme.panel
-                border.width: Theme.border
-                border.color: parent.over ? Theme.warn : Theme.line
+                color: parent.over ? page.cRed : page.cPanel
                 Column {
                     anchors.centerIn: parent
                     MapLabel {
                         anchors.horizontalCenter: parent.horizontalCenter
                         numeric: true
                         text: Math.round(parent.parent.parent.speedNow)
-                        color: parent.parent.parent.over ? Theme.bg : Theme.text
+                        color: parent.parent.parent.over ? "white" : page.cText
                         font.pixelSize: Theme.fontReadout
                     }
                     MapLabel {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: Units.speedUnit
-                        color: parent.parent.parent.over ? Theme.bg : Theme.textDim
+                        color: parent.parent.parent.over ? "white" : page.cDim
                         font.pixelSize: Theme.fontSmall - 4
                     }
                 }
@@ -706,17 +754,12 @@ Item {
 
         // ================================================================================
         // Map keys, bottom-right: one strip.
-        Rectangle {
+        Sheet {
             id: keys
             visible: page.mapReady && !page.typing
             anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
             width: 104
             height: keyColumn.height
-            radius: Theme.radius
-            color: Theme.panel
-            border.width: Theme.border
-            border.color: Theme.line
-            clip: true
             Column {
                 id: keyColumn
                 width: parent.width
@@ -739,7 +782,7 @@ Item {
         }
 
         // Re-center, when the map has been moved away from the truck.
-        Rectangle {
+        Sheet {
             readonly property bool shown: page.mapReady && page.hasFix && !page.following && !page.typing
                                           && !(page.panelShown && page.panel === "place")
             opacity: shown ? 1 : 0
@@ -749,15 +792,12 @@ Item {
                       bottom: parent.bottom; bottomMargin: 16 }
             width: recenterRow.implicitWidth + 56
             height: 100
-            radius: Theme.radius
-            color: recenterTap.pressed ? Theme.panelHi : Theme.panel
-            border.width: Theme.border
-            border.color: Theme.accent
+            color: recenterTap.pressed ? page.cPanelHi : page.cPanel
             Row {
                 id: recenterRow
                 anchors.centerIn: parent
                 spacing: 14
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "navigation"; size: 40; color: Theme.accent }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "navigation"; size: 40; color: page.cBlue }
                 MapLabel {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Re-center"
@@ -768,16 +808,14 @@ Item {
             TapHandler { id: recenterTap; onTapped: page.map.call("recenter()") }
         }
 
-        // The road you're on, bottom centre, while just following (flat: it's
-        // information, not a key).
-        Rectangle {
+        // The road you're on, bottom centre, while just following.
+        Sheet {
             visible: page.mapReady && page.following && !page.navigating && page.map.road !== "" && !page.typing
                      && !page.panelShown
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 20 }
             width: Math.min(roadName.implicitWidth + 48, parent.width - 520)
             height: 72
             radius: height / 2
-            color: Qt.rgba(Theme.bg.r, Theme.bg.g, Theme.bg.b, 0.82)
             MapLabel {
                 id: roadName
                 anchors.centerIn: parent
@@ -794,7 +832,7 @@ Item {
             visible: page.mapReady && !page.typing
             anchors { right: keys.left; rightMargin: 12; bottom: parent.bottom; bottomMargin: 8 }
             text: "© OpenStreetMap"
-            color: Theme.textDim
+            color: page.cDim
             font.pixelSize: 18
         }
 
@@ -815,7 +853,41 @@ Item {
 
     // ---- small parts -------------------------------------------------------------------
     // Text on the map: Overpass, like the map's own labels.
-    component MapLabel: Label { font.family: Theme.mapFont; font.italic: false }
+    component MapLabel: Label { font.family: Theme.mapFont; font.italic: false; color: page.cText }
+
+    // A card floating over the map, on a soft shadow (a picture: the Pi's
+    // Qt has no shadow effect, and this costs nothing to draw).
+    component Sheet: Rectangle {
+        radius: page.cRadius
+        color: page.cPanel
+        BorderImage {
+            z: -1
+            anchors { fill: parent; margins: -36; topMargin: -33; bottomMargin: -41 }
+            source: "../assets/shadow.png"
+            border { left: 64; right: 64; top: 64; bottom: 64 }
+        }
+    }
+
+    // One figure on the trip card: the number, and what it is under it.
+    component TripStat: Column {
+        property string value
+        property string label
+        Layout.fillWidth: true
+        Layout.preferredWidth: 100
+        MapLabel {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: parent.value
+            numeric: true
+            font.pixelSize: 44
+            font.weight: Font.DemiBold
+        }
+        MapLabel {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: parent.label
+            color: page.cDim
+            font.pixelSize: Theme.fontSmall
+        }
+    }
     function kindIcon(kind) {
         return ({ fuel: "gas", cafe: "coffee", restaurant: "food", fast_food: "food", parking: "parking",
                   charging_station: "charging", supermarket: "groceries", convenience: "groceries" })[kind] || "place"
@@ -832,14 +904,14 @@ Item {
         signal hit()
         Layout.fillWidth: true
         implicitHeight: 100
-        radius: Theme.radius
-        color: rowTap.pressed ? Theme.panelHi : "transparent"
+        radius: 16
+        color: rowTap.pressed ? page.cPanelHi : "transparent"
         Icon {
             id: rowIcon
             anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
             name: row.icon
             size: 38
-            color: row.iconLit ? Theme.accent : Theme.textDim
+            color: row.iconLit ? page.cBlue : page.cDim
         }
         Column {
             anchors { left: rowIcon.right; leftMargin: 16; right: rowTrail.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
@@ -855,7 +927,7 @@ Item {
                 width: parent.width
                 elide: Text.ElideRight
                 text: row.subtitle
-                color: Theme.textDim
+                color: page.cDim
                 font.pixelSize: Theme.fontSmall
             }
         }
@@ -863,7 +935,7 @@ Item {
             id: rowTrail
             anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
             text: row.trailing
-            color: Theme.textDim
+            color: page.cDim
             font.pixelSize: Theme.fontSmall
         }
         TapHandler { id: rowTap; onTapped: row.hit() }
@@ -877,11 +949,9 @@ Item {
         signal hit()
         Layout.preferredWidth: 96
         Layout.preferredHeight: 96
-        radius: Theme.radius
-        color: pkTap.pressed ? Theme.line : Theme.panelHi
-        border.width: Theme.border
-        border.color: pk.lit ? Theme.accent : Theme.line
-        Icon { anchors.centerIn: parent; name: pk.icon; size: 44; color: pk.lit ? Theme.accent : Theme.text }
+        radius: 48                                  // round, like Apple's
+        color: pkTap.pressed ? page.cLine : pk.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
+        Icon { anchors.centerIn: parent; name: pk.icon; size: 44; color: pk.lit ? page.cBlue : page.cText }
         TapHandler { id: pkTap; onTapped: pk.hit() }
     }
 
@@ -895,15 +965,16 @@ Item {
         width: 104
         height: visible ? 100 : 0
         Rectangle {
-            anchors.fill: parent
-            color: keyTap.pressed ? Theme.panelHi : "transparent"
+            anchors { fill: parent; margins: 6 }
+            radius: 18
+            color: keyTap.pressed ? page.cPanelHi : "transparent"
         }
-        Icon { anchors.centerIn: parent; name: key.icon; size: 46; color: key.lit ? Theme.accent : Theme.text }
+        Icon { anchors.centerIn: parent; name: key.icon; size: 46; color: key.lit ? page.cBlue : page.cText }
         Rectangle {
             visible: key.divider
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 14; bottomMargin: 0 }
             height: 2
-            color: Theme.line
+            color: page.cLine
         }
         TapHandler { id: keyTap; onTapped: key.hit() }
     }

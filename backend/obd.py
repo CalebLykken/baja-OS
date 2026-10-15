@@ -32,6 +32,7 @@ ROUND_MIN_S = 0.1                    # at most 10 updates a second, however fast
 # rarely, so a parked car's adapter can go to sleep instead of being woken
 # every few seconds (it draws from the car's battery).
 RETRY_S, RETRY_SLOW_S, SLOW_AFTER_S = 3.0, 20.0, 60.0
+LOG_EVERY_S = 15.0                   # a one-line summary in the journal while live
 
 
 def retry_wait(since):
@@ -141,8 +142,9 @@ class ObdReader(QObject):
                 time.sleep(retry_wait(self._since))
                 if not os.path.exists(path):
                     return
+            print("OBD: the car answered", flush=True)
             baro = 101.3                      # kPa, until the car tells us
-            misses, turn = 0, 0
+            misses, turn, logged, last = 0, 0, 0.0, {}
             while misses < GIVE_UP_AFTER:
                 started = time.monotonic()
                 values = {}
@@ -172,8 +174,13 @@ class ObdReader(QObject):
                     values["boost"] = (values.pop("map") - baro) * 0.145038
                 if values:
                     safe_emit(self, "reading", values)
+                    last.update(values)
+                if time.monotonic() - logged > LOG_EVERY_S and last:
+                    logged = time.monotonic()
+                    print("OBD: " + ", ".join(f"{k} {v:.1f}" for k, v in sorted(last.items())), flush=True)
                 turn += 1
                 time.sleep(max(0.0, ROUND_MIN_S - (time.monotonic() - started)))
             self._since = time.monotonic()
+            print("OBD: the car stopped answering", flush=True)
         finally:
             elm.close()

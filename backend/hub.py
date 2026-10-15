@@ -33,11 +33,20 @@ import time
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 PHONE_RECONNECT_GRACE_S = 10
+# Soft pause and play, like a car stereo: music cut off mid-wave clicks.
+# Pause fades the output out first; play starts silent and fades in once
+# the source says it's playing (its sound lags a little behind that).
+FADE_OUT_MS = 180
+FADE_IN_MS = 400
+FADE_STEP_MS = 30
+START_WAIT_MS = 120
+SETTLE_MS = 250            # after pausing, before the volume goes back up
+FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
 
 
 def _rounded_card(img, out, size=600, radius_frac=0.014):
@@ -102,6 +111,21 @@ class MediaHub(QObject):
         self._sources = {"local": local, "phone": phone, "spotify": spotify}
         self._source = "local"
         self._system_volume = bool(shutil.which("wpctl"))
+        # The output level goes out through one thread, in order, latest
+        # wins (a fade sends a quick run of them).
+        self._level_lock = threading.Lock()
+        self._pending_level = None
+        self._level_wake = threading.Event()
+        if self._system_volume:
+            threading.Thread(target=self._level_writer, name="volume", daemon=True).start()
+        self._fade = 1.0                 # 0-1 on top of the volume
+        self._fade_target = 1.0
+        self._fade_step = 0.0
+        self._after_fade = None
+        self._pausing = self._resuming = False
+        self._fade_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._fade_tick)
+        self._give_up = QTimer(self, singleShot=True, interval=FADE_GIVE_UP_MS,
+                               timeout=self._give_up_waiting)
         self._volume = max(0, min(100, int(volume)))
         self._max = max(30, min(100, int(max_volume)))
         self._art = {}                  # source -> (art url, rounded card url)
@@ -119,6 +143,7 @@ class MediaHub(QObject):
         spotify.volumeChanged.connect(lambda: self._remote_volume_changed("spotify"))
         spotify.changed.connect(self._spotify_changed)
         spotify.queueChanged.connect(self.queueChanged)
+        self.playingChanged.connect(self._fade_on_playing_changed)
         self._artReady.connect(self._apply_art)
 
         if self._system_volume:
@@ -224,11 +249,82 @@ class MediaHub(QObject):
         ceiling = self._max / 100
         if self._system_volume:
             level = ceiling if self._remote_volume else self._volume / 100 * ceiling
-            threading.Thread(target=lambda: subprocess.run(
-                ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{level:.3f}"],
-                capture_output=True, timeout=3), daemon=True).start()
+            with self._level_lock:
+                self._pending_level = level * self._fade
+            self._level_wake.set()
         else:
             self._sources["local"].setVolume(round(self._volume * ceiling))
+
+    def _level_writer(self):
+        while True:
+            self._level_wake.wait()
+            self._level_wake.clear()
+            with self._level_lock:
+                level, self._pending_level = self._pending_level, None
+            if level is not None:
+                try:
+                    subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{level:.3f}"],
+                                   capture_output=True, timeout=3)
+                except Exception:        # keep the thread alive: it's the only one
+                    pass
+
+    # ---- soft pause and play ----------------------------------------------
+    def _fade_to(self, target, ms, then=None):
+        self._fade_target = target
+        self._fade_step = (target - self._fade) / max(1, ms / FADE_STEP_MS)
+        self._after_fade = then
+        if self._fade == target:
+            self._fade_timer.stop()
+            self._fade_done()
+        else:
+            self._fade_timer.start()
+
+    def _fade_tick(self):
+        f = self._fade + self._fade_step
+        done = f >= self._fade_target if self._fade_step > 0 else f <= self._fade_target
+        self._fade = self._fade_target if done else f
+        self._apply_volume()
+        if done:
+            self._fade_timer.stop()
+            self._fade_done()
+
+    def _fade_done(self):
+        then, self._after_fade = self._after_fade, None
+        if then:
+            then()
+
+    def _pause_now(self):
+        self._pausing = True
+        self._give_up.start()
+        self._active.togglePlay()
+
+    def _fade_on_playing_changed(self):
+        if self._resuming and self.playing:
+            self._resuming = False
+            self._give_up.stop()
+            QTimer.singleShot(START_WAIT_MS, self._fade_in_if_playing)
+        elif self._pausing and not self.playing:
+            self._pausing = False
+            self._give_up.stop()
+            QTimer.singleShot(SETTLE_MS, self._volume_back_if_paused)
+
+    def _fade_in_if_playing(self):
+        if self.playing and not self._pausing:
+            self._fade_to(1.0, FADE_IN_MS)
+
+    def _volume_back_if_paused(self):
+        if not (self._resuming or self._pausing or self._fade_timer.isActive()):
+            self._fade, self._fade_target = 1.0, 1.0
+            self._apply_volume()
+
+    def _give_up_waiting(self):
+        if self._resuming:
+            self._resuming = False
+            self._fade_to(1.0, FADE_IN_MS)
+        else:
+            self._pausing = False
+            self._fade, self._fade_target = 1.0, 1.0
+            self._apply_volume()
 
     # ---- properties (same names as the players, plus source info) ---------
     @pyqtProperty(str, notify=sourceChanged)
@@ -311,7 +407,20 @@ class MediaHub(QObject):
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def togglePlay(self):
-        self._active.togglePlay()
+        if not self._system_volume:       # no output volume to fade (a Mac)
+            self._active.togglePlay()
+        elif self._active.playing:
+            self._resuming = False
+            self._fade_to(0.0, FADE_OUT_MS, then=self._pause_now)
+        else:
+            # Silent until it's really playing, then fade in.
+            self._pausing = False
+            self._fade_timer.stop()
+            self._fade = self._fade_target = 0.0
+            self._apply_volume()
+            self._resuming = True
+            self._give_up.start()
+            self._active.togglePlay()
 
     @pyqtSlot()
     def next(self):

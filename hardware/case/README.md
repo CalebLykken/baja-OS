@@ -43,6 +43,28 @@ handles.
 
 ![Every part as it sits on the bed](images/print-layout.png)
 
+## Drawings
+
+Dimensioned drawings of each printed part, to check a test print with a ruler
+and calipers: [all six in one PDF](drawings/baja-dash-case-drawings.pdf), or
+[panel front](drawings/1-dash-panel-front.png),
+[panel back](drawings/2-dash-panel-back.png),
+[adapter plate](drawings/3-adapter-plate.png),
+[Pi case](drawings/4-pi-case.png),
+[volume knob](drawings/5-volume-knob.png) and
+[assembly side view](drawings/6-assembly-side.png).
+
+The letter after each size says how sure it is: **M** measured (or from a
+datasheet), **D** a design choice, **E** estimated, **U** unknown. The print
+should match every size; E and U are the ones to check against the truck.
+Printed at 100 % on US Letter, the panel, Pi case and assembly sheets are full
+size, so you can lay the part on the paper; the adapter is 2:1, the knob 3:1.
+
+[`make_drawings.py`](make_drawings.py) makes them from the Fusion script's own
+code: `python3 hardware/case/make_drawings.py` (needs matplotlib). It uses the
+sizes in the script's `PARAMETERS` list, so if you change one in Fusion, change
+it there too before re-running; it warns when `print/` doesn't match.
+
 ## What to buy
 
 | Qty | Part | For |
@@ -92,6 +114,7 @@ the truck, solder it and add a latching connector between the panel and the Pi.
 
 Each line names the Fusion parameter to change if it's off.
 
+- [ ] Each printed part measures as its [drawing](#drawings) says
 - [ ] The panel slides into the opening snugly, not forced (`FitGap`, add 0.2–0.4 mm)
 - [ ] The climate controls clear the bottom of the panel (`ClimateGap`)
 - [ ] The screen's four holes line up with the posts (`ScreenMountOffsetX`, `ScreenMountOffsetY`, `ScreenMountHoleSpacing`)

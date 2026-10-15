@@ -15,4 +15,5 @@ venv/
 !tools/sign-icons/*.png
 !web/map/icons/*.png
 !hardware/case/images/*.png
+!hardware/case/drawings/*.png
 hardware/case/build/

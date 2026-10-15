@@ -36,6 +36,8 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
+from backend import safe_emit
+
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 PHONE_RECONNECT_GRACE_S = 10
 # Soft pause and play, like a car stereo: music cut off mid-wave clicks.
@@ -105,6 +107,7 @@ class MediaHub(QObject):
     _artReady = pyqtSignal(str, str, str)   # source, art url, rounded card url
 
     maxVolumeChanged = pyqtSignal()
+    recentsChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, parent=None):
         super().__init__(parent)
@@ -143,6 +146,10 @@ class MediaHub(QObject):
         spotify.volumeChanged.connect(lambda: self._remote_volume_changed("spotify"))
         spotify.changed.connect(self._spotify_changed)
         spotify.queueChanged.connect(self.queueChanged)
+        local.queueChanged.connect(self.queueChanged)       # an album started
+        self._recent_art = {}             # Spotify cover URL -> saved copy
+        spotify.recentsChanged.connect(self._save_recent_art)
+        spotify.recentsChanged.connect(self.recentsChanged)
         self.playingChanged.connect(self._fade_on_playing_changed)
         self._artReady.connect(self._apply_art)
 
@@ -364,10 +371,51 @@ class MediaHub(QObject):
     def index(self):
         return self._sources["local"].index if self._source == "local" else -1
 
-    @pyqtProperty("QVariantList", constant=True)
+    @pyqtProperty("QVariantList", notify=queueChanged)
     def queue(self):
-        """The local music library (tap to play)."""
+        """The Pi's own songs playing through: an album, or all of them (tap to play)."""
         return self._sources["local"].queue
+
+    @pyqtProperty("QVariantList", constant=True)
+    def albums(self):
+        """Albums of the Pi's own songs: [{title, artist, art, count, duration}]."""
+        return self._sources["local"].albums
+
+    @pyqtProperty(int, notify=queueChanged)
+    def album(self):
+        """The Pi album playing (an index into `albums`), or -1."""
+        return self._sources["local"].album if self._source == "local" else -1
+
+    @pyqtSlot(int, result="QVariantList")
+    def albumTracks(self, album):
+        return self._sources["local"].albumTracks(album)
+
+    @pyqtProperty("QVariantList", notify=recentsChanged)
+    def spotifyRecents(self):
+        """Albums and playlists recently played on the Pi through Spotify,
+        newest first, with covers saved locally once downloaded."""
+        out = []
+        for r in self._sources["spotify"].recents:
+            r["art"] = self._recent_art.get(r["art"]) or r["art"]
+            out.append(r)
+        return out
+
+    def _save_recent_art(self):
+        todo = [r["art"] for r in self._sources["spotify"].recents
+                if r["art"].startswith("http") and r["art"] not in self._recent_art]
+        if not todo:
+            return
+        for url in todo:
+            self._recent_art[url] = ""            # being fetched
+
+        def work():
+            for url in todo:
+                try:
+                    self._recent_art[url] = cached_art(url)
+                except Exception:                 # offline: try again next time
+                    self._recent_art.pop(url, None)
+            safe_emit(self, "recentsChanged")
+        threading.Thread(target=work, daemon=True).start()
 
     @pyqtProperty("QVariantList", notify=queueChanged)
     def upNext(self):
@@ -435,6 +483,24 @@ class MediaHub(QObject):
         self._pause_others(keep="local")
         self._set_source("local")
         self._sources["local"].playIndex(index)
+
+    @pyqtSlot(int, int)
+    def playAlbum(self, album, start=0):
+        self._pause_others(keep="local")
+        self._set_source("local")
+        self._sources["local"].playAlbum(album, start)
+
+    @pyqtSlot()
+    def playAll(self):
+        self._pause_others(keep="local")
+        self._set_source("local")
+        self._sources["local"].playAll()
+
+    @pyqtSlot(str)
+    def playSpotify(self, uri):
+        """Play an album or playlist from `spotifyRecents` through Spotify;
+        the hub switches to it once it starts."""
+        self._sources["spotify"].playUri(uri)
 
     @pyqtSlot(int)
     def setVolume(self, value):

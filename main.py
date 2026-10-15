@@ -10,6 +10,7 @@ built and tested before real OBD-II and audio hardware is wired in.
 """
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -106,6 +107,12 @@ def main():
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio()
     spotify = SpotifyPlayer()
+    # Spotify albums and playlists played here, kept between runs.
+    try:
+        spotify.load_recents(json.loads(str(settings.get("spotifyRecents", "[]"))))
+    except ValueError:
+        pass
+    spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
     local = make_media_player(args.music_dir)
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),

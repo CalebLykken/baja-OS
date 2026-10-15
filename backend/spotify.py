@@ -8,6 +8,10 @@ https://developer.spotify.com/documentation/soloist/reference/websocket-api
 
 If Soloist isn't installed or running, `available` stays False, the socket
 keeps retrying quietly, and the rest of the dashboard carries on.
+
+Soloist can't list your Spotify history or library, so `recents` is kept
+here: the albums and playlists that have played on the Pi (from the
+playback context it reports), newest first, for one-tap replay.
 """
 
 import json
@@ -22,6 +26,9 @@ except ImportError:          # python3-pyqt6.qtwebsockets not installed
 
 DEFAULT_URL = "ws://127.0.0.1:47240"
 RETRY_MS = 3000
+RECENTS_MAX = 12
+KIND_WORDS = {"playlist": "Playlist", "artist": "Artist", "show": "Podcast",
+              "collection": "Liked Songs", "station": "Radio"}
 
 
 def _name(entity):
@@ -55,6 +62,7 @@ class SpotifyPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()
+    recentsChanged = pyqtSignal()
 
     def __init__(self, url=DEFAULT_URL, parent=None):
         super().__init__(parent)
@@ -68,6 +76,7 @@ class SpotifyPlayer(QObject):
         self._pos = (0, 0.0, 0.0)       # position_ms, at (local monotonic s), speed
         self._volume = 0
         self._up_next = []
+        self._recents = []          # [{uri, kind, title, subtitle, art}], newest first
 
         self._ws = QWebSocket() if QWebSocket else None
         self._retry = QTimer(self)
@@ -126,6 +135,7 @@ class SpotifyPlayer(QObject):
             if self._logged_in:
                 self._command("get_queue", limit=10)
         elif kind == "playback_state":
+            self._note_context(ev.get("context"))
             self._set_item(ev.get("item"))
             self._set_status(ev.get("status"))
             self._set_position(ev.get("position"))
@@ -133,6 +143,8 @@ class SpotifyPlayer(QObject):
             self._set_active(ev.get("is_active"))
         elif kind == "track_changed":
             self._set_item(ev.get("item"))
+        elif kind == "context_changed":
+            self._note_context(ev.get("context"))
         elif kind == "playback_changed":
             self._set_status(ev.get("status"))
         elif kind == "position_sync":
@@ -155,6 +167,44 @@ class SpotifyPlayer(QObject):
             self._item = item
             self.trackChanged.emit()
             self._command("get_queue", limit=10)
+            if self._fill_subtitle():
+                self.recentsChanged.emit()
+
+    # ---- recently played here ---------------------------------------------
+    def _note_context(self, ctx):
+        """Put what's playing (an album or playlist) first in `recents`."""
+        uri, name = (ctx or {}).get("uri") or "", _name(ctx)
+        if not uri or not name:
+            return
+        kind = ctx.get("entity_type") or uri.split(":")[1]
+        old = next((r for r in self._recents if r["uri"] == uri), None)
+        entry = {"uri": uri, "kind": kind, "title": name,
+                 "subtitle": old["subtitle"] if old else "",
+                 "art": _cover(ctx) or (old["art"] if old else "")}
+        if self._recents and self._recents[0] == entry:
+            return
+        self._recents = [entry] + [r for r in self._recents if r["uri"] != uri][:RECENTS_MAX - 1]
+        self._fill_subtitle()
+        self.recentsChanged.emit()
+
+    def _fill_subtitle(self):
+        """The newest entry's second line: the artist of an album (once one
+        of its songs is playing), else what kind of thing it is."""
+        if not self._recents or self._recents[0]["subtitle"]:
+            return False
+        first = self._recents[0]
+        if first["kind"] != "album":
+            first["subtitle"] = KIND_WORDS.get(first["kind"], first["kind"].title())
+        elif _parent(self._item).get("uri") == first["uri"]:
+            first["subtitle"] = _artists(self._item)
+        return bool(first["subtitle"])
+
+    def load_recents(self, recents):
+        """Recently played, as saved last time (a list of dicts)."""
+        keep = ("uri", "kind", "title", "subtitle", "art")
+        self._recents = [{k: str(r.get(k, "")) for k in keep} for r in recents
+                         if isinstance(r, dict) and r.get("uri")][:RECENTS_MAX]
+        self.recentsChanged.emit()
 
     def _set_status(self, status):
         if status and status != self._status:
@@ -245,6 +295,10 @@ class SpotifyPlayer(QObject):
     def upNext(self):
         return self._up_next
 
+    @pyqtProperty("QVariantList", notify=recentsChanged)
+    def recents(self):
+        return [dict(r) for r in self._recents]
+
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def play(self):
@@ -279,5 +333,8 @@ class SpotifyPlayer(QObject):
 
     @pyqtSlot(str)
     def playUri(self, uri):
-        """Start a track, album, playlist or episode by its spotify: URI."""
+        """Start a track, album, playlist or episode by its spotify: URI
+        (making the Pi the playing device first if it isn't)."""
+        if not self._active:
+            self._command("activate")
         self._command("play", uri=uri)

@@ -7,9 +7,9 @@ import "pages"
 // Root window: nav rail on the left, status bar + pages on the right.
 // Sized for the 8" 1280x800 panel; main.py goes full screen on the Pi.
 //
-// The Maps page is the exception: it fills everything right of the rail
-// (no status bar; the clock moves into the rail), like CarPlay. There is
-// one map engine for the whole dashboard: it sits full size on Maps and
+// Maps and Music are the exceptions: they fill everything right of the
+// rail (no status bar; the clock moves into the rail), like CarPlay. There
+// is one map engine for the whole dashboard: it sits full size on Maps and
 // small in the Home page's map tile, moved to whichever is showing.
 Window {
     id: root
@@ -29,6 +29,7 @@ Window {
         { icon: "settings", label: "Settings" }
     ]
     readonly property bool onMaps: page === 2
+    readonly property bool fullPage: page === 1 || page === 2     // Music and Maps
 
     // Overpass (after US highway-sign lettering) for the map and its
     // controls; bundled, so nothing needs installing on the Pi.
@@ -121,9 +122,9 @@ Window {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
 
-        // On Maps the status bar gives way to the map; the time sits here.
+        // On Maps and Music the status bar gives way; the time sits here.
         Label {
-            visible: root.onMaps
+            visible: root.fullPage
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
             property date now: new Date()
             text: Units.timeText(now)
@@ -159,14 +160,14 @@ Window {
             leftMargin: 24; rightMargin: 24; bottomMargin: 20
         }
         spacing: 8
-        opacity: root.onMaps ? 0 : 1
+        opacity: root.fullPage ? 0 : 1
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
 
         StatusBar {
             Layout.fillWidth: true
             title: root.pages[root.page].label
-            showTurn: !root.onMaps && root.page !== 0      // Home's map tile shows it
+            showTurn: !root.fullPage && root.page !== 0    // Home's map tile shows it
             onTurnTapped: root.page = 2
         }
 
@@ -183,8 +184,6 @@ Window {
                     onNavigate: (i) => root.page = i
                 }
             }
-            PageHost { anchors.fill: parent; index: 1; current: root.page
-                MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
             PageHost { anchors.fill: parent; index: 3; current: root.page
                 GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
             PageHost { anchors.fill: parent; index: 4; current: root.page
@@ -192,6 +191,14 @@ Window {
             PageHost { anchors.fill: parent; index: 5; current: root.page
                 SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
         }
+    }
+
+    // Music: everything right of the rail.
+    PageHost {
+        anchors { left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom }
+        index: 1
+        current: root.page
+        MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i }
     }
 
     // Maps: everything right of the rail.

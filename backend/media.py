@@ -22,6 +22,7 @@ class MediaPlayer(QObject):
     positionChanged = pyqtSignal()
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
+    queueChanged = pyqtSignal()             # never: the demo has no albums
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,6 +77,26 @@ class MediaPlayer(QObject):
     @pyqtProperty("QVariantList", constant=True)
     def queue(self):
         return self._queue
+
+    @pyqtProperty("QVariantList", constant=True)
+    def albums(self):
+        return []
+
+    @pyqtProperty(int, constant=True)
+    def album(self):
+        return -1
+
+    @pyqtSlot(int, result="QVariantList")
+    def albumTracks(self, album):
+        return []
+
+    @pyqtSlot(int, int)
+    def playAlbum(self, album, start=0):
+        pass
+
+    @pyqtSlot()
+    def playAll(self):
+        self.playIndex(0)
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):

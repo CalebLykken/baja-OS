@@ -7,6 +7,7 @@ Rectangle {
     id: ctl
     property var options: []        // [{ label, value }]
     property var current
+    property bool stretch: false    // segments share the full width (tabs)
     signal picked(var value)
 
     implicitWidth: row.implicitWidth + 2 * Theme.border
@@ -23,7 +24,8 @@ Rectangle {
             model: ctl.options
             Rectangle {
                 readonly property bool selected: modelData.value === ctl.current
-                width: label.implicitWidth + 40
+                width: ctl.stretch ? row.width / Math.max(1, ctl.options.length)
+                                   : label.implicitWidth + 40
                 height: row.height
                 radius: Math.max(0, Theme.radius - Theme.border)
                 color: selected ? Theme.accent : (tap.pressed ? Theme.line : "transparent")

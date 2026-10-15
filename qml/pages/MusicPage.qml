@@ -2,248 +2,511 @@ import QtQuick
 import QtQuick.Layouts
 import "../components"
 
-// The cover as a big framed print on the left. On the right: what's playing
-// with the transport keys and volume, and below it what's next. The
-// equalizer key opens the EQ over the right-hand column.
+// The Music page, full screen like Maps (the clock moves into the rail).
+//
+// - Left: what's playing. The cover, the song, the keys and the volume;
+//   the equalizer key opens the EQ over the right-hand side.
+// - Right: three tabs. Up next (Spotify's queue, or the Pi's songs playing
+//   through); Albums (the Pi's own music by album: open one to play it, or
+//   a song in it); Spotify (albums and playlists played here recently, one
+//   tap to play again).
+// - While navigating, the next turn sits on top of the right side; tap it
+//   for Maps.
 Item {
     id: page
     objectName: "musicPage"
     signal navigate(int index)
 
     property bool eqOpen: false
-    onVisibleChanged: if (!visible) eqOpen = false
+    property string tab: "next"                // "next", "albums" or "spotify"
+    property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
+    onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1 }
+
+    readonly property bool navigating: typeof routing !== "undefined" && routing.active
+    readonly property var albums: media.albums
+    readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
 
     function mmss(s) {
         var m = Math.floor(s / 60), r = s % 60
         return m + ":" + (r < 10 ? "0" : "") + r
     }
+    function albumLength(s) {
+        var min = Math.round(s / 60)
+        return min < 60 ? min + " min" : Math.floor(min / 60) + " h " + (min % 60) + " min"
+    }
 
     RowLayout {
-        anchors.fill: parent
-        spacing: Theme.gap
+        anchors { fill: parent; margins: 20 }
+        spacing: 20
 
-        // ---- the cover ----------------------------------------------------
+        // ==== what's playing =============================================
         Card {
+            id: nowCard
             Layout.fillHeight: true
-            Layout.preferredWidth: Math.min(height, page.width * 0.46)
+            Layout.preferredWidth: 460
 
-            AlbumArt {
-                anchors.centerIn: parent
-                anchors.horizontalCenterOffset: -4      // centre the print and its shadow
-                anchors.verticalCenterOffset: -4
-                width: Math.min(parent.width, parent.height) - 56
-                height: width
-                source: media.artCard
-                placeholder: media.source === "phone" ? "phone" : "music"
+            ColumnLayout {
+                anchors { fill: parent; margins: 24; topMargin: 14 }
+                spacing: 6
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    SourceBadge {}
+                    Item { Layout.fillWidth: true }
+                    IconButton {
+                        icon: "equalizer"
+                        size: 60
+                        active: page.eqOpen
+                        onClicked: page.eqOpen = !page.eqOpen
+                    }
+                }
+                AlbumArt {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: 4
+                    Layout.preferredWidth: Math.min(nowCard.width - 60, 320)
+                    Layout.preferredHeight: Layout.preferredWidth
+                    source: media.artCard
+                    placeholder: media.source === "phone" ? "phone" : "music"
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 18
+                    text: media.title
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: media.artist
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    elide: Text.ElideRight
+                }
+                Item { Layout.fillHeight: true }
+
+                ProgressBar {
+                    Layout.fillWidth: true
+                    value: media.duration > 0 ? media.position / media.duration : 0
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Item { Layout.fillWidth: true }
+                    Label { text: page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                }
+                Row {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 28
+                    IconButton { icon: "previous"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
+                    IconButton {
+                        icon: media.playing ? "pause" : "play"
+                        primary: true
+                        size: 104
+                        onClicked: media.togglePlay()
+                    }
+                    IconButton { icon: "next"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 8
+                    spacing: 14
+                    IconButton { icon: "remove"; size: 60; onClicked: media.volumeDown() }
+                    LevelBar {
+                        Layout.fillWidth: true
+                        value: media.volume / 100
+                        onMoved: (v) => media.setVolume(Math.round(v * 100))
+                    }
+                    Label {
+                        Layout.preferredWidth: 44
+                        horizontalAlignment: Text.AlignRight
+                        text: media.volume
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    IconButton { icon: "add"; size: 60; onClicked: media.volumeUp() }
+                }
             }
         }
 
-        Item {
+        // ==== the right side =============================================
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            spacing: 16
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: Theme.gap
-            opacity: page.eqOpen ? 0 : 1
-            visible: opacity > 0
-            Behavior on opacity { NumberAnimation { duration: 180 } }
-
-            // ---- what's playing, transport, volume -------------------------
-            Card {
+            // While navigating: the next turn (tap for Maps).
+            Rectangle {
+                visible: page.navigating
                 Layout.fillWidth: true
-                Layout.preferredHeight: playing.implicitHeight + 40
-
-                ColumnLayout {
-                    id: playing
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        SourceBadge {}
-                        Item { Layout.fillWidth: true }
-                        IconButton {
-                            Layout.topMargin: -6
-                            Layout.bottomMargin: -14
-                            icon: "equalizer"
-                            size: 56
-                            onClicked: page.eqOpen = true
-                        }
+                Layout.preferredHeight: 92
+                radius: Theme.radius
+                color: turnTap.pressed ? Theme.panelHi : Theme.panel
+                border.width: Theme.border
+                border.color: Theme.accent
+                RowLayout {
+                    anchors { fill: parent; leftMargin: 20; rightMargin: 20 }
+                    spacing: 16
+                    Icon {
+                        name: page.navigating ? routing.maneuverIcon || "straight" : "straight"
+                        size: 56
+                        color: Theme.accent
                     }
                     Label {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 2
-                        text: media.title
-                        font.pixelSize: Theme.fontHero
+                        visible: page.navigating && !routing.arrived
+                        text: page.navigating ? Units.distanceText(routing.distanceToTurn) : ""
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
-                        wrapMode: Text.WordWrap
-                        maximumLineCount: 2
-                        elide: Text.ElideRight
                     }
                     Label {
                         Layout.fillWidth: true
-                        text: media.artist
+                        text: page.navigating ? routing.instruction : ""
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                         elide: Text.ElideRight
                     }
-
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 14
-                        value: media.duration > 0 ? media.position / media.duration : 0
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
-                        Item { Layout.fillWidth: true }
-                        Label { text: page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
-                    }
-
-                    Row {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.topMargin: 4
-                        spacing: 24
-                        IconButton { icon: "previous"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
-                        IconButton {
-                            icon: media.playing ? "pause" : "play"
-                            primary: true
-                            size: 104
-                            onClicked: media.togglePlay()
-                        }
-                        IconButton { icon: "next"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
-                    }
-
-                    // Volume: keys either side of a segmented level.
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 10
-                        spacing: 16
-                        IconButton { icon: "remove"; size: 60; onClicked: media.volumeDown() }
-                        LevelBar {
-                            Layout.fillWidth: true
-                            value: media.volume / 100
-                            onMoved: (v) => media.setVolume(Math.round(v * 100))
-                        }
-                        Label {
-                            Layout.preferredWidth: 40
-                            horizontalAlignment: Text.AlignRight
-                            text: media.volume
-                            font.family: Theme.numFont
-                            font.pixelSize: Theme.fontBody
-                            font.weight: Font.DemiBold
-                        }
-                        IconButton { icon: "add"; size: 60; onClicked: media.volumeUp() }
-                    }
                 }
+                TapHandler { id: turnTap; onTapped: page.navigate(2) }
             }
 
-            // ---- what's next -----------------------------------------------
-            // Spotify: its queue (display only). Otherwise the Pi's own
-            // songs; while the phone plays, tap one to switch to it.
+            SegmentedControl {
+                Layout.fillWidth: true
+                height: 72
+                stretch: true
+                options: [{ label: "Up next", value: "next" },
+                          { label: "Albums", value: "albums" },
+                          { label: "Spotify", value: "spotify" }]
+                current: page.tab
+                onPicked: (v) => { page.tab = v; page.openAlbum = -1; page.eqOpen = false }
+            }
+
             Card {
-                id: listCard
+                id: content
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                readonly property bool spotifyQueue: media.source === "spotify"
-                heading: spotifyQueue ? "Up next on Spotify"
-                         : media.source === "phone" ? "Songs on this Pi: tap one to play it here"
-                         : "Songs on this Pi"
+                clip: true
+                heading: page.eqOpen ? "Equalizer"
+                         : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
+                                                  : media.album >= 0 ? "Playing the album " + page.albums[media.album].title
+                                                  : "All songs on this Pi")
+                         : page.tab === "albums" ? (page.openAlbum >= 0 ? "" : "Albums on this Pi")
+                         : "Played here recently"
 
+                // ---- Up next ------------------------------------------------
                 ListView {
                     id: queue
+                    visible: page.tab === "next" && !page.eqOpen
+                    readonly property bool spotifyQueue: media.source === "spotify"
                     anchors { fill: parent; margins: 10; topMargin: 52 }
                     clip: true
-                    model: listCard.spotifyQueue ? media.upNext : media.queue
+                    model: spotifyQueue ? media.upNext : media.queue
                     boundsBehavior: Flickable.StopAtBounds
-
-                    delegate: Rectangle {
-                        required property var modelData
-                        required property int index
-                        readonly property bool current: !listCard.spotifyQueue && index === media.index
-
+                    delegate: SongRow {
                         width: queue.width
-                        height: 96
-                        radius: Theme.radius
-                        color: current || rowTap.pressed ? Theme.panelHi : "transparent"
+                        number: index + 1
+                        current: !queue.spotifyQueue && index === media.index
+                        title: modelData.title
+                        subtitle: modelData.artist
+                        tappable: !queue.spotifyQueue
+                        onHit: media.playIndex(index)
+                    }
+                    Label {
+                        visible: queue.count === 0
+                        anchors { left: parent.left; top: parent.top; leftMargin: 10; topMargin: 10 }
+                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : "No songs in ~/Music on the Pi"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                }
 
-                        Item {
-                            id: num
-                            width: 44
-                            height: parent.height
-                            anchors { left: parent.left; leftMargin: 10 }
-                            Icon {
-                                visible: current
-                                anchors.verticalCenter: parent.verticalCenter
-                                name: "equalizer"
-                                size: 22
-                                color: Theme.accent
-                            }
-                            Label {
-                                visible: !current
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: index + 1
-                                color: Theme.textDim
-                                font.pixelSize: Theme.fontSmall
-                            }
+                // ---- Albums: all of them ------------------------------------
+                GridView {
+                    id: albumGrid
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen
+                    anchors { fill: parent; margins: 14; topMargin: 56 }
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    cellWidth: Math.floor(width / 3)
+                    cellHeight: cellWidth + 74
+                    model: page.albums
+                    delegate: CoverTile {
+                        width: albumGrid.cellWidth
+                        height: albumGrid.cellHeight
+                        art: modelData.art
+                        placeholder: "album"
+                        title: modelData.title
+                        subtitle: modelData.artist
+                        current: index === media.album
+                        onHit: page.openAlbum = index
+                    }
+                    Label {
+                        visible: albumGrid.count === 0
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                }
+
+                // ---- Albums: one open ---------------------------------------
+                Item {
+                    id: albumView
+                    visible: page.tab === "albums" && page.openAlbum >= 0 && !page.eqOpen
+                    anchors { fill: parent; margins: 16 }
+                    readonly property var album: page.openAlbum >= 0 ? page.albums[page.openAlbum] : null
+                    readonly property var tracks: page.openAlbum >= 0 ? media.albumTracks(page.openAlbum) : []
+
+                    RowLayout {
+                        id: albumHead
+                        anchors { left: parent.left; right: parent.right; top: parent.top }
+                        spacing: 18
+                        IconButton {
+                            Layout.alignment: Qt.AlignTop
+                            icon: "back"
+                            size: 72
+                            onClicked: page.openAlbum = -1
                         }
-                        Column {
-                            anchors {
-                                left: num.right; right: parent.right; rightMargin: 12
-                                verticalCenter: parent.verticalCenter
+                        Cover {
+                            Layout.preferredWidth: 150
+                            Layout.preferredHeight: 150
+                            art: albumView.album ? albumView.album.art : ""
+                            placeholder: "album"
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1            // take what's left, not the title's length
+                            Layout.alignment: Qt.AlignVCenter
+                            spacing: 4
+                            Label {
+                                Layout.fillWidth: true
+                                text: albumView.album ? albumView.album.title : ""
+                                font.pixelSize: Theme.fontTitle
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
                             }
                             Label {
-                                width: parent.width
-                                text: modelData.title
+                                Layout.fillWidth: true
+                                text: albumView.album ? albumView.album.artist : ""
+                                color: Theme.textDim
                                 font.pixelSize: Theme.fontBody
-                                font.weight: current ? Font.DemiBold : Font.Normal
                                 elide: Text.ElideRight
                             }
                             Label {
-                                width: parent.width
-                                text: modelData.artist
+                                text: albumView.album ? albumView.album.count + (albumView.album.count === 1 ? " song, " : " songs, ")
+                                                      + page.albumLength(albumView.album.duration) : ""
                                 color: Theme.textDim
                                 font.pixelSize: Theme.fontSmall
-                                elide: Text.ElideRight
                             }
                         }
-                        TapHandler {
-                            id: rowTap
-                            enabled: !listCard.spotifyQueue
-                            onTapped: media.playIndex(index)
+                        TextButton {
+                            Layout.alignment: Qt.AlignVCenter
+                            implicitWidth: 150
+                            implicitHeight: 96
+                            text: "Play"
+                            icon: "play"
+                            primary: true
+                            onClicked: media.playAlbum(page.openAlbum, 0)
+                        }
+                    }
+                    ListView {
+                        id: albumSongs
+                        anchors { left: parent.left; right: parent.right; top: albumHead.bottom; bottom: parent.bottom; topMargin: 14 }
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: albumView.tracks
+                        delegate: SongRow {
+                            width: albumSongs.width
+                            number: index + 1
+                            current: media.album === page.openAlbum && index === media.index
+                            title: modelData.title
+                            subtitle: ""
+                            trailing: page.mmss(modelData.duration)
+                            onHit: media.playAlbum(page.openAlbum, index)
                         }
                     }
                 }
 
-                Label {
-                    visible: queue.count === 0
-                    anchors { left: parent.left; top: parent.top; leftMargin: 20; topMargin: 56 }
-                    text: listCard.spotifyQueue ? "Nothing queued in Spotify" : "No songs in ~/Music on the Pi"
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
+                // ---- Spotify: played here recently --------------------------
+                GridView {
+                    id: spotifyGrid
+                    visible: page.tab === "spotify" && !page.eqOpen
+                    anchors { fill: parent; margins: 14; topMargin: 56 }
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    cellWidth: Math.floor(width / 3)
+                    cellHeight: cellWidth + 74
+                    model: media.spotifyRecents
+                    delegate: CoverTile {
+                        width: spotifyGrid.cellWidth
+                        height: spotifyGrid.cellHeight
+                        art: modelData.art
+                        placeholder: modelData.kind === "playlist" ? "queue" : "album"
+                        title: modelData.title
+                        subtitle: modelData.subtitle
+                        current: index === 0 && media.source === "spotify" && media.playing
+                        onHit: media.playSpotify(modelData.uri)
+                    }
+                    Label {
+                        visible: spotifyGrid.count === 0
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: !page.hasSpotify ? "Spotify isn't running on the Pi right now."
+                              : "Albums and playlists you play here through Spotify show up here. "
+                                + "In the Spotify app on your phone, pick " + (spotify.deviceName || "this Pi")
+                                + " as the speaker and play something."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                }
+
+                // ---- the equalizer, over the right-hand side ----------------
+                IconButton {
+                    visible: page.eqOpen
+                    anchors { right: parent.right; top: parent.top; margins: 14 }
+                    icon: "close"
+                    size: 56
+                    onClicked: page.eqOpen = false
+                }
+                EqualizerPanel {
+                    visible: page.eqOpen
+                    anchors { fill: parent; margins: 20; topMargin: 84 }
                 }
             }
         }
+    }
 
-        // ---- the equalizer, over the right-hand column --------------------
-        Card {
-            anchors.fill: parent
-            heading: "Equalizer"
-            opacity: page.eqOpen ? 1 : 0
-            visible: opacity > 0
-            Behavior on opacity { NumberAnimation { duration: 180 } }
+    // ---- small parts ------------------------------------------------------
+    // A cover: the picture, or a quiet tile with an icon when there isn't one.
+    component Cover: Rectangle {
+        property string art
+        property string placeholder: "album"
+        radius: Theme.radius
+        color: Theme.panelHi
+        border.width: Theme.border
+        border.color: Theme.line
+        clip: true
+        Icon {
+            visible: coverImage.status !== Image.Ready
+            anchors.centerIn: parent
+            name: parent.placeholder
+            size: parent.width * 0.4
+            color: Theme.textDim
+        }
+        Image {
+            id: coverImage
+            anchors { fill: parent; margins: Theme.border }
+            source: parent.art
+            sourceSize: Qt.size(360, 360)          // decode small: there are many
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+        }
+    }
 
-            IconButton {
-                anchors { right: parent.right; top: parent.top; margins: 14 }
-                icon: "close"
-                size: 56
-                onClicked: page.eqOpen = false
+    // A cover with its name under it, for the album and Spotify grids.
+    component CoverTile: Item {
+        id: tile
+        property string art
+        property string placeholder: "album"
+        property string title
+        property string subtitle
+        property bool current: false
+        signal hit()
+        Cover {
+            id: tileCover
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 8 }
+            height: width
+            art: tile.art
+            placeholder: tile.placeholder
+            border.color: tile.current ? Theme.accent : Theme.line
+            border.width: tile.current ? 3 : Theme.border
+            scale: tileTap.pressed ? 0.96 : 1
+            Behavior on scale { NumberAnimation { duration: 80 } }
+        }
+        Column {
+            anchors { left: parent.left; right: parent.right; top: tileCover.bottom; leftMargin: 10; rightMargin: 10; topMargin: 8 }
+            Label {
+                width: parent.width
+                text: tile.title
+                font.pixelSize: Theme.fontSmall + 2
+                font.weight: Font.DemiBold
+                color: tile.current ? Theme.accent : Theme.text
+                elide: Text.ElideRight
             }
-            EqualizerPanel {
-                anchors { fill: parent; margins: 20; topMargin: 84 }
+            Label {
+                width: parent.width
+                text: tile.subtitle
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall - 2
+                elide: Text.ElideRight
             }
         }
+        TapHandler { id: tileTap; onTapped: tile.hit() }
+    }
+
+    // A song in a list: its number (or a playing mark), title, and a second
+    // line or a time on the right.
+    component SongRow: Rectangle {
+        id: row
+        property int number
+        property bool current: false
+        property string title
+        property string subtitle
+        property string trailing: ""
+        property bool tappable: true
+        signal hit()
+        height: 92
+        radius: Theme.radius
+        color: current || rowTap.pressed ? Theme.panelHi : "transparent"
+        Item {
+            id: num
+            width: 52
+            height: parent.height
+            anchors { left: parent.left; leftMargin: 10 }
+            Icon {
+                visible: row.current
+                anchors.verticalCenter: parent.verticalCenter
+                name: "equalizer"
+                size: 24
+                color: Theme.accent
+            }
+            Label {
+                visible: !row.current
+                anchors.verticalCenter: parent.verticalCenter
+                text: row.number
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
+            }
         }
+        Column {
+            anchors { left: num.right; right: time.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
+            Label {
+                width: parent.width
+                text: row.title
+                font.pixelSize: Theme.fontBody
+                font.weight: row.current ? Font.DemiBold : Font.Normal
+                elide: Text.ElideRight
+            }
+            Label {
+                visible: row.subtitle !== ""
+                width: parent.width
+                text: row.subtitle
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
+                elide: Text.ElideRight
+            }
+        }
+        Label {
+            id: time
+            anchors { right: parent.right; rightMargin: 16; verticalCenter: parent.verticalCenter }
+            text: row.trailing
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+        }
+        TapHandler { id: rowTap; enabled: row.tappable; onTapped: row.hit() }
     }
 }

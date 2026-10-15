@@ -20,7 +20,10 @@ ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 
 def _first_tag(tags, *keys):
     for key in keys:
-        value = tags.get(key)
+        try:
+            value = tags.get(key)
+        except ValueError:     # FLAC/Ogg tags reject names they can't hold (e.g. "\xa9nam")
+            continue
         if value:
             text = value[0] if isinstance(value, list) else getattr(value, "text", [value])[0]
             return str(text)
@@ -61,13 +64,16 @@ def scan(folder):
         if audio is None:
             continue
         tags = audio.tags or {}
-        tracks.append({
-            "path": str(path),
-            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
-            "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
-            "duration": int(audio.info.length),
-            "art": _extract_art(path, audio),
-        })
+        try:
+            tracks.append({
+                "path": str(path),
+                "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
+                "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
+                "duration": int(audio.info.length),
+                "art": _extract_art(path, audio),
+            })
+        except Exception as e:  # one odd file mustn't stop the dashboard starting
+            print(f"Music: skipped {path.name} ({e!r})")
     return tracks
 
 

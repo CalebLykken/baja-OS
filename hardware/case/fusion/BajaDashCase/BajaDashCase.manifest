@@ -1,0 +1,10 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"Caleb Lykken",
+	"description":	{
+		"":	"Builds the Baja OS dash case (panel, knob, Pi case, bracket adapters) and writes its print files."
+	},
+	"version": "3.0",
+	"supportedOS":	"windows|mac"
+}

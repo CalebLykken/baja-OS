@@ -14,3 +14,5 @@ venv/
 !qml/assets/truck/*.png
 !tools/sign-icons/*.png
 !web/map/icons/*.png
+!hardware/case/images/*.png
+hardware/case/build/

@@ -320,6 +320,13 @@ transistor with a flyback diode.
     temperatures on a hot day.
   - High-endurance SD card or NVMe.
   - Anti-glare film or a small hood for daylight.
+  - Done so far (2026-10-15): a test-fit version in `hardware/case/`: a
+    panel for the radio part of the bezel opening (the climate controls stay
+    below it), the screen fixed on four posts, the volume knob under it, a Pi
+    case on the back, and four slotted adapter plates for Subaru's radio
+    brackets (66201AE17A/18A). Built by a Fusion script with every size a
+    named parameter; the bracket spacing and hole positions still need
+    measuring after the test print.
 - **H6. Optional:** backup camera, FM tuner, u-blox 8 GPS puck.
 
 ---

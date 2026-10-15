@@ -2,8 +2,9 @@
 
 `LibraryPlayer` has the same properties and slots as the demo `MediaPlayer`,
 so the QML doesn't care which one it gets. Tags and cover art (embedded, or
-a cover.jpg beside the files) are read with mutagen; playback goes through
-Qt Multimedia. Songs are grouped into albums by their tags, and playing an
+a cover.jpg beside the files) are read with mutagen. Playback is gapless
+(backend/gapless.py), so songs that run into each other on an album do
+here too. Songs are grouped into albums by their tags, and playing an
 album makes it the queue; "all songs" plays everything in folder order.
 """
 
@@ -13,8 +14,10 @@ import tempfile
 from pathlib import Path
 
 import mutagen
-from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
-from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
+from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtMultimedia import QMediaDevices
+
+from backend.gapless import GaplessEngine
 
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
@@ -163,42 +166,42 @@ class LibraryPlayer(QObject):
         self._index = 0
         self._volume = 40
 
-        self._output = QAudioOutput(preferred_output(), self)
+        self._engine = GaplessEngine(lambda i: self._queue[i]["path"], lambda: len(self._queue),
+                                     preferred_output(), self)
+        self._engine.trackStarted.connect(self._heard)
         # The equalizer may start after the dashboard: move to it when it does.
         self._devices = QMediaDevices(self)
         self._devices.audioOutputsChanged.connect(self._pick_output)
-        self._player = QMediaPlayer(self)
-        self._player.setAudioOutput(self._output)
-        self._player.positionChanged.connect(lambda _: self.positionChanged.emit())
-        self._player.playbackStateChanged.connect(lambda _: self.playingChanged.emit())
-        self._player.mediaStatusChanged.connect(self._on_status)
-        self._player.errorOccurred.connect(
-            lambda _err, msg: print(f"Playback error: {msg}"))
+        self._tick = QTimer(self, interval=500,
+                            timeout=lambda: self._engine.playing and self.positionChanged.emit())
+        self._tick.start()
         self._apply_volume()
-        self._load(0)
 
     def start(self):
-        self._player.play()
+        self._go(self._index)
 
     def _pick_output(self):
-        device = preferred_output()
-        if device != self._output.device():
-            self._output.setDevice(device)
+        self._engine.set_device(preferred_output())
 
-    def _load(self, index):
+    def _go(self, index):
+        """Play song `index` of the queue now."""
         self._index = index % len(self._queue)
-        self._player.setSource(QUrl.fromLocalFile(self._queue[self._index]["path"]))
+        self._engine.play_from(self._index)
         self.trackChanged.emit()
         self.positionChanged.emit()
+        self.playingChanged.emit()
 
-    def _on_status(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.next()
+    def _heard(self, index):
+        """The next song started by itself (no gap): show it."""
+        if index != self._index:
+            self._index = index
+            self.trackChanged.emit()
+            self.positionChanged.emit()
 
     def _apply_volume(self):
         # Squared so the low end of the bar isn't all "loud"; ears hear
         # volume roughly logarithmically.
-        self._output.setVolume((self._volume / 100) ** 2)
+        self._engine.set_volume((self._volume / 100) ** 2)
 
     # ---- properties -------------------------------------------------------
     @pyqtProperty(str, notify=trackChanged)
@@ -246,11 +249,11 @@ class LibraryPlayer(QObject):
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):
-        return self._player.position() // 1000
+        return self._engine.position()
 
     @pyqtProperty(bool, notify=playingChanged)
     def playing(self):
-        return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        return self._engine.playing
 
     @pyqtProperty(int, notify=volumeChanged)
     def volume(self):
@@ -259,28 +262,21 @@ class LibraryPlayer(QObject):
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def togglePlay(self):
-        if self.playing:
-            self._player.pause()
-        else:
-            self._player.play()
+        self._engine.set_playing(not self._engine.playing)
+        self.playingChanged.emit()
 
     @pyqtSlot()
     def next(self):
-        self._load(self._index + 1)
-        self._player.play()
+        self._go(self._index + 1)
 
     @pyqtSlot()
     def previous(self):
-        if self._player.position() > 3000:
-            self._player.setPosition(0)
-        else:
-            self._load(self._index - 1)
-            self._player.play()
+        # Like a head unit: back to the start of the song, unless just begun.
+        self._go(self._index if self._engine.position() > 3 else self._index - 1)
 
     @pyqtSlot(int)
     def playIndex(self, index):
-        self._load(index)
-        self._player.play()
+        self._go(index)
 
     @pyqtSlot(int, int)
     def playAlbum(self, album, start=0):

@@ -104,7 +104,7 @@ class MediaHub(QObject):
     volumeChanged = pyqtSignal()
     sourceChanged = pyqtSignal()
     queueChanged = pyqtSignal()
-    _artReady = pyqtSignal(str, str, str)   # source, art url, rounded card url
+    _artReady = pyqtSignal(str, str, str, str)   # source, its art url, local copy, rounded card
 
     maxVolumeChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
@@ -223,12 +223,11 @@ class MediaHub(QObject):
 
     # ---- album art --------------------------------------------------------
     def _update_art(self, name):
+        """Fetch (Spotify) and round off the cover on a worker thread: decoding
+        a big cover on the main thread stalls the screen just as a song starts."""
         url = self._sources[name].art
-        if name == "local":
-            self._apply_art(name, url, art_card(url))
-            return
         if not url:
-            self._apply_art(name, "", "")
+            self._apply_art(name, "", "", "")
             return
 
         def work():
@@ -237,13 +236,12 @@ class MediaHub(QObject):
                 card = art_card(local)
             except Exception:          # offline, bad URL: no cover for now
                 local, card = url, ""
-            try:
-                self._artReady.emit(name, local, card)
-            except RuntimeError:       # app shutting down; nothing to update
-                pass
+            safe_emit(self, "_artReady", name, url, local, card)
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_art(self, name, url, card):
+    def _apply_art(self, name, source_url, url, card):
+        if source_url != self._sources[name].art:
+            return                     # the song moved on while this was made
         self._art[name] = (url, card)
         if name == self._source:
             self.trackChanged.emit()

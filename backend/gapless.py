@@ -8,23 +8,35 @@ that never closes. Songs are decoded to plain 48 kHz stereo samples
 one plays, and fed into the stream back to back, so one ends on exactly
 the sample the next begins.
 
+The stream and what feeds it run on their own thread. Everything the
+screen does (a new cover when a song starts, opening a page) happens on
+the main thread, and if that held up the feed for longer than the little
+audio queued ahead, you'd hear a crackle, right as a song starts.
+
 Pausing and skipping fade over 30 ms instead of cutting mid-wave, and
 while paused the stream plays silence rather than stopping, so nothing
 clicks. A decoded song is held in memory until it has played (about 10 MB
 a minute), at most the current one and the next.
 """
 
+import os
+import threading
+import time
 from array import array
 from collections import deque
 
-from PyQt6.QtCore import QIODevice, QObject, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (QCoreApplication, QIODevice, QObject, QThread, QTimer, QUrl,
+                          pyqtSignal, pyqtSlot)
 from PyQt6.QtMultimedia import QAudio, QAudioDecoder, QAudioFormat, QAudioSink
 
 RATE, CHANNELS, SAMPLE_BYTES = 48000, 2, 2
 FRAME = CHANNELS * SAMPLE_BYTES
 BYTES_PER_S = RATE * FRAME
-BUFFER_S = 0.3              # what the audio system holds: room for a busy screen
+BUFFER_S = 0.3              # what the audio system holds ahead
 RAMP_FRAMES = RATE * 30 // 1000
+# Log stalls and starved reads: set BAJA_AUDIO_DEBUG, or create this file.
+DEBUG = bool(os.environ.get("BAJA_AUDIO_DEBUG")
+             or os.path.exists(os.path.expanduser("~/.config/baja-os/audio-debug")))
 
 
 def audio_format():
@@ -40,7 +52,7 @@ class _Song:
 
     def __init__(self, index):
         self.index = index
-        self.chunks = deque()
+        self.chunks = deque()       # decoder appends (main thread), feed pops (audio thread)
         self.done = False           # decoding finished (or failed)
         self.played = 0             # bytes handed to the stream so far
 
@@ -48,12 +60,12 @@ class _Song:
 class _Feed(QIODevice):
     """What the audio stream reads from: always as much as it asks for."""
 
-    def __init__(self, engine):
-        super().__init__(engine)
-        self._engine = engine
+    def __init__(self, output):
+        super().__init__(output)
+        self._output = output
 
     def readData(self, maxlen):
-        return self._engine._pull(maxlen)
+        return self._output.pull(maxlen)
 
     def writeData(self, data):
         return 0
@@ -65,133 +77,194 @@ class _Feed(QIODevice):
         return BYTES_PER_S + super().bytesAvailable()
 
 
+class _Output(QObject):
+    """The stream and its feed. Lives on the audio thread; reads the songs
+    and fade state the engine shares under its lock."""
+    joined = pyqtSignal(int, int)       # a song took over: its index, ms until heard
+    wantDecode = pyqtSignal()           # songs changed: the main thread decodes
+
+    def __init__(self, engine):
+        super().__init__()
+        self.e = engine
+        self.sink = None
+        self.feed = None
+        self.volume = 1.0
+        self.last_pull = None
+
+    @pyqtSlot(object)
+    def make_sink(self, device):
+        if self.feed is None:
+            self.feed = _Feed(self)
+            self.feed.open(QIODevice.OpenModeFlag.ReadOnly)
+        if self.sink is not None:
+            self.sink.stop()
+            self.sink.deleteLater()
+        self.sink = QAudioSink(device, audio_format(), self)
+        self.sink.setBufferSize(int(BYTES_PER_S * BUFFER_S) // FRAME * FRAME)
+        self.sink.setVolume(self.volume)
+        self.sink.stateChanged.connect(self._state)
+        self.sink.start(self.feed)
+
+    def _state(self, state):
+        if state == QAudio.State.StoppedState and self.sink.error() != QAudio.Error.NoError:
+            QTimer.singleShot(1000, lambda: self.make_sink(self.sink.device()))
+
+    @pyqtSlot(float)
+    def set_volume(self, v):
+        self.volume = v
+        if self.sink is not None:
+            self.sink.setVolume(v)
+
+    @pyqtSlot()
+    def stop(self):
+        if self.sink is not None:
+            self.sink.stop()
+
+    def latency(self):
+        return max(0, self.sink.bufferSize() - self.sink.bytesFree()) if self.sink else 0
+
+    def pull(self, maxlen):
+        e = self.e
+        held = self.latency()
+        e._latency = held
+        if DEBUG:
+            now = time.monotonic()
+            if self.last_pull is not None and now - self.last_pull > 0.2:   # normal: ~0.1 s
+                print(f"audio: {(now - self.last_pull) * 1000:.0f} ms between reads, "
+                      f"{held * 1000 // BYTES_PER_S} ms still queued", flush=True)
+            self.last_pull = now
+        maxlen -= maxlen % FRAME
+        if maxlen <= 0:
+            return b""
+        out = bytearray()
+        with e._lock:
+            if e._gain == 0.0 and e._target == 0.0:
+                if e._pending is not None:      # faded out: now switch songs
+                    index, e._pending = e._pending, None
+                    e._songs.clear()
+                    e._songs.append(_Song(index))
+                    self.wantDecode.emit()
+                    if e._want_play:
+                        e._target = 1.0
+                if e._target == 0.0:
+                    return bytes(maxlen)        # paused: silence, stream stays open
+            while len(out) < maxlen and e._songs:
+                song = e._songs[0]
+                if song.chunks:
+                    chunk = song.chunks[0]
+                    need = maxlen - len(out)
+                    if len(chunk) <= need:
+                        out += chunk
+                        song.chunks.popleft()
+                        song.played += len(chunk)
+                    else:
+                        out += chunk[:need]
+                        song.chunks[0] = chunk[need:]
+                        song.played += need
+                elif song.done:                 # its end: straight into the next
+                    e._songs.popleft()
+                    if not e._songs:
+                        n = e._count()
+                        if n:
+                            e._songs.append(_Song((song.index + 1) % n))
+                    if e._songs:
+                        ahead = held + len(out)
+                        self.joined.emit(e._songs[0].index, int(ahead * 1000 / BYTES_PER_S))
+                    self.wantDecode.emit()
+                else:
+                    break                       # decoding hasn't caught up
+            starved = len(out) < maxlen and e._gain == 1.0 and e._target == 1.0
+        if DEBUG and starved:
+            print(f"audio: starved, {(maxlen - len(out)) * 1000 // BYTES_PER_S} ms of silence", flush=True)
+        out += bytes(maxlen - len(out))
+        if e._gain != 1.0 or e._target != 1.0:
+            out = self._ramp(out)
+        return bytes(out)
+
+    def _ramp(self, data):
+        e = self.e
+        samples = array("h")
+        samples.frombytes(bytes(data))
+        g, target, step = e._gain, e._target, 1.0 / RAMP_FRAMES
+        for f in range(0, len(samples), CHANNELS):
+            if g != target:
+                g = min(target, g + step) if target > g else max(target, g - step)
+            for c in range(CHANNELS):
+                samples[f + c] = int(samples[f + c] * g)
+        e._gain = g
+        return samples.tobytes()
+
+
 class GaplessEngine(QObject):
     """Plays songs from a list, one after another, without gaps.
 
     `path_of(i)` and `count()` describe the list (it can change: call
     `play_from` after). `trackStarted(i)` says song i is now being heard."""
     trackStarted = pyqtSignal(int)
+    _toDevice = pyqtSignal(object)
+    _toVolume = pyqtSignal(float)
+    _toStop = pyqtSignal()
 
     def __init__(self, path_of, count, device, parent=None):
         super().__init__(parent)
         self._path_of, self._count = path_of, count
+        self._lock = threading.Lock()
         self._songs = deque()
-        self._decoder = None
-        self._decoding = None       # the _Song being decoded
         self._want_play = False
         self._gain, self._target = 0.0, 0.0
         self._pending = None        # a song to switch to once faded out
-        self._volume = 1.0
-        self._feed = _Feed(self)
-        self._feed.open(QIODevice.OpenModeFlag.ReadOnly)
-        self._sink = None
-        self._make_sink(device)
+        self._latency = 0           # bytes queued in the stream (set by the feed)
+        self._decoder = None
+        self._decoding = None       # the _Song being decoded
+
+        self._thread = QThread(self)
+        self._thread.setObjectName("audio")
+        self._out = _Output(self)
+        self._out.moveToThread(self._thread)
+        self._out.joined.connect(self._joined)
+        self._out.wantDecode.connect(self._decode_more)
+        self._toDevice.connect(self._out.make_sink)
+        self._toVolume.connect(self._out.set_volume)
+        self._toStop.connect(self._out.stop)
+        self._thread.start(QThread.Priority.TimeCriticalPriority)
+        self._toDevice.emit(device)
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown)
+
+    def _shutdown(self):
+        self._toStop.emit()
+        self._thread.quit()
+        self._thread.wait(1000)
 
     # ---- the stream ---------------------------------------------------------
-    def _make_sink(self, device):
-        if self._sink is not None:
-            self._sink.stop()
-            self._sink.deleteLater()
-        self._sink = QAudioSink(device, audio_format(), self)
-        self._sink.setBufferSize(int(BYTES_PER_S * BUFFER_S) // FRAME * FRAME)
-        self._sink.setVolume(self._volume)
-        self._sink.stateChanged.connect(self._sink_state)
-        self._sink.start(self._feed)
-
-    def _sink_state(self, state):
-        if state == QAudio.State.StoppedState and self._sink.error() != QAudio.Error.NoError:
-            QTimer.singleShot(1000, lambda: self._make_sink(self._sink.device()))
-
     def set_device(self, device):
-        if device != self._sink.device():
-            self._make_sink(device)
+        self._toDevice.emit(device)
 
     def set_volume(self, v):
-        self._volume = v
-        self._sink.setVolume(v)
+        self._toVolume.emit(float(v))
 
-    def _latency_bytes(self):
-        return max(0, self._sink.bufferSize() - self._sink.bytesFree())
-
-    def _pull(self, maxlen):
-        maxlen -= maxlen % FRAME
-        if maxlen <= 0:
-            return b""
-        if self._gain == 0.0 and self._target == 0.0:
-            if self._pending is not None:       # faded out: now switch songs
-                index, self._pending = self._pending, None
-                self._start_song(index)
-                if self._want_play:
-                    self._target = 1.0
-            if self._target == 0.0:
-                return bytes(maxlen)            # paused: silence, stream stays open
-
-        out = bytearray()
-        while len(out) < maxlen and self._songs:
-            song = self._songs[0]
-            if song.chunks:
-                chunk = song.chunks[0]
-                need = maxlen - len(out)
-                if len(chunk) <= need:
-                    out += chunk
-                    song.chunks.popleft()
-                    song.played += len(chunk)
-                else:
-                    out += chunk[:need]
-                    song.chunks[0] = chunk[need:]
-                    song.played += need
-            elif song.done:                     # its end: straight into the next
-                self._songs.popleft()
-                if not self._songs:
-                    self._queue_next(after=song.index)
-                if self._songs:
-                    self._announce(self._songs[0].index)
-                self._decode_more()
-            else:
-                break                           # decoding hasn't caught up
-        out += bytes(maxlen - len(out))
-        if self._gain != 1.0 or self._target != 1.0:
-            out = self._ramp(out)
-        return bytes(out)
-
-    def _ramp(self, data):
-        samples = array("h")
-        samples.frombytes(bytes(data))
-        g, target, step = self._gain, self._target, 1.0 / RAMP_FRAMES
-        for f in range(0, len(samples), CHANNELS):
-            if g != target:
-                g = min(target, g + step) if target > g else max(target, g - step)
-            for c in range(CHANNELS):
-                samples[f + c] = int(samples[f + c] * g)
-        self._gain = g
-        return samples.tobytes()
-
-    # ---- songs --------------------------------------------------------------
-    def _announce(self, index):
-        """Say song `index` is playing once the audio already queued ahead of
-        it has been heard."""
-        ms = int(self._latency_bytes() * 1000 / BYTES_PER_S)
+    def _joined(self, index, ms):
+        """Say song `index` is playing once the audio queued ahead of it has
+        been heard."""
+        if DEBUG:
+            print(f"audio: song {index} joins in {ms} ms", flush=True)
         QTimer.singleShot(ms, lambda: self.trackStarted.emit(index))
 
-    def _start_song(self, index):
-        self._stop_decoder()
-        self._songs.clear()
-        self._songs.append(_Song(index))
-        self._decode_more()
-
-    def _queue_next(self, after):
-        n = self._count()
-        if n:
-            self._songs.append(_Song((after + 1) % n))
-
+    # ---- decoding (main thread) ---------------------------------------------
     def _decode_more(self):
         """Decode the first song not yet decoded; once the current song is
         decoded, line up the next one too."""
-        if self._decoding is not None:
-            return
-        if self._songs and self._songs[-1].done and len(self._songs) < 2:
-            self._queue_next(after=self._songs[-1].index)
-        song = next((s for s in self._songs if not s.done), None)
+        with self._lock:
+            if self._decoding is not None and self._decoding not in self._songs:
+                self._stop_decoder()            # its song was skipped
+            if self._decoding is not None:
+                return
+            if self._songs and self._songs[-1].done and len(self._songs) < 2:
+                n = self._count()
+                if n:
+                    self._songs.append(_Song((self._songs[-1].index + 1) % n))
+            song = next((s for s in self._songs if not s.done), None)
         if song is None:
             return
         dec = QAudioDecoder(self)
@@ -238,19 +311,23 @@ class GaplessEngine(QObject):
     # ---- controls -----------------------------------------------------------
     def play_from(self, index, play=True):
         """Start song `index` now, fading out whatever is playing first."""
-        self._want_play = play
-        if self._gain > 0.0:
-            self._pending = index
-            self._target = 0.0
-        else:
-            self._start_song(index)
+        with self._lock:
+            self._want_play = play
+            if self._gain > 0.0:
+                self._pending = index
+                self._target = 0.0
+                return                           # the feed switches once faded out
             self._pending = None
+            self._songs.clear()
+            self._songs.append(_Song(index))
             self._target = 1.0 if play else 0.0
+        self._decode_more()
 
     def set_playing(self, on):
-        self._want_play = on
-        if self._pending is None:
-            self._target = 1.0 if on else 0.0
+        with self._lock:
+            self._want_play = on
+            if self._pending is None:
+                self._target = 1.0 if on else 0.0
 
     @property
     def playing(self):
@@ -258,6 +335,7 @@ class GaplessEngine(QObject):
 
     def position(self):
         """Seconds into the song being heard."""
-        if not self._songs or self._pending is not None:
-            return 0
-        return max(0, self._songs[0].played - self._latency_bytes()) // BYTES_PER_S
+        with self._lock:
+            if not self._songs or self._pending is not None:
+                return 0
+            return max(0, self._songs[0].played - self._latency) // BYTES_PER_S

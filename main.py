@@ -32,6 +32,7 @@ from backend.routing import Router
 from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
+from backend.knob import Knob
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.phone import PhoneSend
@@ -111,6 +112,10 @@ def main():
                      max_volume=settings.get_int("maxVolume", 100))
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
+    # The dash knob: turn for volume, press to play or pause.
+    knob = Knob()
+    knob.turned.connect(lambda step: media.volumeUp() if step > 0 else media.volumeDown())
+    knob.pressed.connect(media.togglePlay)
     # Day/night brightness follows the sun where the truck is (Seattle
     # until the GPS has a position).
     display = Display(settings, location=lambda: (gps.lat, gps.lon) if gps.hasFix else (47.6062, -122.3321))
@@ -171,13 +176,14 @@ def main():
     display.start()
     phone.start()
     network.start()
+    knob.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

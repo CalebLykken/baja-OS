@@ -21,7 +21,7 @@ Item {
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Speed  ·  gear " + vehicle.gear; unit: Units.speedUnit
+            label: "Speed  ·  gear " + (vehicle.gear || "N"); unit: Units.speedUnit
             value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
         }
         Gauge {

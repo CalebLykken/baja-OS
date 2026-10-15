@@ -34,6 +34,7 @@ from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.knob import Knob
+from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.phone import PhoneSend
@@ -103,6 +104,10 @@ def main():
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
     vehicle = VehicleData()
+    # Real engine data from the OBD-II adapter whenever the car answers.
+    obd = ObdReader()
+    obd.reading.connect(vehicle.apply_obd)
+    obd.lost.connect(vehicle.lost_obd)
     settings = Settings()
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio()
@@ -156,7 +161,6 @@ def main():
     ctx.setContextProperty("road", road)
     ctx.setContextProperty("voice", voice)
     ctx.setContextProperty("phone", phone)
-    ctx.setContextProperty("demoMode", True)
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
     ctx.setContextProperty("showSplash", not args.no_splash
@@ -184,13 +188,14 @@ def main():
     phone.start()
     network.start()
     knob.start()
+    obd.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

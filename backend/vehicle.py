@@ -1,9 +1,9 @@
 """Vehicle data exposed to the UI.
 
-`VehicleData` is a stand-in that simulates a drive so the gauges move. When
-the OBD-II adapter is connected, replace `_tick` with real PID reads (for
-example with the `obd` Python library) and keep the same property names.
-The QML never needs to change.
+Real engine data comes from the OBD-II adapter (backend/obd.py) whenever
+the car answers; `live` is then True. Without it (no adapter, key off, at
+a desk) a simulated drive keeps the gauges moving. Gear isn't reported over
+OBD, so it's worked out from speed and RPM.
 """
 
 import math
@@ -12,13 +12,25 @@ import random
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
+STALE_MS = 4000  # no engine data for this long: back to the simulation
 
 # Rough 5-speed gearing for the 2005 Baja Turbo: mph per 1000 rpm in each gear.
 GEARS = [6.5, 11.5, 17.0, 22.5, 28.0]
 
 
+def estimate_gear(mph, rpm):
+    """The gear whose ratio fits speed and RPM best, or 0 (stopped, clutch
+    in, or between gears)."""
+    if mph < 3 or rpm < 500:
+        return 0
+    per_k = mph / (rpm / 1000)
+    best = min(range(len(GEARS)), key=lambda i: abs(per_k - GEARS[i]))
+    return best + 1 if abs(per_k - GEARS[best]) / GEARS[best] < 0.12 else 0
+
+
 class VehicleData(QObject):
     changed = pyqtSignal()
+    liveChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,6 +42,8 @@ class VehicleData(QObject):
         self._intake = 72.0
         self._voltage = 14.2
         self._gear = 1
+        self._live = False
+        self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._timer = QTimer(self)
         self._timer.setInterval(UPDATE_MS)
         self._timer.timeout.connect(self._tick)
@@ -37,7 +51,34 @@ class VehicleData(QObject):
     def start(self):
         self._timer.start()
 
+    # ---- the real thing ---------------------------------------------------
+    def apply_obd(self, values):
+        """Fresh readings from the car (rpm, speed mph, boost psi, coolant
+        and intake °F, voltage), any subset."""
+        for key in ("rpm", "speed", "boost", "coolant", "intake", "voltage"):
+            if key in values:
+                setattr(self, "_" + key, float(values[key]))
+        self._gear = estimate_gear(self._speed, self._rpm)
+        self._stale.start()
+        if not self._live:
+            self._live = True
+            self.liveChanged.emit()
+        self.changed.emit()
+
+    def lost_obd(self):
+        if self._live:
+            self._live = False
+            self.liveChanged.emit()
+
+    @pyqtProperty(bool, notify=liveChanged)
+    def live(self):
+        """True while the numbers come from the car, not the simulation."""
+        return self._live
+
+    # ---- the simulated drive ----------------------------------------------
     def _tick(self):
+        if self._live:
+            return
         dt = UPDATE_MS / 1000.0
         self._t += dt
         t = self._t

@@ -150,7 +150,7 @@ Item {
         RowLayout {
             anchors { fill: parent; margins: 20 }
             Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: Math.round(Units.speed(vehicle.speed)); unit: Units.speedUnit }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.gear; unit: "" }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.gear || "N"; unit: "" }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1

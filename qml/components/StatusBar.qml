@@ -74,7 +74,7 @@ Item {
         spacing: 24
 
         Rectangle {
-            visible: typeof demoMode !== "undefined" && demoMode
+            visible: typeof vehicle !== "undefined" && !vehicle.live
             anchors.verticalCenter: parent.verticalCenter
             width: demoText.width + 20; height: 30; radius: Theme.radius
             color: Theme.accentDim

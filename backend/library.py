@@ -11,8 +11,9 @@ from pathlib import Path
 
 import mutagen
 from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 
+EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 
@@ -70,6 +71,17 @@ def scan(folder):
     return tracks
 
 
+def preferred_output():
+    """The equalizer when it's running, so music goes through it and on to
+    whichever output is the default (the sound board); else the default.
+    Qt keeps the output it's given, so handing it the default would pin
+    music to whatever that was at start-up."""
+    for device in QMediaDevices.audioOutputs():
+        if bytes(device.id()).decode(errors="ignore") == EQ_SINK:
+            return device
+    return QMediaDevices.defaultAudioOutput()
+
+
 class LibraryPlayer(QObject):
     trackChanged = pyqtSignal()
     positionChanged = pyqtSignal()
@@ -82,7 +94,10 @@ class LibraryPlayer(QObject):
         self._index = 0
         self._volume = 40
 
-        self._output = QAudioOutput(self)
+        self._output = QAudioOutput(preferred_output(), self)
+        # The equalizer may start after the dashboard: move to it when it does.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._pick_output)
         self._player = QMediaPlayer(self)
         self._player.setAudioOutput(self._output)
         self._player.positionChanged.connect(lambda _: self.positionChanged.emit())
@@ -95,6 +110,11 @@ class LibraryPlayer(QObject):
 
     def start(self):
         self._player.play()
+
+    def _pick_output(self):
+        device = preferred_output()
+        if device != self._output.device():
+            self._output.setDevice(device)
 
     def _load(self, index):
         self._index = index % len(self._queue)

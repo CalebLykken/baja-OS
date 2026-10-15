@@ -64,6 +64,7 @@ systemctl enable --now baja-bt-agent.service
 WP="/home/$USER_NAME/.config/wireplumber/wireplumber.conf.d"
 install -d -o "$USER_NAME" -g "$USER_NAME" "/home/$USER_NAME/.config/wireplumber" "$WP"
 install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$HERE/bluetooth/80-baja-bluetooth.conf" "$WP/"
+install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$HERE/audio/81-baja-sound-board.conf" "$WP/"
 sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" \
     systemctl --user restart wireplumber 2>/dev/null || true
 
@@ -92,6 +93,12 @@ GPSD_OPTIONS="-n"
 GPSD
 systemctl enable --now gpsd.socket >/dev/null 2>&1 || true
 systemctl restart gpsd >/dev/null 2>&1 || true
+
+echo "== Sound board"
+# The InnoMaker HiFi DAC HAT has no ID chip, so the Pi has to be told it's
+# there (its manual's overlay; it shows up as "BossDAC"). Takes a reboot.
+grep -q '^dtoverlay=allo-boss-dac-pcm512x-audio' "$FW/config.txt" ||
+    printf '\n[all]\ndtoverlay=allo-boss-dac-pcm512x-audio\n' >> "$FW/config.txt"
 
 echo "== Equalizer"
 sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" sh "$HERE/audio/install-eq.sh"

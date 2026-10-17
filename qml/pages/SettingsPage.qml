@@ -613,6 +613,34 @@ Item {
             }
             Section {
                 Layout.fillWidth: true
+                heading: "GPS"
+                readonly property bool has: typeof gps !== "undefined"
+                Row {
+                    spacing: 12
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 14; height: 14; radius: 7
+                        color: !parent.parent.has ? Theme.textDim
+                               : gps.realFix ? Theme.ok
+                               : gps.receiverConnected ? Theme.accent : Theme.textDim
+                    }
+                    Label {
+                        font.pixelSize: Theme.fontBody
+                        text: !parent.parent.has ? "Not available"
+                              : gps.realFix ? "Position found" + (gps.satellites > 0 ? ", " + gps.satellites + " satellites" : "")
+                              : gps.receiverConnected ? "Looking for satellites" + (gps.satellitesInView > 0 ? ": " + gps.satellitesInView + " in view" : "")
+                              : "No receiver"
+                    }
+                }
+                Note {
+                    text: !parent.has ? ""
+                          : gps.realFix ? "The map and directions follow the truck's real position."
+                          : gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two; until then the map follows a practice drive around Seattle."
+                          : "Plug the GPS receiver into a USB port. Until then the map follows a practice drive around Seattle."
+                }
+            }
+            Section {
+                Layout.fillWidth: true
                 heading: "Directions"
                 Row {
                     spacing: 12

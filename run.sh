@@ -20,19 +20,37 @@ export QT_QPA_EGLFS_ALWAYS_SET_MODE=1
 export QT_QPA_EGLFS_PHYSICAL_WIDTH=172
 export QT_QPA_EGLFS_PHYSICAL_HEIGHT=108
 
+# The DRM card driving a connected screen (card1 on the Pi 5), if any.
+connected_card() {
+    local s c
+    for s in /sys/class/drm/card*-*/status; do
+        [ "$(cat "$s" 2>/dev/null)" = connected ] || continue
+        c=$(basename "$(dirname "$s")")
+        echo "${c%%-*}"
+        return 0
+    done
+    return 1
+}
+
 # Point eglfs at the DRM card that actually drives the screen. On the Pi 5,
 # card0 is the 3D-only GPU and the HDMI outputs live on card1; Qt would pick
-# card0 and fail with "no screens available".
+# card0 and fail with "no screens available". Wait up to 30 s for the screen
+# first: on car power the panel can wake a moment after the Pi, and starting
+# without it means the slow fallback below, with no map.
+card=""
 if [ -z "$QT_QPA_EGLFS_KMS_CONFIG" ]; then
-    for status in /sys/class/drm/card*-*/status; do
-        [ "$(cat "$status" 2>/dev/null)" = connected ] || continue
-        card=$(basename "$(dirname "$status")")
-        card=${card%%-*}
+    waited=0
+    until card=$(connected_card) || [ $waited -ge 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -n "$card" ]; then
         cfg="${XDG_RUNTIME_DIR:-/tmp}/baja-kms.json"
         printf '{ "device": "/dev/dri/%s", "hwcursor": false }\n' "$card" > "$cfg"
         export QT_QPA_EGLFS_KMS_CONFIG="$cfg"
-        break
-    done
+    else
+        echo "no screen connected after 30 s" >&2
+    fi
 fi
 
 if [ -n "$QT_QPA_PLATFORM" ]; then
@@ -51,4 +69,20 @@ if [ $status -ne 134 ] || [ $(( $(date +%s) - started )) -gt 10 ]; then
     exit $status
 fi
 echo "eglfs failed (exit $status); falling back to linuxfb" >&2
-QT_QPA_PLATFORM=linuxfb exec python3 main.py $FULLSCREEN "$@"
+if connected_card >/dev/null; then
+    QT_QPA_PLATFORM=linuxfb exec python3 main.py $FULLSCREEN "$@"
+fi
+# No screen is connected: run the fallback, and once a screen is plugged
+# in, quit so systemd restarts the dashboard on the GPU.
+QT_QPA_PLATFORM=linuxfb python3 main.py $FULLSCREEN "$@" &
+app=$!
+while kill -0 $app 2>/dev/null; do
+    if connected_card >/dev/null; then
+        echo "a screen was connected; restarting on the GPU" >&2
+        kill $app
+        wait $app
+        exit 1
+    fi
+    sleep 3
+done
+wait $app

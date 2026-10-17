@@ -1,15 +1,21 @@
-"""Where the truck is: position, speed and heading from the GPS receiver
-(through gpsd), or a simulated drive around Seattle in demo mode.
+"""Where the truck is: position, speed and heading from the GPS receiver,
+or a simulated drive around Seattle in demo mode.
 
-gpsd serves the GT-U7 on 127.0.0.1:2947. This connects, asks for JSON
-reports, keeps the latest fix and reconnects if gpsd restarts. With no real
+The receiver (a u-blox on USB) is read through gpsd when gpsd is running
+(127.0.0.1:2947), else straight from its serial port: it reports in NMEA,
+the standard text sentences (RMC for position, speed and course; GGA and
+GSV for satellites). It switches to gpsd if that starts later. With no real
 fix and simulated vehicle data, the truck drives the loop in
 demo_route.json at the simulated speed, so the map has something to follow.
 """
 
+import glob
 import json
 import math
+import os
+import select
 import socket
+import termios
 import threading
 import time
 from pathlib import Path
@@ -19,6 +25,13 @@ from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 from backend import safe_emit
 
 GPSD = ("127.0.0.1", 2947)
+# Only devices that say they're GPS receivers: other USB serial devices
+# (the OBD adapter, a Pico) must be left alone.
+RECEIVERS = ("/dev/serial/by-id/*u-blox*", "/dev/serial/by-id/*[Gg][Nn][Ss][Ss]*",
+             "/dev/serial/by-id/*[Gg][Pp][Ss]*")
+KNOTS_TO_MS = 0.514444
+CHECK_GPSD_S = 60       # reading the receiver directly: look for gpsd this often
+LOG_EVERY_S = 60        # while looking for satellites: a line in the journal this often
 ROUTE = Path(__file__).with_name("demo_route.json")
 EARTH_M = 6371000.0
 MPH_TO_MS = 0.44704
@@ -38,6 +51,42 @@ def _bearing(a, b):
     dx = math.radians(b[0] - a[0]) * math.cos(lat)
     dy = math.radians(b[1] - a[1])
     return math.degrees(math.atan2(dx, dy)) % 360
+
+
+def find_receiver():
+    for pattern in RECEIVERS:
+        found = sorted(glob.glob(pattern))
+        if found:
+            return found[0]
+    return None
+
+
+def nmea_fields(line):
+    """A checked NMEA sentence's fields ('$GNRMC,...*hh' -> ['GNRMC', ...]), or None."""
+    line = line.strip()
+    if not line.startswith("$") or "*" not in line:
+        return None
+    body, _, check = line[1:].partition("*")
+    total = 0
+    for ch in body:
+        total ^= ord(ch)
+    try:
+        if int(check[:2], 16) != total:
+            return None
+    except ValueError:
+        return None
+    return body.split(",")
+
+
+def nmea_coord(value, hemisphere):
+    """'4736.37200', 'N' -> 47.6062 (degrees and minutes to degrees)."""
+    if not value or "." not in value:
+        return None
+    dot = value.index(".")
+    degrees = float(value[:dot - 2] or 0)
+    minutes = float(value[dot - 2:])
+    d = degrees + minutes / 60
+    return -d if hemisphere in ("S", "W") else d
 
 
 class DemoRoute:
@@ -93,7 +142,9 @@ class Gps(QObject):
         self._demo = demo
         self._fix = None                 # dict: lat, lon, speed (m/s), heading, source
         self._real_at = None             # when the last real fix arrived (monotonic)
-        self._gpsd = False               # connected to gpsd
+        self._gpsd = False               # a receiver is connected (through gpsd or directly)
+        self._sats = 0                   # satellites used for the fix
+        self._in_view = 0                # satellites the receiver can see
         self._report.connect(self._apply)
         self._route = None
         self._travelled = 0.0
@@ -102,7 +153,7 @@ class Gps(QObject):
         self._demo_timer = QTimer(self, interval=1000, timeout=self._demo_tick)
 
     def start(self):
-        threading.Thread(target=self._gpsd_loop, name="gpsd", daemon=True).start()
+        threading.Thread(target=self._receiver_loop, name="gps", daemon=True).start()
         if self._demo:
             try:
                 self._route = DemoRoute()
@@ -111,32 +162,107 @@ class Gps(QObject):
             if self._route:
                 self._demo_timer.start()
 
-    # ---- gpsd ---------------------------------------------------------------
-    def _gpsd_loop(self):
+    # ---- the receiver -----------------------------------------------------
+    def _receiver_loop(self):
         while True:
+            used = False
             try:
-                with socket.create_connection(GPSD, timeout=5) as s:
-                    s.sendall(b'?WATCH={"enable":true,"json":true}\n')
-                    s.settimeout(30)
-                    safe_emit(self, "_report", {"gpsd": True})
-                    for line in s.makefile("r", encoding="utf-8", errors="replace"):
-                        try:
-                            msg = json.loads(line)
-                        except ValueError:
-                            continue
-                        if msg.get("class") != "TPV":
-                            continue
-                        if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:
-                            safe_emit(self, "_report", {
-                                "lat": msg["lat"], "lon": msg["lon"],
-                                "speed": msg.get("speed", 0.0),
-                                "heading": msg.get("track"),
-                                "source": "gps",
-                            })
+                used = self._read_gpsd()
             except OSError:
                 pass
+            if not used:
+                path = find_receiver()
+                if path:
+                    try:
+                        self._read_receiver(path)
+                    except OSError:
+                        pass                      # unplugged: look again
             safe_emit(self, "_report", {"gpsd": False})
             time.sleep(5)
+
+    def _read_gpsd(self):
+        """Read gpsd's reports until it goes away. False if it isn't running."""
+        try:
+            s = socket.create_connection(GPSD, timeout=2)
+        except OSError:
+            return False
+        with s:
+            s.sendall(b'?WATCH={"enable":true,"json":true}\n')
+            s.settimeout(30)
+            safe_emit(self, "_report", {"gpsd": True})
+            for line in s.makefile("r", encoding="utf-8", errors="replace"):
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("class") != "TPV":
+                    continue
+                if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:
+                    safe_emit(self, "_report", {
+                        "lat": msg["lat"], "lon": msg["lon"],
+                        "speed": msg.get("speed", 0.0),
+                        "heading": msg.get("track"),
+                        "source": "gps",
+                    })
+        return True
+
+    def _read_receiver(self, path):
+        """Read the receiver's NMEA sentences straight from its serial port
+        until it's unplugged or gpsd starts."""
+        fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            a = termios.tcgetattr(fd)
+            a[0] = a[1] = a[3] = 0
+            a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+            a[4] = a[5] = termios.B9600
+            termios.tcsetattr(fd, termios.TCSANOW, a)
+            safe_emit(self, "_report", {"gpsd": True})
+            print(f"GPS: reading {os.path.basename(path)}", flush=True)
+            buf, in_view, checked = b"", {}, time.monotonic()
+            found, used, logged = False, 0, time.monotonic()
+            while True:
+                if not found and time.monotonic() - logged > LOG_EVERY_S:
+                    logged = time.monotonic()
+                    print(f"GPS: looking for satellites, {sum(in_view.values())} in view", flush=True)
+                if time.monotonic() - checked > CHECK_GPSD_S:
+                    checked = time.monotonic()
+                    try:
+                        socket.create_connection(GPSD, timeout=1).close()
+                        return                    # gpsd's running now: use it
+                    except OSError:
+                        pass
+                if not select.select([fd], [], [], 2)[0]:
+                    continue
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    return                        # unplugged
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for raw in lines:
+                    f = nmea_fields(raw.decode("ascii", "replace"))
+                    if not f or len(f[0]) < 5:
+                        continue
+                    kind = f[0][2:]
+                    if kind == "RMC" and len(f) > 2 and (f[2] == "A") != found:
+                        found = f[2] == "A"
+                        print("GPS: " + (f"position found, {used} satellites" if found
+                                         else "lost the position"), flush=True)
+                    if kind == "RMC" and len(f) > 8 and f[2] == "A":
+                        lat, lon = nmea_coord(f[3], f[4]), nmea_coord(f[5], f[6])
+                        if lat is not None and lon is not None:
+                            safe_emit(self, "_report", {
+                                "lat": lat, "lon": lon,
+                                "speed": float(f[7] or 0) * KNOTS_TO_MS,
+                                "heading": float(f[8]) if f[8] else None,
+                                "source": "gps",
+                            })
+                    elif kind == "GSV" and len(f) > 3 and f[3].isdigit():
+                        in_view[f[0][:2]] = int(f[3])     # per system: GPS, GLONASS, BeiDou...
+                    elif kind == "GGA" and len(f) > 7:
+                        used = int(f[7]) if f[7].isdigit() else 0
+                        safe_emit(self, "_report", {"sats": used, "view": sum(in_view.values())})
+        finally:
+            os.close(fd)
 
     # ---- the simulated drive ----------------------------------------------------
     def _real_fresh(self):
@@ -163,6 +289,13 @@ class Gps(QObject):
         if "gpsd" in report:
             if report["gpsd"] != self._gpsd:
                 self._gpsd = report["gpsd"]
+                if not self._gpsd:
+                    self._sats = self._in_view = 0
+                self.changed.emit()
+            return
+        if "sats" in report:
+            if (report["sats"], report["view"]) != (self._sats, self._in_view):
+                self._sats, self._in_view = report["sats"], report["view"]
                 self.changed.emit()
             return
         if report["source"] == "gps":
@@ -214,5 +347,19 @@ class Gps(QObject):
 
     @pyqtProperty(bool, notify=changed)
     def receiverConnected(self):
-        """True while gpsd is running (the receiver may still be finding satellites)."""
+        """True while a receiver is connected (it may still be finding satellites)."""
         return self._gpsd
+
+    @pyqtProperty(bool, notify=changed)
+    def realFix(self):
+        """True while the position comes from the receiver, not the demo drive."""
+        return self._real_fresh()
+
+    @pyqtProperty(int, notify=changed)
+    def satellites(self):
+        """Satellites used for the fix (when read directly from the receiver)."""
+        return self._sats
+
+    @pyqtProperty(int, notify=changed)
+    def satellitesInView(self):
+        return self._in_view

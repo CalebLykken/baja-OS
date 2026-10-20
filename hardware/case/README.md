@@ -26,7 +26,7 @@ Each one is already laid on its best side, and none needs supports.
 
 | File | Copies | Sits on the bed | Size (mm) |
 |---|---|---|---|
-| `print/dash-panel.stl` | 1 | back face down, screen posts up | 171 × 140 × 19 |
+| `print/dash-panel.stl` | 1 | back face down, screen posts up | 177 × 143 × 19 |
 | `print/pi-case.stl` | 1 | floor down, open side up | 117 × 66 × 28 |
 | `print/volume-knob.stl` | 1 | top down, shaft hole up | 19 × 19 × 18 |
 | `print/adapter-plate.stl` | **4** | standing on its Z-shaped end | 20 × 60 × 50 |
@@ -46,13 +46,14 @@ handles.
 ## Drawings
 
 Dimensioned drawings of each printed part, to check a test print with a ruler
-and calipers: [all six in one PDF](drawings/baja-dash-case-drawings.pdf), or
+and calipers: [all seven in one PDF](drawings/baja-dash-case-drawings.pdf), or
 [panel front](drawings/1-dash-panel-front.png),
-[panel back](drawings/2-dash-panel-back.png),
-[adapter plate](drawings/3-adapter-plate.png),
-[Pi case](drawings/4-pi-case.png),
-[volume knob](drawings/5-volume-knob.png) and
-[assembly side view](drawings/6-assembly-side.png).
+[panel top and the lip](drawings/2-dash-panel-top-and-lip.png),
+[panel back](drawings/3-dash-panel-back.png),
+[adapter plate](drawings/4-adapter-plate.png),
+[Pi case](drawings/5-pi-case.png),
+[volume knob](drawings/6-volume-knob.png) and
+[assembly side view](drawings/7-assembly-side.png).
 
 The letter after each size says how sure it is: **M** measured (or from a
 datasheet), **D** a design choice, **E** estimated, **U** unknown. The print
@@ -102,6 +103,11 @@ active cooler, the InnoMaker DAC HAT, the screen.
    standoffs, the DAC HAT on top, and plug in the screen's cables.
 5. **Adapter plates.** Screw two to each side of the panel's back (M3 × 8),
    slotted walls facing out.
+   The panel has a 3 mm lip on its left, right and top edges at the back, like
+   the factory radio, so the silver frame's edge holds it in. The lip follows
+   the rounded top-left corner and is square at the top right. The frame goes on
+   after the panel. Because the screen is wider than the frame's opening, the
+   screen's mounting still needs a change for that order (open question).
 6. **In the truck.** Slide the panel into the radio opening. The adapters'
    slots should land on the Subaru brackets' screw holes; the slots allow
    front-to-back adjustment. Bolt them with M5 screws.
@@ -133,11 +139,13 @@ Each line names the Fusion parameter to change if it's off.
 | Size | Value | How sure |
 |---|---|---|
 | Bezel opening | 171.45 × 222.25 mm (6 3/4 × 8 3/4 in) | measured by Caleb |
-| Opening corners | top-left 15/16 in across, top-right 3/16 in, bottom square | measured by Caleb |
+| Opening corners | top-left R 15 mm, top-right R 3 mm (re-measured after the first test print), bottom square; the panel's corners are 0.5 mm rounder so they don't bind | measured by Caleb |
 | Climate controls | bottom 82.55 mm (3 1/4 in) of the opening, full width | measured by Caleb |
-| Screen | 201.6 × 120.65 × 4.76 mm (7 15/16 × 4 3/4 × 3/16 in) | measured by Caleb |
-| Screen mounting holes | Raspberry Pi pattern, 58 × 49 mm, centered | Caleb; Waveshare's 8DP-CAPLCD drawing shows them off-center, so check |
-| Screen depth to its mounting nuts | 11.4 mm | estimated from Waveshare's 8DP-CAPLCD drawing |
+| Screen | Waveshare 8DP-CAPLCD: glass 194 × 119 mm, 4.8 mm glass + LCD | Waveshare's drawing; Caleb's caliper check of the holes matches it |
+| Screen mounting holes | Raspberry Pi pattern, 58 × 49 mm, centre 12.2 mm left of and 3.2 mm below the glass centre (from the front) | Waveshare's drawing (Caleb measured 12.8 and 3.9) |
+| Screen depth to its mounting nuts | 11.4 mm | Waveshare's drawing |
+| Screen plugs | HDMI, USB and USB-C on the board's top edge, facing up | Waveshare's drawing; Caleb confirmed the HDMI |
+| Silver frame | 10 mm thick at the opening's edge; the panel's lip reaches 3 mm past it on the left, right and top | measured by Caleb |
 | Pi 5 holes and ports | 58 × 49 mm holes; port positions | [Raspberry Pi 5 mechanical drawing](https://datasheets.raspberrypi.com/rpi5/raspberry-pi-5-mechanical-drawing.pdf) |
 | Encoder | EC11, M7 collar, 6 mm D shaft | collar and flat estimated from the EC11 standard |
 | Factory brackets | 66201AE17A (left), 66201AE18A (right) | Subaru part listings ([left](https://www.subarupartsdeal.com/parts/subaru-bracket-radio~66201ae17a.html), [right](https://www.subarupartsdeal.com/parts/subaru-bracket-radio~66201ae18a.html)); pictures only, no dimensions |

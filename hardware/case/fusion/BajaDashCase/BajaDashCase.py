@@ -26,15 +26,16 @@ import traceback
 import adsk.core
 import adsk.fusion
 
-VERSION = 3
+VERSION = 5
 
 # (name, default, unit, comment). Units: 'mm', 'deg', or '' (a plain number).
 PARAMETERS = [
     # Factory bezel opening: the radio slot on top, the climate controls below
     ('OpeningWidth', 171.45, 'mm', 'MEASURED (Caleb): bezel opening width, 6 3/4 in'),
     ('OpeningHeight', 222.25, 'mm', 'MEASURED (Caleb): bezel opening height, 8 3/4 in'),
-    ('CornerRadiusTopLeft', 11.906, 'mm', 'MEASURED (Caleb): corner is 15/16 in across'),
-    ('CornerRadiusTopRight', 2.381, 'mm', 'MEASURED (Caleb): corner is 3/16 in across'),
+    ('CornerRadiusTopLeft', 15.0, 'mm', 'MEASURED (Caleb, re-measured after the first test print)'),
+    ('CornerRadiusTopRight', 3.0, 'mm', 'MEASURED (Caleb, re-measured after the first test print)'),
+    ('CornerClearance', 0.5, 'mm', "DESIGN: the panel's top corners are this much rounder than the opening's, so they never bind"),
     ('ClimateGap', 82.55, 'mm', 'MEASURED (Caleb): the climate controls fill the bottom 3 1/4 in of the opening (6 3/4 in wide)'),
     ('BezelReturnDepth', 20.0, 'mm', 'UNKNOWN: how far the bezel walls reach behind the panel; the adapters step out behind them'),
     # Factory radio brackets 66201AE17A (left) and 66201AE18A (right)
@@ -48,26 +49,32 @@ PARAMETERS = [
     ('PanelThickness', 12.7, 'mm', 'DESIGN (Caleb): 1/2 in'),
     ('FitGap', 0.0, 'mm', 'DESIGN: 0 = exactly the measured opening; add 0.2-0.4 per side if the test print is tight'),
     ('PanelBottomRadius', 0.0, 'mm', "MEASURED (Caleb): the opening's bottom corners are square"),
+    ('FrameEdgeDepth', 10.0, 'mm', "MEASURED (Caleb): the silver frame is 10 mm thick at the opening's edge; the panel's front part is this deep"),
+    ('LipSide', 3.0, 'mm', 'MEASURED (Caleb): behind the frame the panel is this much wider on the left and right, so the frame holds it'),
+    ('LipTop', 3.0, 'mm', 'MEASURED (Caleb): the same 3 mm lip along the top edge'),
+    ('LipRadiusTopRight', 0.0, 'mm', "DESIGN (Caleb): the lip's top-right corner is square; the top-left follows the rounded corner"),
     ('AdapterPlateThickness', 4.0, 'mm', 'DESIGN: adapter plate wall (ASA, carries the M5 screws)'),
     ('AdapterHeight', 50.0, 'mm', 'DESIGN: height of each of the four adapter plates'),
     ('AdapterSideLength', 40.0, 'mm', 'DESIGN: front-to-back length of the slotted side wall'),
     ('AdapterSlotLength', 24.0, 'mm', 'DESIGN: front-to-back adjustment in the side slots'),
     # Screen, fixed on four posts
-    ('ScreenWidth', 201.6, 'mm', 'MEASURED (Caleb): 7 15/16 in'),
-    ('ScreenHeight', 120.65, 'mm', 'MEASURED (Caleb): 4 3/4 in'),
-    ('ScreenDepth', 4.76, 'mm', 'MEASURED (Caleb): glass + LCD, 3/16 in'),
-    ('ScreenBackDepth', 11.39, 'mm', 'ESTIMATED: glass front to the back of the mounting nuts (Waveshare 8DP-CAPLCD drawing); measure'),
-    ('ScreenMountHoleSpacing', 58.0, 'mm', 'VERIFIED: Raspberry Pi hole pattern, side to side (Caleb confirmed it matches)'),
+    ('ScreenWidth', 194.0, 'mm', 'VERIFIED: Waveshare 8DP-CAPLCD drawing; Caleb\'s caliper check of the holes matches it'),
+    ('ScreenHeight', 119.0, 'mm', 'VERIFIED: Waveshare 8DP-CAPLCD drawing'),
+    ('ScreenDepth', 4.8, 'mm', 'VERIFIED: glass + LCD, Waveshare drawing'),
+    ('ScreenBackDepth', 11.39, 'mm', 'VERIFIED: glass front to the back of the mounting nuts, Waveshare drawing'),
+    ('ScreenMountHoleSpacing', 58.0, 'mm', 'VERIFIED: Raspberry Pi hole pattern, side to side (Waveshare drawing)'),
     ('ScreenMountHoleSpacingV', 49.0, 'mm', 'VERIFIED: Raspberry Pi hole pattern, up and down'),
-    ('ScreenMountOffsetX', 0.0, 'mm', 'MEASURED (Caleb): holes centred on the screen (the Waveshare 8DP drawing has them 12.2 mm left; check)'),
-    ('ScreenMountOffsetY', 0.0, 'mm', 'MEASURED (Caleb): centred (the Waveshare 8DP drawing has them 3.2 mm low; check)'),
+    ('ScreenMountOffsetX', -12.21, 'mm', 'VERIFIED: hole pattern centre is 12.2 mm left of the glass centre, seen from the front (Waveshare drawing; Caleb measured 12.8)'),
+    ('ScreenMountOffsetY', -3.21, 'mm', 'VERIFIED: 3.2 mm below the glass centre (Waveshare drawing; Caleb measured 3.9)'),
     ('ScreenOverhangTop', 5.5, 'mm', 'DESIGN (Caleb): top of the screen stands this far above the opening'),
     ('ScreenStandoffHeight', 6.0, 'mm', 'DESIGN (Caleb): posts from the panel face to the back of the screen, 6 at most'),
     ('ScreenPostDiameter', 6.5, 'mm', 'DESIGN'),
     ('ScreenScrewLength', 16.0, 'mm', 'DESIGN: M2.5 screws from the back of the panel into the screen; the counterbore depth follows'),
     ('DisplayTiltAngle', 0.0, 'deg', 'DESIGN: + leans the screen back by shortening the top posts; keep it small (0 to 4)'),
-    ('CableClearance', 6.0, 'mm', 'DESIGN: room below the plug area in the panel notch'),
-    ('PlugAreaBottom', 18.0, 'mm', "ESTIMATED: bottom of the HDMI/USB plugs above the centre of the screen's hole pattern; check"),
+    ('CableClearance', 6.0, 'mm', 'DESIGN: room around the plugs in the panel notch'),
+    ('PlugAreaLeft', -40.0, 'mm', 'VERIFIED: left end of the USB-C/HDMI/USB sockets from the glass centre, seen from the front (Waveshare drawing)'),
+    ('PlugAreaRight', 14.0, 'mm', 'VERIFIED: right end of the sockets from the glass centre (Waveshare drawing)'),
+    ('PlugAreaBottom', 33.0, 'mm', "VERIFIED: the board's top edge, where the plugs go in, above the glass centre (Waveshare drawing; HDMI faces up, Caleb)"),
     # Volume knob (EC11 encoder)
     ('KnobX', 25.0, 'mm', 'DESIGN (Caleb): driver side'),
     ('KnobY', 93.3, 'mm', 'DESIGN: centred between the climate controls and the bottom of the screen'),
@@ -90,12 +97,12 @@ PARAMETERS = [
 # Parameters earlier versions made that are no longer used; a rebuild removes them.
 OBSOLETE = ['HingeAxisBelowScreenTop', 'HingeKnuckleRadius', 'HingeKnuckleWidth', 'HingeKnuckleGap',
             'HingeLeftX', 'HingeRightX', 'HingePinHole', 'ScreenPlateThickness', 'RearClearance',
-            'PlugAreaLeft', 'PlugAreaRight', 'FactoryBracketCenterY']
+            'FactoryBracketCenterY']
 
 M3_INSERT = 4.0          # hole for an M3 heat-set insert
 M3_INSERT_DEPTH = 6.5
 M25_INSERT = 3.6         # hole for an M2.5 heat-set insert
-M25_HOLE, M25_HEAD = 2.9, 5.5
+M25_HOLE, M25_HEAD = 3.2, 5.5    # a little loose, to forgive small errors
 PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
 PI_W, PI_H = 85.0, 56.0
 # Raspberry Pi 5 ports, from Raspberry Pi's mechanical drawing (approximate).
@@ -106,6 +113,9 @@ PI_PORTS_TOP = (4.2, 46.2)                                     # USB-C power and
 PI_PORTS_LEFT = (19.0, 46.0)                                   # PCIe ribbon and power button: y range
 PI_CASE_GAP = (3.0, 4.0, 3.0, 4.0)                              # board to wall: bottom, right, top, left
 ADAPTER_BASE = 16.0
+# The screen's driver board, from Waveshare's drawing (reference model only):
+# x0, x1, y0, y1 from the glass centre, seen from the front.
+SCREEN_BOARD = (-53.96, 54.04, -39.21, 32.79)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CASE_DIR = os.path.normpath(os.path.join(HERE, '..', '..'))
@@ -302,9 +312,11 @@ def derive(p):
     d.posts = [(d.mx - sx, d.my - sy, h), (d.mx + sx, d.my - sy, h),
                (d.mx - sx, d.my + sy, h_top), (d.mx + sx, d.my + sy, h_top)]
     d.z_glass = d.face + h + p.ScreenBackDepth         # front of the glass (bottom posts)
-    # Notch for the plugs: between the top posts, from below the plugs to the top.
-    half = sx - p.ScreenPostDiameter / 2 - 3.0
-    d.notch = (d.mx - half, d.mx + half, d.my + p.PlugAreaBottom - p.CableClearance)
+    # Notch for the plugs (90-degree plugs turn back into it), from just below
+    # where they go in up to the top; it starts above the top posts.
+    post_top = d.my + sy + p.ScreenPostDiameter / 2
+    d.notch = (d.cx + p.PlugAreaLeft - p.CableClearance, d.cx + p.PlugAreaRight + p.CableClearance,
+               max(d.scy + p.PlugAreaBottom - p.CableClearance, post_top + 2.0))
     d.adapter_ys = [p.FactoryBracketLowerY, p.FactoryBracketUpperY]
     return d
 
@@ -343,8 +355,8 @@ def pi_plate_holes(p):
 
 
 def tie_slots(p, d):
-    x_off = p.ScreenMountHoleSpacing / 2 + 10
-    return [(d.mx + s * x_off, d.notch[2] + dy) for s in (-1, 1) for dy in (6.0, 18.0)]
+    x0, x1, y0 = d.notch
+    return [(x, y0 + dy) for x in (x0 - 6, x1 + 6) for dy in (6.0, 18.0)]
 
 
 # ------------------------------------------------------------ the parts
@@ -354,9 +366,20 @@ def build_panel(design, p, d):
     x0, x1 = p.FitGap, p.OpeningWidth - p.FitGap
     y0, y1 = p.ClimateGap, p.OpeningHeight - p.FitGap
     radii = (p.PanelBottomRadius, p.PanelBottomRadius,
-             max(p.CornerRadiusTopRight - p.FitGap, 0.0), max(p.CornerRadiusTopLeft - p.FitGap, 0.0))
+             max(p.CornerRadiusTopRight + p.CornerClearance - p.FitGap, 0.0),
+             max(p.CornerRadiusTopLeft + p.CornerClearance - p.FitGap, 0.0))
     part.prism('z', 0, d.face, lambda s: s.draw(rrect(x0, y0, x1, y1, radii)), 'new', 'Panel')
     part.name_body('Dash panel')
+
+    # Lip: behind the silver frame's edge the panel is wider, like the factory
+    # radio and climate control, so the frame holds it in.
+    # At the top left the lip follows the rounded corner, the same distance out
+    # all the way round; at the top right it is square (LipRadiusTopRight).
+    lip_t = d.face - p.FrameEdgeDepth
+    if lip_t > 0.5 and (p.LipSide > 0 or p.LipTop > 0):
+        lip_radii = (radii[0], radii[1], p.LipRadiusTopRight, radii[3] + min(p.LipSide, p.LipTop))
+        part.prism('z', 0, lip_t, lambda s: s.draw(
+            rrect(x0 - p.LipSide, y0, x1 + p.LipSide, y1 + p.LipTop, lip_radii)), 'join', 'Lip')
 
     # Screen posts on the front, screwed from the back into the screen's nuts.
     for x, y, h in d.posts:
@@ -372,7 +395,7 @@ def build_panel(design, p, d):
     # Notch in the top edge where the screen's plugs and cables go back into the dash.
     nx0, nx1, ny0 = d.notch
     part.prism('z', -1, d.face + 1, lambda s: s.draw(
-        rrect(nx0, ny0, nx1, p.OpeningHeight + 5, (4, 4, 0, 0))), 'cut', 'Cable notch')
+        rrect(nx0, ny0, nx1, p.OpeningHeight + p.LipTop + 5, (4, 4, 0, 0))), 'cut', 'Cable notch')
 
     # Encoder: pocket from behind, hole for its threaded collar.
     part.prism('z', -1, d.face - p.EncoderWall, lambda s: s.draw(
@@ -489,8 +512,9 @@ def build_references(design, p, d):
     s.prism('z', d.z_glass - p.ScreenDepth, d.z_glass, lambda k: k.draw(
         centred_rect(d.cx, d.scy, p.ScreenWidth, p.ScreenHeight, 2.0)), 'new')
     h = p.ScreenStandoffHeight
+    bx0, bx1, by0, by1 = SCREEN_BOARD
     s.prism('z', d.face + h, d.z_glass - p.ScreenDepth, lambda k: k.draw(
-        centred_rect(d.mx, d.my, 108.0, 72.0)), 'new')
+        rrect(d.cx + bx0, d.scy + by0, d.cx + bx1, d.scy + by1)), 'new')
 
     pi = Part(design, 'Raspberry Pi 5 + DAC (reference)')
     z = -3 - p.PiStandoffHeight

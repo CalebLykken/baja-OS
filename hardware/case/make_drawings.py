@@ -684,6 +684,18 @@ class View:
 
 # ------------------------------------------------------------- the sheets
 
+FRONT_SHEET, LIP_SHEET, BACK_SHEET = 1, 2, 3
+
+
+def lip_box(m):
+    """The lip at the back of the panel, behind the silver frame: (Box, prism), or (None, None)."""
+    try:
+        pr = m.parts['panel'].one('Lip')
+    except KeyError:
+        return None, None
+    return Box(pr.paths()[0]), pr
+
+
 def panel_parts(m):
     pan = m.parts['panel']
     outline = pan.one('Panel').paths()[0]
@@ -697,6 +709,9 @@ def sheet_panel_front(m, number, total):
               'Print 1, back face down. This is the face toward you;\nthe screen bolts onto the four posts.', '1:1')
     v = View(s, at=(36, 54), ref=(box.u0, box.v0))
     v.shape(outline, fill=PART)
+    lip, lip_pr = lip_box(m)
+    if lip:                                   # the wider back part shows past the sides
+        v.shape(notched_top(lip_pr.paths()[0], pan.one('Cable notch').paths()[0]), fill=BLIND, lw=MID, z=2)
     posts = [c for pr in pan.get('Screen post') for c in pr.circles()]
     holes = pan.one('Screen screw holes').circles()
     collar = pan.one('Encoder collar hole').circles()[0]
@@ -744,12 +759,22 @@ def sheet_panel_front(m, number, total):
     for key, at, ha in (('tl', (box.u0 + 16, box.v1 - 16), 'left'), ('tr', (box.u1 - 14, box.v1 - 12), 'right')):
         r, mid = box.r[key]
         v.note(mid, v.P(*at), 'R{}', r, ha=ha)
+    if lip:
+        v.note((lip.u0 + (box.u0 - lip.u0) / 2, box.cv - 20), v.P(box.u0 + 10, box.cv - 32),
+               ('lip at the back, {} out on the sides%s\n(grey; see sheet %d)'
+                % (' and top' if float(lip.v1) > float(box.v1) + 1e-6 else '', LIP_SHEET)), box.u0 - lip.u0)
     s.view_title((36, 205.5), 'FRONT', '(from the driver\'s seat)')
 
     # side view from the passenger side: Z to the left
     face = pan.one('Panel').hi
     sv = View(s, at=(240, 54), ref=(0, box.v0), flip_u=True)
-    sv.shape([(0, box.v0), (face, box.v0), (face, box.v1), (0, box.v1)], fill=PART)
+    if lip and float(lip.v1) > float(box.v1) + 1e-6:      # the top lip steps up at the back
+        lip_t = lip_pr.hi
+        sv.shape([(0, box.v0), (face, box.v0), (face, box.v1), (lip_t, box.v1), (lip_t, lip.v1), (0, lip.v1)],
+                 fill=PART)
+        sv.note((lip_t / 2, lip.v1), (246, sv.Y(lip.v1) + 8), 'top lip, {} up', lip.v1 - box.v1)
+    else:
+        sv.shape([(0, box.v0), (face, box.v0), (face, box.v1), (0, box.v1)], fill=PART)
     tops = {}
     for pr in pan.get('Screen post'):
         x, y, dia = pr.circles()[0]
@@ -769,10 +794,101 @@ def sheet_panel_front(m, number, total):
     sv.hdim((0, box.v0), (face, box.v0), 46.0)
     sv.hdim((face, top_post[0] - top_post[1] / 2), (top_post[2], top_post[0] - top_post[1] / 2), 46.0, out=-1)
     sv.hdim((0, box.v0), (top_post[2], top_post[0] - top_post[1] / 2), 39.0)
-    sv.note((face / 2, notch.v0), (246, sv.Y(notch.v0) + 9), 'bottom of\nthe notch')
-    sv.note((cb.hi / 2, top_post[0] + cb_d / 2), (246, sv.Y(top_post[0]) + 14),
-            'counterbores\n(see sheet %d)' % (number + 1))
+    # The two labels share one column: keep them in the order of what they
+    # point at, and push the upper one clear of the lower.
+    label_y = {'notch': sv.Y(notch.v0) + 9, 'cb': sv.Y(top_post[0]) + 14}
+    lower, upper = sorted(label_y, key=lambda k: float(notch.v0) if k == 'notch' else float(top_post[0]))
+    label_y[upper] = max(label_y[upper], label_y[lower] + 14.0)
+    sv.note((face / 2, notch.v0), (246, label_y['notch']), 'bottom of\nthe notch')
+    sv.note((cb.hi / 2, top_post[0] + cb_d / 2), (246, label_y['cb']),
+            'counterbores\n(see sheet %d)' % BACK_SHEET)
     s.view_title((sv.X(face / 2), 205.5), 'SIDE', '(from the\npassenger side)', ha='center')
+    return s
+
+
+def sheet_panel_lip(m, number, total):
+    """Looking down on the panel's top edge, and a close-up of the step the silver frame sits on."""
+    p = m.p
+    pan, box, outline = panel_parts(m)
+    lip, lip_pr = lip_box(m)
+    face = pan.one('Panel').hi
+    lip_t = lip_pr.hi if lip else 0.0
+    l0, l1 = (lip.u0, lip.u1) if lip else (box.u0, box.u1)
+    s = Sheet(m, number, total, 'Dash panel: top and the lip',
+              "The front %s mm fits inside the silver frame's opening. Behind it the panel is wider,\n"
+              'so the frame holds it in, like the factory radio and climate control.' % num(p.FrameEdgeDepth),
+              '1:1, detail 4:1')
+    stepped = [(l0, 0), (l1, 0), (l1, lip_t), (box.u1, lip_t), (box.u1, face), (box.u0, face),
+               (box.u0, lip_t), (l0, lip_t)]
+    posts = {}
+    for pr in pan.get('Screen post'):
+        x, y, dia = pr.circles()[0]
+        posts[round(float(x), 3)] = (x, dia, pr.hi)
+    notch = Box(pan.one('Cable notch').paths()[0])
+
+    # top view: back of the panel at the top, the front toward the bottom
+    v = View(s, at=(40, 188), ref=(l0, 0), flip_v=True)
+    v.shape(stepped, fill=PART)
+    for x, dia, top in posts.values():
+        v.shape([(x - dia / 2, face), (x + dia / 2, face), (x + dia / 2, top), (x - dia / 2, top)], fill=PART)
+    for u in (notch.u0, notch.u1):
+        v.line([(u, 0), (u, face)], lw=THIN, color=SOFT, dash=HIDDEN)
+    v.label(v.P(notch.cu, face / 2), 'cable notch', ha='center', size=6.0)
+    for side in (-1, 1):
+        edge = box.u0 if side < 0 else box.u1
+        v.shape([(edge, lip_t), (edge + side * 10, lip_t), (edge + side * 10, face), (edge, face)],
+                lw=THIN, color=GHOST, dash=(5, 2.5), hatch='////', z=2)
+    v.hdim((l0, 0), (l1, 0), v.Y(0) + 9, inch=False)
+    v.hdim((box.u0, face), (box.u1, face), v.Y(max(t for _, _, t in posts.values())) - 7, inch=True, side=-1)
+    v.vdim((l1, 0), (l1, face), v.X(l1) + 16)
+    v.vdim((box.u1, lip_t), (box.u1, face), v.X(l1) + 7, side=-1)
+    v.label(v.P(l0, -2.5), 'back (inside the dash)', ha='left', va='bottom', size=6.0)
+    v.label(v.P(l0 - 1, face + 1), 'front, toward you', ha='right', va='top', size=6.0)
+    v.note((box.u0 - 5, (lip_t + face) / 2), v.P(box.u0 + 22, face + 9), 'silver frame (dashed blue)', ha='left')
+    s.view_title((40, 205.5), 'TOP', '(looking down on the top edge)')
+
+    # detail of the left edge, 4 times size
+    k = 4.0
+    d = View(s, at=(64, 136), ref=(l0, 0), scale=k, flip_v=True)
+    reach = 16.0
+    d.shape([(l0, 0), (box.u0 + reach, 0), (box.u0 + reach, face), (box.u0, face), (box.u0, lip_t), (l0, lip_t)],
+            fill=PART)
+    d.line([(box.u0 + reach, -1), (box.u0 + reach, face + 1)], lw=THIN, color=SOFT, dash=(2, 2), z=5)
+    d.shape([(box.u0, lip_t), (box.u0 - 9, lip_t), (box.u0 - 9, face), (box.u0, face)],
+            lw=THIN, color=GHOST, dash=(5, 2.5), hatch='////', z=2)
+    d.label(d.P(box.u0 - 4.5, (lip_t + face) / 2 + 3), 'silver frame\nedge', ha='center', size=6.0)
+    if lip:
+        d.hdim((l0, 0), (box.u0, 0), d.Y(0) + 8)
+    d.vdim((l0, 0), (l0, lip_t), d.X(box.u0 - 9) - 6, out=-1)
+    d.vdim((l0, 0), (box.u0, face), d.X(box.u0 - 9) - 15)
+    d.vdim((box.u0 + reach, lip_t), (box.u0 + reach, face), d.X(box.u0 + reach) + 7, side=-1)
+    d.label(d.P(l0 + (box.u0 - l0) / 2, lip_t / 2), 'lip', ha='center', size=6.0)
+    d.label(d.P(box.u0 + reach / 2, (lip_t + face) / 2), 'front part', ha='center', size=6.0)
+    s.view_title((d.X(box.u0 - 9) - 15, 155), 'DETAIL: LEFT EDGE', '(4 times size; the right edge%s the same)' % (' and the top are' if p.LipTop > 0 else ' is'))
+
+    # what changed
+    lines = ['What changed',
+             '',
+             'The back %s mm of the panel reaches %s mm past the front part' % (num(lip_t), num(p.LipSide)),
+             'on the left, the right%s:' % (' and the top' if p.LipTop > 0 else ''),
+             '%s × %s mm instead of %s × %s mm.' % (
+                 num(l1 - l0), num(lip.v1 - lip.v0 if lip else box.h), num(box.u1 - box.u0), num(box.h)),
+             '',
+             'The front %s mm is still exactly the opening\'s size,' % num(p.FrameEdgeDepth),
+             "so it slides into the silver frame's %s mm-thick edge," % num(p.FrameEdgeDepth),
+             'and the frame overlaps the lip behind it.',
+             '',
+             ('The top edge has the same %s mm lip: it follows the' % num(p.LipTop)
+              if p.LipTop > 0 else 'The top edge has no lip (LipTop = 0).'),
+             ('rounded top-left corner (R%s, from the same centre as' % num(lip.r['tl'][0])
+              if p.LipTop > 0 and 'tl' in lip.r else ''),
+             ('the front part\'s R%s) and is square at the top right.' % num(box.r['tl'][0])
+              if p.LipTop > 0 and 'tl' in lip.r else ''),
+             'The bottom edge has none (the climate control is there).',
+             'The panel prints back face down, so the lip sits flat on the bed.']
+    for i, line in enumerate(lines):
+        s.text((160, 136 - i * 4.6), line, 6.8 if i else 8.2, INK, ha='left', va='top',
+               weight='bold' if i == 0 else 'normal')
     return s
 
 
@@ -792,9 +908,14 @@ def sheet_panel_back(m, number, total):
     pan, box, outline = panel_parts(m)
     s = Sheet(m, number, total, 'Dash panel: back',
               'The face that goes into the dash, seen from behind: a mirror image\nof sheet %d. '
-              'Press the heat-set inserts into the 12 holes.' % (number - 1), '1:1')
+              'Press the heat-set inserts into the 12 holes.' % FRONT_SHEET, '1:1')
     v = View(s, at=(36, 54), ref=(box.u1, box.v0), flip_u=True)
-    v.shape(outline, fill=PART)
+    lip, lip_pr = lip_box(m)
+    if lip:
+        v.shape(notched_top(lip_pr.paths()[0], pan.one('Cable notch').paths()[0]), fill=PART)
+        v.shape(outline, lw=THIN, color=SOFT, dash=HIDDEN, z=3.2)
+    else:
+        v.shape(outline, fill=PART)
     pocket = Box(pan.one('Encoder pocket').paths()[0])
     pocket_pr = pan.one('Encoder pocket')
     collar = pan.one('Encoder collar hole').circles()[0]
@@ -1434,13 +1555,14 @@ def main():
     m = load_model()
     for warning in check_print_files(m):
         print('warning: ' + warning + '; the drawings follow the script')
-    total = 6
-    sheets = [('1-dash-panel-front', sheet_panel_front(m, 1, total)),
-              ('2-dash-panel-back', sheet_panel_back(m, 2, total)),
-              ('3-adapter-plate', sheet_adapter(m, 3, total)),
-              ('4-pi-case', sheet_pi_case(m, 4, total)),
-              ('5-volume-knob', sheet_knob(m, 5, total)),
-              ('6-assembly-side', sheet_assembly(m, 6, total))]
+    total = 7
+    sheets = [('1-dash-panel-front', sheet_panel_front(m, FRONT_SHEET, total)),
+              ('2-dash-panel-top-and-lip', sheet_panel_lip(m, LIP_SHEET, total)),
+              ('3-dash-panel-back', sheet_panel_back(m, BACK_SHEET, total)),
+              ('4-adapter-plate', sheet_adapter(m, 4, total)),
+              ('5-pi-case', sheet_pi_case(m, 5, total)),
+              ('6-volume-knob', sheet_knob(m, 6, total)),
+              ('7-assembly-side', sheet_assembly(m, 7, total))]
     render(sheets)
 
 

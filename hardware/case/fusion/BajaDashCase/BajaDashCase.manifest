@@ -5,6 +5,6 @@
 	"description":	{
 		"":	"Builds the Baja OS dash case (panel, knob, Pi case, bracket adapters) and writes its print files."
 	},
-	"version": "5.0",
+	"version": "6.0",
 	"supportedOS":	"windows|mac"
 }

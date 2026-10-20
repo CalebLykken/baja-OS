@@ -218,7 +218,7 @@ def load_model():
     mod.Part = record
     d = mod.derive(p)
     parts = {'panel': mod.build_panel(None, p, d), 'knob': mod.build_knob(None, p, d),
-             'pi case': mod.build_pi_case(None, p, d)}
+             'pi case': mod.build_pi_case(None, p, d), 'amp plate': mod.build_amp_plate(None, p, d)}
     for side in ('left', 'right'):
         for level, yc in zip(('lower', 'upper'), d.adapter_ys):
             parts['adapter %s %s' % (level, side)] = mod.build_adapter(None, p, d, side, level, yc)
@@ -299,6 +299,15 @@ class Box:
     @property
     def cv(self):
         return (self.v0 + self.v1) / 2
+
+
+def bounds(segs):
+    """Sides of any closed outline (a slot, say), for sizes: an object like Box without corner radii."""
+    pts = [q for seg in segs for q in seg[1:]]        # ends, and each arc's middle (a slot's far point)
+    us, vs = [q[0] for q in pts], [q[1] for q in pts]
+    u0, u1, v0, v1 = min(us, key=float), max(us, key=float), min(vs, key=float), max(vs, key=float)
+    return types.SimpleNamespace(u0=u0, u1=u1, v0=v0, v1=v1, w=u1 - u0, h=v1 - v0, cu=(u0 + u1) / 2,
+                                 cv=(v0 + v1) / 2, segs=segs)
 
 
 def notched_top(outline, notch):
@@ -685,6 +694,7 @@ class View:
 # ------------------------------------------------------------- the sheets
 
 FRONT_SHEET, LIP_SHEET, BACK_SHEET = 1, 2, 3
+PI_SHEET, AMP_SHEET = 5, 6
 
 
 def lip_box(m):
@@ -694,6 +704,20 @@ def lip_box(m):
     except KeyError:
         return None, None
     return Box(pr.paths()[0]), pr
+
+
+def lip_corner_lines(p, lip, box):
+    """Two lines on how the top lip turns each top corner."""
+    if p.LipTop <= 0 or not lip:
+        return ['', '']
+    name = {'tl': 'top-left', 'tr': 'top-right'}
+    rounded = [k for k in ('tl', 'tr') if k in lip.r]
+    square = [name[k] for k in ('tl', 'tr') if k not in lip.r]
+    if len(rounded) != 1:
+        return ['rounded at both top corners.' if rounded else 'square at both top corners.', '']
+    k = rounded[0]
+    return ['rounded %s corner (R%s, from the same centre as' % (name[k], num(lip.r[k][0])),
+            "the front part's R%s) and is square at the %s." % (num(box.r[k][0]), square[0].replace('-', ' '))]
 
 
 def panel_parts(m):
@@ -761,7 +785,7 @@ def sheet_panel_front(m, number, total):
         v.note(mid, v.P(*at), 'R{}', r, ha=ha)
     if lip:
         v.note((lip.u0 + (box.u0 - lip.u0) / 2, box.cv - 20), v.P(box.u0 + 10, box.cv - 32),
-               ('lip at the back, {} out on the sides%s\n(grey; see sheet %d)'
+               ('lip at the back, {} out\non the sides%s\n(grey; see sheet %d)'
                 % (' and top' if float(lip.v1) > float(box.v1) + 1e-6 else '', LIP_SHEET)), box.u0 - lip.u0)
     s.view_title((36, 205.5), 'FRONT', '(from the driver\'s seat)')
 
@@ -880,10 +904,7 @@ def sheet_panel_lip(m, number, total):
              '',
              ('The top edge has the same %s mm lip: it follows the' % num(p.LipTop)
               if p.LipTop > 0 else 'The top edge has no lip (LipTop = 0).'),
-             ('rounded top-left corner (R%s, from the same centre as' % num(lip.r['tl'][0])
-              if p.LipTop > 0 and 'tl' in lip.r else ''),
-             ('the front part\'s R%s) and is square at the top right.' % num(box.r['tl'][0])
-              if p.LipTop > 0 and 'tl' in lip.r else ''),
+             *lip_corner_lines(p, lip, box),
              'The bottom edge has none (the climate control is there).',
              'The panel prints back face down, so the lip sits flat on the bed.']
     for i, line in enumerate(lines):
@@ -928,7 +949,7 @@ def sheet_panel_back(m, number, total):
 
     # where the Pi case and the adapter plates sit
     case = m.parts['pi case']
-    for path in case.one('Floor').paths() + case.one('Ears').paths():
+    for path in case.one('Floor').paths() + case.one('Ears').paths() + case.one('Amp posts').paths():
         v.shape(path_points(path), lw=THIN, color=GHOST, dash=(5, 2.5), z=3.5)
     feet = adapter_footprints(m)
     for x0, x1, y0, y1 in feet:
@@ -1183,12 +1204,21 @@ def sheet_pi_case(m, number, total):
     usb = case.one('USB and Ethernet').paths()
     hdmi = case.one('Power and HDMI').paths()
     pcie = case.one('PCIe and power button').paths()
+    amp_posts = case.one('Amp posts')
+    amp_ins = case.one('Amp post inserts')
     s = Sheet(m, number, total, 'Pi case',
-              'Print 1, floor down, open side up. It screws to the back of the panel through its two\n'
-              'side tabs; the Pi sits on the four posts with its ports at the openings.', '1:1')
+              'Print 1, floor down, open side up. It screws to the panel through its two side tabs. The Pi\n'
+              'sits on the four short posts inside; the four tall posts outside hold the amp plate.', '1:1')
 
     # inside, looking into the open side as it sits on the bed (seen from behind the dash)
-    v = View(s, at=(42, 120), ref=(outer.u1, outer.v0), flip_u=True)
+    v = View(s, at=(42, 112), ref=(outer.u1, outer.v0), flip_u=True)
+    for path in amp_posts.paths():
+        v.shape(path_points(path), fill=PART, z=2.5)
+    for x, y, dd in amp_ins.circles():
+        v.circle(x, y, dd, fill=BLIND, z=5)
+        v.centre(x, y, dd)
+    top_post = max((Box(q) for q in amp_posts.paths()), key=lambda b: (float(b.v1), -float(b.u0)))
+    v.label((v.X(top_post.cu), v.Y(top_post.v1) + 1.5), 'amp posts', ha='center', va='bottom', size=5.8)
     for e in ears:
         v.shape(path_points(e.segs), fill=PART, z=2)
     v.shape(path_points(outer.segs), fill=PART, z=3)
@@ -1218,7 +1248,7 @@ def sheet_pi_case(m, number, total):
     # where things are, from the outside of the USB wall and of the plain wall
     low = sorted((c for c in stands if float(c[1]) < float(inner.cv)), key=lambda c: -float(c[0]))
     v.ord_x(outer.u1, [(inner.u1, inner.v0)] + [(x, y - dd / 2) for x, y, dd in access + low] +
-            [(vent.u0, vent.v0), (vent.u1, vent.v0), (outer.u0, outer.v0)], y=116)
+            [(vent.u0, vent.v0), (vent.u1, vent.v0), (outer.u0, outer.v0)], y=100)
     near = [c for c in stands if abs(float(c[0]) - float(low[0][0])) < 1e-6]
     usb_ear = ears[-1]
     v.ord_y(outer.v0, [(x + dd / 2, y) for x, y, dd in near] + [(vent.u1, vent.v0), (vent.u1, vent.v1)] +
@@ -1252,7 +1282,7 @@ def sheet_pi_case(m, number, total):
     s.line([(ax_ + 6, v.Y(y_cut)), (ax_ + 6, v.Y(y_cut) + 4)], lw=MID)
     s.arrowhead((ax_ + 6, v.Y(y_cut) + 4), (0, -1))
     s.text((ax_ + 7.2, v.Y(y_cut) + 2), 'A', 8, INK, ha='left', weight='bold')
-    sv = View(s, at=(42, 66), ref=(outer.u1, 0), flip_u=True, flip_v=True)
+    sv = View(s, at=(42, 50), ref=(outer.u1, 0), flip_u=True, flip_v=True)
     wall_top = {}
     for side, paths in (('usb', usb), ('pcie', pcie)):
         h = top
@@ -1290,9 +1320,17 @@ def sheet_pi_case(m, number, total):
     s.text((8, sv.Y(top) + 7.5), 'SECTION A–A', 8.2, INK, ha='left', va='bottom', weight='bold')
     s.text((8, sv.Y(top) + 6.7), '(through the lower posts, floor down)', 6.4, SOFT, ha='left', va='top')
     tab = hx[0]
-    s.text((8, 52), s.fmt('Side tabs: 4 holes Ø{} for the M3 × 8 screws into the panel\'s inserts.', tab[2])[0],
+    s.text((8, 43), s.fmt('Side tabs: 4 holes Ø{} for the M3 × 8 screws into the panel\'s inserts.', tab[2])[0],
            6.4, INK, ha='left', va='top')
-    s.text((8, 47.5), 'The fourth wall (bottom of the inside view) is plain.', 6.4, INK, ha='left', va='top')
+    s.text((8, 38.5), 'The fourth wall (bottom of the inside view) is plain.', 6.4, INK, ha='left', va='top')
+    pb = [Box(q) for q in amp_posts.paths()]
+    xs = sorted({round(float(x), 6): x for x, _, _ in amp_ins.circles()}.values(), key=float)
+    ys = sorted({round(float(y), 6): y for _, y, _ in amp_ins.circles()}.values(), key=float)
+    line, colour = s.fmt('Amp posts: 4 posts {} × {}, {} tall from the floor\'s outside, centres {} × {} apart,\n'
+                         'Ø{} holes {} deep for M3 inserts (the amp plate, sheet %d). B, C and D leave them out.'
+                         % AMP_SHEET, pb[0].w, pb[0].w, 0 - amp_posts.lo, xs[-1] - xs[0], ys[-1] - ys[0],
+                         amp_ins.circles()[0][2], amp_ins.hi - amp_posts.lo)
+    s.text((8, 34), line, 6.4, colour, ha='left', va='top')
 
     # the walls with openings, each seen from outside, floor down
     col = 168.0
@@ -1305,6 +1343,115 @@ def sheet_pi_case(m, number, total):
     vd = View(s, at=(col, 56), ref=(outer.v0, 0), flip_v=True)
     wall_elevation(s, vd, outer.v0, outer.v1, top, [], pcie, [(ears[0].v0, ears[0].v1, floor_in)], outer.v0, 52,
                    'D', 'PCIe + button wall, from outside')
+    return s
+
+
+def sheet_amp_plate(m, number, total):
+    p = m.p
+    part = m.parts['amp plate']
+    plate_pr = part.one('Plate')
+    pl = Box(plate_pr.paths()[0])
+    zf, zb = plate_pr.hi, plate_pr.lo
+    st_pr = part.one('Amp standoffs')
+    stands = st_pr.circles()
+    st_d = stands[0][2]
+    ins_pr = part.one('Amp insert holes')
+    ins_d = ins_pr.circles()[0][2]
+    screws = part.one('Post screw holes').circles()
+    vents = sorted((bounds(q) for q in part.one('Vents').paths()), key=lambda b: float(b.cu))
+    board = Box(m.parts['Amp (reference)'].prisms[0].paths()[0])
+    s = Sheet(m, number, total, 'Amp plate',
+              'Print 1, flat, the posts up. The amp screws onto its four posts; the plate screws onto\n'
+              "the four tall posts on the Pi case (sheet %d), behind the Pi." % PI_SHEET, '1:1')
+
+    # the side the amp sits on, seen from behind the dash
+    v = View(s, at=(40, 98), ref=(pl.u1, pl.v0), flip_u=True)
+    v.shape(path_points(pl.segs), fill=PART)
+    for b in vents:
+        v.shape(path_points(b.segs), lw=MID, fill='white', z=4)
+    for x, y, dd in screws:
+        v.circle(x, y, dd, fill='white', z=4)
+        v.centre(x, y, dd)
+    for x, y, dd in stands:
+        v.circle(x, y, dd, lw=THICK, fill=PART, z=4)
+        v.circle(x, y, ins_d, fill=BLIND, z=5)
+        v.centre(x, y, dd)
+    v.shape(path_points(board.segs), lw=THIN, color=GHOST, dash=(5, 2.5), z=6)
+
+    def pair(holes, key):
+        lo = min(holes, key=lambda c: (float(c[1]), -float(c[0])))
+        return lo, [c for c in holes if abs(float(c[key]) - float(lo[key])) < 1e-6 and c is not lo][0]
+    top = max(float(c[1]) for c in stands)
+    st_top = [c for c in stands if abs(float(c[1]) - top) < 1e-6]
+    sc_top = [c for c in screws if float(c[1]) > float(pl.cv)]
+    v.hdim(st_top[0][:2], st_top[1][:2], v.Y(pl.v1) + 8)
+    v.hdim(sc_top[0][:2], sc_top[1][:2], v.Y(pl.v1) + 14.5)
+    v.hdim((pl.u0, pl.v1), (pl.u1, pl.v1), v.Y(pl.v1) + 21)
+    right = v.X(pl.u0)
+    st_side = [c for c in stands if float(c[0]) < float(pl.cu)]
+    sc_side = [c for c in screws if float(c[0]) < float(pl.cu)]
+    v.vdim(st_side[0][:2], st_side[1][:2], right + 6, side=-1)
+    v.vdim(sc_side[0][:2], sc_side[1][:2], right + 13, side=-1)
+    v.vdim((pl.u0, pl.v0), (pl.u0, pl.v1), right + 20, side=-1)
+    v.label((v.X(board.cu), v.Y(board.v1) - 4.5), 'amp board {} × {} (dashed)', board.w, board.h,
+            ha='center', size=6.0)
+
+    # what things are
+    st = max(stands, key=lambda c: (-float(c[1]), float(c[0])))       # lower, on the paper's left
+    at = (52, 84)
+    v.note(('paper',) + v.edge(st[0], st[1], st[2], at), at,
+           '4 posts Ø{}, {} tall,\nØ{} holes {} deep for M2\nheat-set inserts (the amp\'s\nholes are about 2.5)',
+           st_d, zb - st_pr.lo, ins_d, ins_pr.hi - st_pr.lo)
+    sc = min(sc_side, key=lambda c: float(c[1]))
+    at = (164, 84)
+    v.note(('paper',) + v.edge(sc[0], sc[1], sc[2], at), at,
+           "4 holes Ø{} for M3 × 8 screws\ninto the Pi case's posts", sc[2], ha='right')
+    mid = vents[len(vents) // 2]
+    at = (v.X(mid.cu), 66)
+    v.note(('paper',) + v.P(mid.cu, mid.v0), at, '%d vents {} × {}, {} apart' % len(vents), mid.w, mid.h,
+           vents[1].cu - vents[0].cu, ha='center')
+    s.text((v.X(pl.u1), 206.5), 'BACK', 8.2, INK, ha='left', va='bottom', weight='bold')
+    s.text((v.X(pl.u1) + 13, 206.5), '(the side the amp sits on, seen from behind the dash); everything is centred',
+           6.4, SOFT, ha='left', va='bottom')
+
+    # section through two of the posts
+    cut = min(stands, key=lambda c: float(c[0]))       # the paper's right-hand pair, beside the section
+    a_x = v.X(cut[0])
+    for y, va in ((pl.v0, 'top'), (pl.v1, 'bottom')):
+        yy = v.Y(y) + (-4.0 if va == 'top' else 3.0)
+        s.line([(a_x, v.Y(y)), (a_x, yy)], lw=HAIR, color=SOFT, dash=CENTRE)
+        s.line([(a_x, yy), (a_x - 5, yy)], lw=MID)
+        s.arrowhead((a_x - 5, yy), (1, 0))
+        s.text((a_x + 1.5, yy), 'A', 8, INK, ha='left', va='center', weight='bold')
+    sv = View(s, at=(222, 98), ref=(zf, pl.v0), flip_u=True)
+    zt, zi = st_pr.lo, ins_pr.hi
+    r, ri = st_d / 2, ins_d / 2
+    sec = [(zf, pl.v0), (zb, pl.v0)]
+    for ys in sorted((c[1] for c in stands if abs(float(c[0]) - float(cut[0])) < 1e-6), key=float):
+        sec += [(zb, ys - r), (zt, ys - r), (zt, ys - ri), (zi, ys - ri), (zi, ys + ri), (zt, ys + ri),
+                (zt, ys + r), (zb, ys + r)]
+    sec += [(zb, pl.v1), (zf, pl.v1)]
+    sv.shape(sec, fill=PART, hatch='////', lw=MID, color=SOFT, z=3)
+    sv.shape(sec, z=4)
+    low = min(float(c[1]) for c in stands)
+    sv.hdim((zf, pl.v0), (zb, pl.v0), sv.Y(pl.v0) - 6, out=-1, side=-1)
+    sv.hdim((zb, low - r), (zt, low - r), sv.Y(pl.v0) - 6, side=-1)
+    sv.hdim((zf, pl.v0), (zt, low - r), sv.Y(pl.v0) - 14, side=-1)
+    hi_y = max(float(c[1]) for c in stands)
+    sv.hdim((zt, hi_y + ri), (zi, hi_y + ri), sv.Y(pl.v1) + 6, out=1)
+    sv.vdim((zt, hi_y - ri), (zt, hi_y + ri), sv.X(zt) + 6, template='Ø{}', side=-1)
+    s.view_title((sv.X((zf + zt) / 2), 196), 'SECTION A–A', '(through two posts)', ha='center')
+    s.text((sv.X(zf) - 2, sv.Y(pl.cv)), 'faces the Pi', 6.0, SOFT, ha='right', rot=90, va='bottom')
+    s.text((sv.X(zt) + 2, sv.Y(pl.cv)), 'the amp goes here', 6.0, SOFT, ha='left', rot=90, va='top')
+
+    lines = [('Put it together:', INK),
+             ("1. Press M2 inserts into this plate's four posts, and M3 inserts into the Pi case's tall posts.", INK),
+             ("2. Screw the plate onto the Pi case's posts (M3 × 8), this side facing away from the Pi.", INK),
+             ("3. Screw the amp onto the posts (M2 × 6), its parts facing away from the Pi.", INK),
+             ("The amp's hole spacing is a guess (E): measure it, centre to centre, before printing.",
+              TAG_COLOUR['E'])]
+    for i, (line, colour) in enumerate(lines):
+        s.text((8, 52 - i * 4.6), line, 6.6, colour, ha='left', va='top', weight='bold' if i == 0 else 'normal')
     return s
 
 
@@ -1380,8 +1527,8 @@ def sheet_assembly(m, number, total):
     pan, box, outline = panel_parts(m)
     face = pan.one('Panel').hi
     s = Sheet(m, number, total, 'Assembly: side view',
-              'Everything in place, seen from the driver\'s door. Blue: screen. Green: Pi and DAC HAT.\n'
-              'Pink: climate controls. Red: factory bracket (placeholder; its real shape isn\'t known yet).', '1:1')
+              'Everything in place, seen from the driver\'s door. Blue: screen. Green: Pi + DAC HAT.\n'
+              'Orange: amp. Pink: climate controls. Red: factory bracket (placeholder; shape unknown).', '1:1')
     v = View(s, at=(150, 56), ref=(0, box.v0))           # across: Z (toward you); up: Y
     BLUE, GREEN, PINK, RED = '#cfe0f3', '#d8ecc8', '#f3d6dc', '#f4cccc'
     HID = (4.0, 2.0)
@@ -1406,6 +1553,28 @@ def sheet_assembly(m, number, total):
     v.shape(pi_pts, lw=0, fill=GREEN, z=1.8)
     v.shape(case_pts, lw=0, fill=PART, z=2)
 
+    # the amp, on its plate on the Pi case's tall posts
+    ORANGE = '#f6dfc2'
+    tall = case.one('Amp posts')
+    plate = m.parts['amp plate']
+    ppr, spr = plate.one('Plate'), plate.one('Amp standoffs')
+    pbox = Box(ppr.paths()[0])
+    amp = m.parts['Amp (reference)']
+    abox = Box(amp.prisms[0].paths()[0])
+    amp_lo = min((pr.lo for pr in amp.prisms), key=float)
+    amp_hi = max((pr.hi for pr in amp.prisms), key=float)
+    behind = []
+    for b in {(round(float(b.v0), 6)): b for b in (Box(q) for q in tall.paths())}.values():
+        behind.append([(tall.lo, b.v0), (0, b.v0), (0, b.v1), (tall.lo, b.v1)])
+    behind.append([(ppr.lo, pbox.v0), (ppr.hi, pbox.v0), (ppr.hi, pbox.v1), (ppr.lo, pbox.v1)])
+    for y in {round(float(c[1]), 6): c[1] for c in spr.circles()}.values():
+        r = spr.circles()[0][2] / 2
+        behind.append([(spr.lo, y - r), (ppr.lo, y - r), (ppr.lo, y + r), (spr.lo, y + r)])
+    for pts in behind:
+        v.shape(pts, lw=0, fill=PART, z=2)
+    amp_pts = [(amp_lo, abox.v0), (amp_hi, abox.v0), (amp_hi, abox.v1), (amp_lo, abox.v1)]
+    v.shape(amp_pts, lw=0, fill=ORANGE, z=1.8)
+
     adapters = [m.parts[key].one('Adapter') for key in ('adapter lower left', 'adapter upper left')]
     for key, pr in zip(('adapter lower left', 'adapter upper left'), adapters):
         pts = path_points(pr.paths()[0])
@@ -1417,6 +1586,9 @@ def sheet_assembly(m, number, total):
             v.shape([(z, y) for y, z in path_points(sp.paths()[0])], lw=MID, fill='white', z=3.2)
     v.shape(case_pts, lw=MID, dash=HID, z=3.5)
     v.shape(pi_pts, lw=THIN, color='#4f7a35', dash=HID, z=3.5)
+    for pts in behind:
+        v.shape(pts, lw=MID, dash=HID, z=3.5)
+    v.shape(amp_pts, lw=THIN, color='#b07a3a', dash=HID, z=3.5)
 
     fb = m.parts['Factory radio brackets (placeholder)']
     fbb = Box([pr for pr in fb.prisms if pr.op == 'new'][0].paths()[0])      # (y, z)
@@ -1450,9 +1622,12 @@ def sheet_assembly(m, number, total):
 
     # labels for what's behind
     gap_lo, gap_hi = adapters[0].hi, adapters[1].lo
-    left = v.X(min(fbb.v0, zlo, key=float)) - 4
-    v.note((ctop * 0.35, gap_lo + 2), (left, v.Y((gap_lo + gap_hi) / 2) - 12), 'Pi case', ha='right')
-    v.note((zlo + 4, (gap_lo + gap_hi) / 2), (left, v.Y((gap_lo + gap_hi) / 2) + 3), 'Pi + cooler\n+ DAC HAT',
+    left = v.X(min(fbb.v0, zlo, amp_lo, key=float)) - 4
+    mid = (gap_lo + gap_hi) / 2
+    v.note((ctop * 0.35, gap_lo + 2), (left, v.Y(mid) - 12), 'Pi case', ha='right')
+    v.note((zlo + 4, mid), (left, v.Y(mid) + 3), 'Pi + cooler\n+ DAC HAT', ha='right')
+    v.note(((ppr.lo + ppr.hi) / 2, gap_hi - 3), (left, v.Y(mid) + 18), 'amp plate', ha='right')
+    v.note(((amp_lo + amp_hi) / 2, mid + 6), (left, v.Y(mid) + 30), 'amp (its height is\nfrom the listing)',
            ha='right')
     s.text((14, 199.5), 'Dashed: hidden behind the adapter plates.', 6.4, SOFT, ha='left', va='top')
 
@@ -1461,6 +1636,7 @@ def sheet_assembly(m, number, total):
               (glass.hi, gb.v0), (knob.hi, ky - kd / 2), (ctop, walls.v0), (zlo, board.v0)]
     zmin = min((q[1] for q in path_points(adapters[0].paths()[0])), key=float)
     lowest.append((zmin, adapters[0].lo))
+    lowest += [(ppr.hi, pbox.v0), (amp_lo, abox.v0)]
     v.ord_x(0, lowest, y=v.Y(lo) - 2.5, absolute=True)
     s.text((14, v.Y(lo) - 4), 'Front to back, from the back\nface of the panel:\n'
            '← behind it      in front of it →', 6.2, INK, ha='left', va='top')
@@ -1490,7 +1666,7 @@ def check_print_files(m):
     sys.path.insert(0, HERE)
     from make_print_files import read_stl
     parts = {'dash-panel.stl': ['panel'], 'pi-case.stl': ['pi case'], 'volume-knob.stl': ['knob'],
-             'adapter-plate.stl': ['adapter upper left']}
+             'adapter-plate.stl': ['adapter upper left'], 'amp-plate.stl': ['amp plate']}
     warnings = []
     for name, keys in parts.items():
         path = os.path.join(HERE, 'print', name)
@@ -1555,14 +1731,15 @@ def main():
     m = load_model()
     for warning in check_print_files(m):
         print('warning: ' + warning + '; the drawings follow the script')
-    total = 7
+    total = 8
     sheets = [('1-dash-panel-front', sheet_panel_front(m, FRONT_SHEET, total)),
               ('2-dash-panel-top-and-lip', sheet_panel_lip(m, LIP_SHEET, total)),
               ('3-dash-panel-back', sheet_panel_back(m, BACK_SHEET, total)),
               ('4-adapter-plate', sheet_adapter(m, 4, total)),
-              ('5-pi-case', sheet_pi_case(m, 5, total)),
-              ('6-volume-knob', sheet_knob(m, 6, total)),
-              ('7-assembly-side', sheet_assembly(m, 7, total))]
+              ('5-pi-case', sheet_pi_case(m, PI_SHEET, total)),
+              ('6-amp-plate', sheet_amp_plate(m, AMP_SHEET, total)),
+              ('7-volume-knob', sheet_knob(m, 7, total)),
+              ('8-assembly-side', sheet_assembly(m, 8, total))]
     render(sheets)
 
 

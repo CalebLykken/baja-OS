@@ -2,8 +2,9 @@
 
 A printed panel that replaces the factory radio in the 2005 Baja's center
 stack: the 8" screen bolts onto its front, the volume knob sits under the
-screen on the driver's side, the Raspberry Pi rides in a case on its back, and
-four adapter plates tie it to Subaru's radio brackets. The factory climate
+screen on the driver's side, the Raspberry Pi rides in a case on its back with
+the amp on a plate behind it, and four adapter plates tie it to Subaru's radio
+brackets. The factory climate
 controls stay where they are, below it.
 
 This is a **test-fit version**. Some sizes are estimates (see
@@ -21,13 +22,14 @@ factory brackets (placeholders; their real shape isn't known yet).
 
 ## Print it
 
-Send the four files in [`print/`](print/) to the printer or print service.
+Send the five files in [`print/`](print/) to the printer or print service.
 Each one is already laid on its best side, and none needs supports.
 
 | File | Copies | Sits on the bed | Size (mm) |
 |---|---|---|---|
 | `print/dash-panel.stl` | 1 | back face down, screen posts up | 177 × 143 × 19 |
-| `print/pi-case.stl` | 1 | floor down, open side up | 117 × 66 × 28 |
+| `print/pi-case.stl` | 1 | floor down, open side and amp posts up | 117 × 82 × 48 |
+| `print/amp-plate.stl` | 1 | flat, posts up | 124 × 82 × 11 |
 | `print/volume-knob.stl` | 1 | top down, shaft hole up | 19 × 19 × 18 |
 | `print/adapter-plate.stl` | **4** | standing on its Z-shaped end | 20 × 60 × 50 |
 
@@ -46,20 +48,22 @@ handles.
 ## Drawings
 
 Dimensioned drawings of each printed part, to check a test print with a ruler
-and calipers: [all seven in one PDF](drawings/baja-dash-case-drawings.pdf), or
+and calipers: [all eight in one PDF](drawings/baja-dash-case-drawings.pdf), or
 [panel front](drawings/1-dash-panel-front.png),
 [panel top and the lip](drawings/2-dash-panel-top-and-lip.png),
 [panel back](drawings/3-dash-panel-back.png),
 [adapter plate](drawings/4-adapter-plate.png),
 [Pi case](drawings/5-pi-case.png),
-[volume knob](drawings/6-volume-knob.png) and
-[assembly side view](drawings/7-assembly-side.png).
+[amp plate](drawings/6-amp-plate.png),
+[volume knob](drawings/7-volume-knob.png) and
+[assembly side view](drawings/8-assembly-side.png).
 
 The letter after each size says how sure it is: **M** measured (or from a
 datasheet), **D** a design choice, **E** estimated, **U** unknown. The print
 should match every size; E and U are the ones to check against the truck.
 Printed at 100 % on US Letter, the panel, Pi case and assembly sheets are full
-size, so you can lay the part on the paper; the adapter is 2:1, the knob 3:1.
+size, so you can lay the part on the paper (so is the amp plate); the adapter is
+2:1, the knob 3:1.
 
 [`make_drawings.py`](make_drawings.py) makes them from the Fusion script's own
 code: `python3 hardware/case/make_drawings.py` (needs matplotlib). It uses the
@@ -70,8 +74,10 @@ it there too before re-running; it warns when `print/` doesn't match.
 
 | Qty | Part | For |
 |---|---|---|
-| 12 | M3 heat-set inserts (for a 4 mm hole, about 6 mm long) | panel back: 8 for the adapters, 4 for the Pi case |
-| 12 | M3 × 8 mm screws | adapters and Pi case to the panel |
+| 16 | M3 heat-set inserts (for a 4 mm hole, about 6 mm long) | panel back: 8 for the adapters, 4 for the Pi case; 4 in the Pi case's tall posts |
+| 16 | M3 × 8 mm screws | adapters and Pi case to the panel; amp plate to the Pi case |
+| 4 | M2 heat-set inserts (for a 3.2 mm hole, 3–4 mm long) | amp plate posts |
+| 4 | M2 × 6 mm screws | amp to the amp plate (its holes are about 2.5 mm) |
 | 4 | M2.5 heat-set inserts (for a 3.6 mm hole) | Pi case standoffs |
 | 4 | M2.5 male-female standoffs, tall enough for the DAC HAT over the cooler (often in the HAT kit) | Pi + DAC stack |
 | 4 | M2.5 × 6 mm screws | top of the HAT |
@@ -82,13 +88,14 @@ it there too before re-running; it warns when `print/` doesn't match.
 | a few | Small zip ties (2.5 mm) | cable strain relief beside the notch |
 
 Already have: the EC11 encoder (with its nut and washer), the Pi 5 with its
-active cooler, the InnoMaker DAC HAT, the screen.
+active cooler, the InnoMaker DAC HAT, the screen, the amp (Taidacent XH-M180).
 
 ## Put it together
 
 1. **Inserts.** With a soldering iron, press the M3 inserts into the 12 holes
-   on the back of the panel and the M2.5 inserts into the Pi case's four
-   standoffs.
+   on the back of the panel and into the Pi case's four tall posts, the M2.5
+   inserts into the Pi case's four short posts, and the M2 inserts into the amp
+   plate's posts.
 2. **Knob.** Push the encoder into the square pocket on the back of the panel
    so its threaded collar comes through the front. Put the washer and nut on
    from the front, then press the knob onto the shaft. The knob is closed on
@@ -101,17 +108,22 @@ active cooler, the InnoMaker DAC HAT, the screen.
    It covers two of the screen screws, so the screen goes on first; there are
    holes in the case floor to reach them later. Then fit the Pi on the
    standoffs, the DAC HAT on top, and plug in the screen's cables.
-5. **Adapter plates.** Screw two to each side of the panel's back (M3 × 8),
+5. **Amp.** Plug the sound cable into the DAC first. Screw the amp plate onto
+   the Pi case's four tall posts (M3 × 8), its posts facing away from the Pi,
+   then screw the amp onto those posts (M2 × 6), its parts facing away too, so
+   its heat goes into the dash rather than onto the Pi. The amp has to come off
+   to reach the Pi.
+6. **Adapter plates.** Screw two to each side of the panel's back (M3 × 8),
    slotted walls facing out.
    The panel has a 3 mm lip on its left, right and top edges at the back, like
    the factory radio, so the silver frame's edge holds it in. The lip follows
-   the rounded top-left corner and is square at the top right. The frame goes on
+   the rounded top-right corner and is square at the top left. The frame goes on
    after the panel. Because the screen is wider than the frame's opening, the
    screen's mounting still needs a change for that order (open question).
-6. **In the truck.** Slide the panel into the radio opening. The adapters'
+7. **In the truck.** Slide the panel into the radio opening. The adapters'
    slots should land on the Subaru brackets' screw holes; the slots allow
    front-to-back adjustment. Bolt them with M5 screws.
-7. **Cables.** Zip-tie the screen cables through the slots beside the notch.
+8. **Cables.** Zip-tie the screen cables through the slots beside the notch.
 
 The knob is wired straight to the Pi for now (pins 32, 34, 36, 37, 39); in
 the truck, solder it and add a latching connector between the panel and the Pi.
@@ -132,6 +144,9 @@ Each line names the Fusion parameter to change if it's off.
 - [ ] The slots line up with the brackets' screw holes (`FactoryBracketUpperY`, `FactoryBracketLowerY`, `FactoryBracketHoleSpacing`)
 - [ ] The adapters clear the back edges of the silver bezel (`BezelReturnDepth`)
 - [ ] The Pi case fits behind the dash with room for air and cables
+- [ ] The amp's four holes line up with the amp plate's posts (`AmpHoleSpacingX`, `AmpHoleSpacingY`)
+- [ ] The amp plate clears the DAC HAT (`AmpClearance`, `PiStackHeight`)
+- [ ] There's room behind the dash for the amp: it reaches about 9 cm behind the panel
 - [ ] The screen is clear of the passenger airbag, within about 30° below your line of sight, and readable in daylight
 
 ## What we know
@@ -146,8 +161,11 @@ Each line names the Fusion parameter to change if it's off.
 | Screen depth to its mounting nuts | 11.4 mm | Waveshare's drawing |
 | Screen plugs | HDMI, USB and USB-C on the board's top edge, facing up | Waveshare's drawing; Caleb confirmed the HDMI |
 | Silver frame | 10 mm thick at the opening's edge; the panel's lip reaches 3 mm past it on the left, right and top | measured by Caleb |
+| Amp board | Taidacent XH-M180, 118 × 76 mm; mounting holes about 2.5 mm | measured by Caleb |
+| Amp hole spacing | 111 × 69 mm (3.5 mm in from each edge) | estimated; measure centre to centre |
+| Amp height with its heatsink | 29 mm | from the seller's listing |
 | Pi 5 holes and ports | 58 × 49 mm holes; port positions | [Raspberry Pi 5 mechanical drawing](https://datasheets.raspberrypi.com/rpi5/raspberry-pi-5-mechanical-drawing.pdf) |
-| Encoder | EC11, M7 collar, 6 mm D shaft | collar and flat estimated from the EC11 standard |
+| Encoder | EC11, M7 collar, 6 mm D shaft; its square pocket in the panel is 15 × 15 mm | pocket measured by Caleb; collar and flat estimated from the EC11 standard |
 | Factory brackets | 66201AE17A (left), 66201AE18A (right) | Subaru part listings ([left](https://www.subarupartsdeal.com/parts/subaru-bracket-radio~66201ae17a.html), [right](https://www.subarupartsdeal.com/parts/subaru-bracket-radio~66201ae18a.html)); pictures only, no dimensions |
 | Bracket screws | M5 × 16 (Subaru 045005160 up to 2004, Q500025 from 2005) | estimated from Subaru's part-number pattern |
 | Distance between the brackets | 180 mm | estimated (a common radio width); measure |

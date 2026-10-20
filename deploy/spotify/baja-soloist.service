@@ -11,6 +11,13 @@ StartLimitIntervalSec=0
 
 [Service]
 EnvironmentFile=%h/.config/baja-os/soloist.env
+# Start only once the Pi is online and, if it can be had within 30 s, has
+# the right time (it has no clock battery). Soloist restores the saved
+# sign-in once, at startup; at boot that's before Wi-Fi is up, the attempt
+# fails, it never retries, and the phone hangs on "Connecting to Baja". In
+# the truck this waits for the phone's hotspot, however long that takes.
+ExecStartPre=/bin/sh -c 'until getent hosts apresolve.spotify.com >/dev/null; do sleep 3; done; i=0; until [ "$$(timedatectl show -p NTPSynchronized --value)" = yes ] || [ $$i -ge 30 ]; do sleep 1; i=$$((i + 1)); done'
+TimeoutStartSec=infinity
 # The API key is a flag (Soloist has no env var for it), so it's visible in
 # `ps` on this single-user Pi; it's never written to the repo or logs.
 ExecStart=/bin/sh -c 'exec "%h/.local/opt/soloist/soloist" -n "$${SOLOIST_NAME:-Baja}" -k "$SOLOIST_KEY" -D "%h/.local/share/soloist" -C "%h/.cache/soloist" -z 500 -w 127.0.0.1:47240'

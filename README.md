@@ -40,6 +40,8 @@ engine numbers are the simulation (the **DEMO DATA** badge in the status bar).
 - EC11 rotary encoder with push switch: the volume knob
 - OBDLink EX on the OBD-II port (USB)
 - u-blox 8 GPS receiver (USB)
+- Car power (planned): a 12 V off-delay relay, a 12→5 V 5 A USB-C converter
+  and a PC817 optocoupler module on the key wire (below)
 - A printed dash panel in place of the factory radio (below)
 
 ## Dash case
@@ -77,6 +79,7 @@ backend/phone.py     "Send to Baja": a destination from the phone
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
 backend/system.py    temperature, fan, power warnings, restart and power
+backend/ignition.py  key-off shutdown: watches the key, powers off cleanly (its own service)
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
 qml/Main.qml         window: nav rail + status bar + pages
 qml/pages/           Home, Music, Maps, Gauges, Truck, Settings
@@ -85,6 +88,7 @@ qml/assets/truck/    the Truck page's 3D model
 web/map/             the map page: MapLibre GL JS + PMTiles, three.js for the 3D truck (vendored)
 deploy/              Pi setup, service, audio, Spotify and map installers
 hardware/case/       the printed dash case: model, print files, drawings
+tests/               tests that run on the Mac (python3 -m unittest discover tests)
 tools/               scripts that build the 3D truck models and the map's sign icons
 ```
 
@@ -184,6 +188,95 @@ parked.
 The sound board's 3.5 mm jack goes to the amp's **Audio input 1**: the
 plug's tip to `INL`, ring to `INR` and sleeve to `GND`. Set the channel
 switch so input 1 plays on all four speakers. Leave the factory FM antenna lead unplugged and taped.
+
+### Car power and key-off shutdown
+
+Planned: the parts aren't bought yet. The Pi runs off the truck's always-on
+12 V through an off-delay relay, which switches on with the key and holds
+for about a minute after the key goes off. That minute is the Pi's time to
+shut down properly. The amp doesn't go through the relay: its REM wire
+already turns it off with the key (above).
+
+| Wire or terminal | Goes to |
+|---|---|
+| Yellow (always on), through a 5 A inline fuse | Relay module's 12 V + and its switch's COM |
+| Red (on with the key) | Relay module's trigger, and the opto module's input + |
+| Black (ground) | Relay module's −, the converter's − and the opto module's input − |
+| Relay switch NO | The converter's 12 V + |
+| The converter's USB-C | The Pi's power socket |
+
+Set the relay to hold for about 60 s after the trigger goes off. Terminal
+names vary between modules, so go by its labels.
+
+The optocoupler module tells the Pi whether the key is on, with the truck's
+12 V kept off the Pi:
+
+| Opto module | Goes to |
+|---|---|
+| Input + | Red (on with the key) |
+| Input − | Black (ground) |
+| Output (OUT) | Pi pin 29 (GPIO5) |
+| Output ground (GND) | Pi pin 30 (ground) |
+| Output VCC, if it has one | Pi pin 17 (3.3 V), never 5 V |
+
+Get a module made for a 12 V input: one made for 3.3-5 V signals burns out
+on the truck's 14 V. Pins 29 and 30 are next to the knob's, clear of the
+sound board (which uses GPIO 2, 3, 6 and 18-21).
+
+`backend/ignition.py` runs as its own service, `baja-ignition`, which
+`setup-pi.sh` sets up. Once the key has stayed off for 5 s it shuts the Pi
+down normally; shorter drops, like the one while the engine cranks, are
+ignored. It does nothing until it has seen the key on, so a Pi on the bench
+with nothing wired never shuts itself down. The pin, which way round the
+module's output is (`KEY_ON_HIGH`) and the delay are at the top of that
+file; keep the delay under about 30 s so the shutdown finishes before the
+relay lets go.
+
+Check the wiring before relying on it, from `~/baja-OS` on the Pi:
+
+```bash
+sudo systemctl stop baja-ignition
+python3 -m backend.ignition --dry-run    # turn the key on and off; Ctrl-C to quit
+sudo systemctl start baja-ignition
+```
+
+Turning the key should print "Key on" and "Key off". If they're the wrong
+way round, set `KEY_ON_HIGH = False` and `sudo systemctl restart
+baja-ignition`. `journalctl -u baja-ignition` shows what it saw on earlier
+drives.
+
+If the key comes back on while the Pi is shutting down, the Pi stays off:
+turn the key off until the relay clicks off (about a minute), or press the
+Pi's power button.
+
+#### Bootloader settings for the converter
+
+The converter gives a steady 5 V but doesn't speak USB PD (power delivery),
+so the Pi can't tell it's a 5 A supply. It then shares only 600 mA between
+its USB ports (the screen's USB lead, the GPS and the OBD adapter) and may
+warn about the power supply. Two settings in the Pi's bootloader (its
+EEPROM, not `config.txt`) sort this out:
+
+- `PSU_MAX_CURRENT=5000`: skip the USB PD check and treat the supply as
+  5 A, so the USB ports get 1.6 A. Only with a supply that really gives
+  5 A. It replaces `usb_max_current_enable=1` in `config.txt`.
+- `POWER_OFF_ON_HALT=1`: once shut down, the Pi switches its power chip
+  fully off and draws about 0.01 W instead of 1-1.4 W. The relay cuts the
+  power a minute later anyway; this keeps the drain tiny when it doesn't
+  (the key back on during a shutdown, or a stuck relay).
+
+On the Pi:
+
+```bash
+sudo rpi-eeprom-config --edit
+```
+
+It opens the bootloader settings in an editor. Make the two lines read
+`PSU_MAX_CURRENT=5000` and `POWER_OFF_ON_HALT=1` (change them if they're
+there, otherwise add them at the end), save and quit (in nano: Ctrl-O,
+Enter, Ctrl-X), then `sudo reboot`. Afterwards `rpi-eeprom-config` lists
+both, and Settings > System shouldn't show a power warning with everything
+running.
 
 ## Engine data (OBD-II)
 
@@ -298,7 +391,8 @@ python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
 
 `setup-pi.sh` installs the packages, turns on the sound board, makes Wi-Fi
 keep retrying at boot (power saving off), hides the rainbow screen, kernel
-text, logos and console login, installs the Baja OS boot screen, and installs
+text, logos and console login, installs the Baja OS boot screen, sets up the
+key-off shutdown (`baja-ignition`, above), and installs
 `baja-os.service`, which takes the display straight from the boot screen so
 the truck stays up until the dashboard appears. It also lets your user
 restart that one service without a password:

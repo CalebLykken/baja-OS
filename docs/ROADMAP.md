@@ -274,8 +274,9 @@ off by default, at the owner's request.
 
 ## Hardware track
 
-All 12 V signals into the RP2040 (ignition, dimmer, speed sensor, reverse) go through opto-isolators. Relay coils are driven by a
-transistor with a flyback diode.
+All 12 V signals into the RP2040 (dimmer, speed sensor, reverse) go through
+opto-isolators, as the key sense into the Pi does (H4). Relay coils are
+driven by a transistor with a flyback diode.
 
 - **H1. Audio:**
   - DAC HAT as the default output.
@@ -299,14 +300,33 @@ transistor with a flyback diode.
   - The OBDLink EX replaces the simulated data and GPS speed.
   - Stop OBD polling before shutdown so the adapter sleeps.
   - Later, the speed/tach tap through the RP2040.
-- **H4. Car power:**
-  - Wide-input 12 V→5 V 5 A converter with transient protection, plus
-    `usb_max_current_enable=1`.
-  - Ignition sense with debounce, so cranking (when the accessory feed drops)
-    doesn't trigger a shutdown.
-  - Clean shutdown on key-off, then **cut all 12 V power** to the Pi, amp,
-    RP2040, LED ring and OBD adapter. Set `POWER_OFF_ON_HALT=1`.
-  - Target: measured key-off drain in single-digit mA.
+- **H4. Car power and safe shutdown** (replanned 2026-10-20: the CarPiHAT
+  PRO 5 power board is no longer sold, so it's built from screw-terminal
+  modules; wiring in the README, under Wiring):
+  - **Relay:** a 12 V off-delay relay feeds the Pi's converter from the
+    always-on wire (harness yellow, 5 A fuse) while the key is on (harness
+    red), and holds about 60 s after key-off.
+  - **Converter:** 12 V→5 V 5 A with USB-C, with transient protection. It
+    doesn't do USB PD, so the bootloader is told it's a 5 A supply:
+    `PSU_MAX_CURRENT=5000` (USB gets 1.6 A, not 600 mA; replaces
+    `usb_max_current_enable=1`). Plus `POWER_OFF_ON_HALT=1`, so a shut-down
+    Pi draws about 0.01 W, not 1-1.4 W.
+  - **Key sense:** a PC817 optocoupler module (12 V input) on the accessory
+    wire, into GPIO5 (pin 29). `backend/ignition.py`, its own service,
+    ignores drops under 5 s (cranking drops the accessory feed) and then
+    runs a clean `systemctl poweroff`, well inside the relay's minute. It
+    acts only after seeing the key on, so a bench Pi never shuts itself
+    down. Done in software and tested off the Pi; waiting on the modules.
+  - **Amp:** stays on the harness (yellow to 12 V through its own fuse, red
+    to REM), so it switches off with the key by itself. The OBD adapter
+    sleeps by itself once polling stops (H3).
+  - Known limit: if the key comes back on during a shutdown, the Pi stays
+    off until the relay drops out (key off for a minute) or its power
+    button is pressed.
+  - Bench test on a fused 12 V supply: key-off shutdown, a 2-3 s drop like
+    cranking, and the key back on mid-shutdown.
+  - Target: measured key-off drain in single-digit mA (mostly the relay
+    module's standby current: check it).
   - Check the clock and chimes still work with the radio unplugged.
 - **H5. Mount and enclosure:**
   - Print in ASA, not PETG, for anything in the sun; metal hinge hardware and
@@ -401,3 +421,8 @@ parked/moving lockouts; the Pi goes in a cooler spot with its active cooler.
   parking-brake input at your request; calls stay on the phone (no microphone
   or hands-free calling); Pi placement is flexible since it has an active
   cooler.
+- **Power, replanned (2026-10-20):** the CarPiHAT PRO 5 is no longer sold,
+  so H4 uses screw-terminal modules: an off-delay relay for the Pi only (the
+  amp keeps its own REM switching), a non-PD 5 V 5 A converter with
+  `PSU_MAX_CURRENT=5000`, and the key sensed by the Pi through an
+  optocoupler instead of by the RP2040.

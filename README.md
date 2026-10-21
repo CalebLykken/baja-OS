@@ -1,39 +1,79 @@
 # Baja OS
 
-Touchscreen dashboard for a Raspberry Pi carputer in a 2005 Subaru Baja Turbo.
-Python + PyQt6 backend, QML front end. Music comes from Spotify (the official
-Soloist player), a phone over Bluetooth, or files on the Pi; the map is
-OpenStreetMap stored on the Pi, so it works with no signal. Vehicle data is
-simulated for now (the **DEMO DATA** badge in the status bar) until the OBD-II
-adapter is wired in. The plan is in [docs/ROADMAP.md](docs/ROADMAP.md) and the
-look in [docs/DESIGN.md](docs/DESIGN.md).
+Touchscreen dashboard for a Raspberry Pi 5 carputer in a 2005 Subaru Baja
+Turbo. Python + PyQt6 backend, QML front end. It plays music from Spotify (the
+official Soloist player), a phone over Bluetooth, or albums stored on the Pi;
+navigates on an OpenStreetMap map stored on the Pi, so directions work with no
+signal; and shows live engine data from the OBD-II port. The plan is in
+[docs/ROADMAP.md](docs/ROADMAP.md) and the look in [docs/DESIGN.md](docs/DESIGN.md).
 
-![Home](docs/home.png)
-
-| Music | Gauges |
+| By day | After sunset |
 |---|---|
-| ![Music](docs/music.png) | ![Gauges](docs/gauges.png) |
+| ![Directions on the map by day](docs/screens/nav-day.jpg) | ![Directions on the map at night](docs/screens/nav-night.jpg) |
+
+The truck on the map is a 3D model that leans and steers through turns. While
+you're following a route, the map shows the traffic lights and stop signs
+ahead, the speed limit and the next turn. It's light by day and dark after
+sunset, like the rest of the dashboard.
+
+## Screens
+
+| Home | Home while navigating |
+|---|---|
+| ![Home](docs/screens/home.jpg) | ![Home with the next turn](docs/screens/home-nav.jpg) |
+| **Music** | **An album on the Pi** |
+| ![Music](docs/screens/music.jpg) | ![An album](docs/screens/music-album.jpg) |
+| **Spotify, played recently** | **Gauges** |
+| ![Spotify recents](docs/screens/music-spotify.jpg) | ![Gauges](docs/screens/gauges.jpg) |
+| **Truck** (drag to spin the 3D model) | **Settings** |
+| ![Truck](docs/screens/truck.jpg) | ![Settings](docs/screens/settings.jpg) |
+
+These were captured on the Pi's own screen with the engine off, so the
+engine numbers are the simulation (the **DEMO DATA** badge in the status bar).
 
 ## Hardware
 
-- Waveshare 8" HDMI capacitive touch, 1280x800, landscape
 - Raspberry Pi 5, 8 GB (Raspberry Pi OS Lite 13 "trixie", 64-bit, console only)
+- Waveshare 8" HDMI capacitive touch screen, 1280x800, landscape
+- InnoMaker HiFi DAC HAT (PCM5122) on the Pi: the "Sound board"
+- TDA7850 4-channel amp board (XH-M180) driving the truck's six speakers
+- EC11 rotary encoder with push switch: the volume knob
+- OBDLink EX on the OBD-II port (USB)
+- u-blox 8 GPS receiver (USB)
+- A printed dash panel in place of the factory radio (below)
+
+## Dash case
+
+| The panel, screen side | The back, with the Pi case |
+|---|---|
+| ![The dash panel from the front](hardware/case/images/assembly-front.png) | ![The dash panel from the back](hardware/case/images/assembly-back.png) |
+
+A printed panel replaces the factory radio in the center stack: the screen
+bolts onto its front, the knob sits below the screen on the driver's side, and
+the Pi rides in a case on its back, with the amp on a plate behind it. The print files, the Fusion model and
+dimensioned drawings are in [hardware/case](hardware/case/README.md). It's a
+test-fit version; some sizes are still estimates.
 
 ## Layout
 
 ```
 main.py              entry point; hands the backends to QML
-run.sh               Pi launcher (EGLFS, falls back to linuxfb)
-backend/vehicle.py   simulated drive: rpm, speed, boost, coolant, intake, volts, gear
+run.sh               Pi launcher: waits for the screen, EGLFS (GPU), falls back to linuxfb
+backend/vehicle.py   engine data from the car, or a simulated drive without it
+backend/obd.py       reads the car through the OBDLink EX (ELM327 commands), read-only
 backend/hub.py       one `media` object over local files, the phone and Spotify
-backend/library.py   plays real files from --music-dir (default ~/Music)
+backend/library.py   albums and songs in --music-dir (default ~/Music)
+backend/gapless.py   gapless playback of those files, on its own audio thread
 backend/bluetooth.py phone audio over Bluetooth (BlueZ, AVRCP)
 backend/spotify.py   Spotify Connect through Soloist's local API
+backend/knob.py      the volume knob (EC11 on the GPIO header, libgpiod)
 backend/maps.py      local web server for the offline map, and place search
 backend/places.py    builds and searches the offline place index
-backend/gps.py       position from gpsd, or a simulated drive in demo mode
+backend/gps.py       position from the USB receiver (directly or through gpsd), or a simulated drive
 backend/routing.py   turn-by-turn directions from the local Valhalla service
+backend/roadinfo.py  the speed limit and name of the road the truck is on
 backend/voice.py     spoken directions with Piper, music dipping underneath
+backend/phone.py     "Send to Baja": a destination from the phone
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
 backend/system.py    temperature, fan, power warnings, restart and power
@@ -41,12 +81,15 @@ backend/display.py   screen brightness over DDC/CI (software dim fallback)
 qml/Main.qml         window: nav rail + status bar + pages
 qml/pages/           Home, Music, Maps, Gauges, Truck, Settings
 qml/components/      Theme, Card, Gauge, NowPlaying, Readout, ...
-web/map/             the map page: MapLibre GL JS + PMTiles (vendored)
-deploy/              Pi setup, service, Spotify and map installers
+qml/assets/truck/    the Truck page's 3D model
+web/map/             the map page: MapLibre GL JS + PMTiles, three.js for the 3D truck (vendored)
+deploy/              Pi setup, service, audio, Spotify and map installers
+hardware/case/       the printed dash case: model, print files, drawings
+tools/               scripts that build the 3D truck models and the map's sign icons
 ```
 
-The UI uses only QtQuick and QtQuick.Layouts (no Controls or Shapes) to keep
-the Pi's dependency list small.
+The UI is QtQuick and QtQuick.Layouts (no Controls or Shapes), with Quick3D
+for the Truck page and WebEngine for the map.
 
 ## Run on a Mac
 
@@ -58,31 +101,130 @@ python3 -m venv .venv
 
 ## Run on the Pi
 
-PySide6 isn't packaged for the 32-bit Pi, so install PyQt6 from apt:
-
-```bash
-sudo apt install python3-pyqt6.qtmultimedia python3-mutagen python3-pyqt6 python3-pyqt6.qtqml python3-pyqt6.qtquick qml6-module-qtquick qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
-```
-
-Then from the console (not over a desktop session):
-
 ```bash
 git clone https://github.com/CalebLykken/baja-OS.git
 cd baja-OS
-./run.sh
+./deploy/setup-pi.sh          # packages, sound board, boot screen, service; reboot afterwards
 ```
 
-`run.sh` tries `QT_QPA_PLATFORM=eglfs` and falls back to `linuxfb`. Set
-`QT_QPA_PLATFORM` yourself to force one. Over SSH the app still draws on the
-HDMI panel; press Ctrl-C in the SSH session to quit. Your user needs to be in
-the `video`, `render` and `input` groups for the display and touch to work.
+After the reboot the dashboard starts by itself. To run it by hand instead,
+stop the service and run `./run.sh` from the console (not over a desktop
+session). Over SSH the app still draws on the HDMI screen; press Ctrl-C in the
+SSH session to quit. Your user needs to be in the `video`, `render` and `input`
+groups for the display and touch to work.
 
-## Music
+`run.sh` waits up to 30 s for a connected screen, then starts on the GPU
+(EGLFS). If there's no screen, it falls back to the plain framebuffer
+(`linuxfb`), which has no map. As soon as a screen is plugged in, it restarts
+on the GPU by itself. Set `QT_QPA_PLATFORM` yourself to force one.
 
-Put audio files (mp3, m4a, flac, ogg, wav) in `~/Music` on the Pi, or pass
-`--music-dir`. Title, artist and embedded cover art come from the file tags.
-With no files there, the Music page plays the demo playlist. Audio goes to the
-default PipeWire output (the Pi's 3.5 mm jack).
+## Sound
+
+The sound board (the DAC HAT) is the output for everything: Spotify, the
+phone and the Pi's own music. `setup-pi.sh` turns it on (the
+`allo-boss-dac-pcm512x-audio` overlay) and makes it the default output.
+Settings > Sound > Loudest volume caps every source: keep it low for
+headphones, and at 100% with the amp.
+
+Put albums in `~/Music` on the Pi (mp3, m4a, flac, ogg, wav). The Music page
+lists them under Albums, with title, artist and cover art from the tags.
+Songs play back to back with no gap, so albums whose songs run into each
+other sound as they should. With no files there, it plays a demo playlist.
+
+## Wiring
+
+### The knob
+
+Turning it changes the volume; pressing it plays or pauses. It goes on the
+pin header at the USB end, clear of the sound board's pins:
+
+| Knob | Pi pin |
+|---|---|
+| Outer leg | 32 (GPIO12) |
+| Middle leg | 34 (ground) |
+| Other outer leg | 36 (GPIO16) |
+| Push switch | 37 (GPIO26) |
+| Push switch | 39 (ground) |
+
+The pins are only read (with the Pi's pull-ups), so a misplaced wire can't
+harm anything. If it turns the wrong way, swap the two outer legs or flip
+`FLIP` in `backend/knob.py`.
+
+### The amp
+
+The factory radio's plug, through an aftermarket radio harness (standard wire
+colours). The six speakers are on four channels: each front tweeter shares
+its side's front channel through the factory crossover, as it did with the
+factory radio.
+
+| Amp power terminal | Harness wire |
+|---|---|
+| REM | Red (on with the key) |
+| 12V | Yellow (always on), through a 10 A inline fuse |
+| GND | Black |
+
+REM turns the amp on with the key, so it doesn't drain the battery when
+parked.
+
+| Amp speaker terminal, left to right | Harness wire |
+|---|---|
+| R1 − | Gray with black stripe (front right −) |
+| R1 + | Gray (front right +) |
+| L1 − | White with black stripe (front left −) |
+| L1 + | White (front left +) |
+| R2 + | Purple (rear right +) |
+| R2 − | Purple with black stripe (rear right −) |
+| L2 + | Green (rear left +) |
+| L2 − | Green with black stripe (rear left −) |
+
+> [!WARNING]
+> The amp's outputs are bridged: never connect a speaker − wire to ground or
+> to another − wire. Note the order flips halfway along the terminal block.
+
+The sound board's 3.5 mm jack goes to the amp's **Audio input 1**: the
+plug's tip to `INL`, ring to `INR` and sleeve to `GND`. Set the channel
+switch so input 1 plays on all four speakers. Leave the factory FM antenna lead unplugged and taped.
+
+## Engine data (OBD-II)
+
+`backend/obd.py` reads the car through the OBDLink EX. The 2005 Baja speaks
+ISO 14230-4 (KWP, over the K-line). Every round it reads RPM, manifold
+pressure (for boost) and speed, plus one of coolant temperature, intake air
+temperature and battery voltage, up to 10 updates a second. Boost is measured
+against the outside air pressure read at key-on.
+
+It only reads: it never clears codes or sends anything that writes. With the
+key off it checks every few seconds, then every 20 s after a minute, so the
+adapter can sleep. While the car isn't answering, the gauges run a simulated
+drive and the status bar shows **DEMO DATA**.
+
+## GPS
+
+The u-blox receiver is read straight from its USB serial port (NMEA), or
+through gpsd if gpsd is running. Settings > Map > GPS shows how many
+satellites it can see, and when it has found your position. Until it has a
+position, the map follows a simulated drive around Seattle.
+
+It needs a view of the sky: put it on top of the dash, under the windshield,
+on a USB extension cable. Keep it away from the Pi and the screen, which give
+off radio noise at GPS frequencies. Behind the dash, it won't find
+satellites.
+
+## Spotify
+
+The Pi is a Spotify Connect speaker called **Baja**, through Soloist,
+Spotify's official headless player (needs Premium):
+
+```bash
+./deploy/spotify/set-spotify-key.sh   # paste your key from developer.spotify.com/dashboard/soloist
+./deploy/spotify/install-soloist.sh   # the player, its service, and a daily updater
+```
+
+The first time, with your phone on the same Wi-Fi as the Pi, open Spotify,
+tap the devices button on Now Playing, and pick **Baja**. The Pi remembers
+the sign-in. It starts Spotify once it's online, so in the truck it connects
+when the phone's hotspot comes up. The Music page's Spotify tab lists what's
+been played on the Pi recently, for one-tap replay.
 
 ## Equalizer
 
@@ -133,8 +275,9 @@ Search takes places, businesses, street addresses ("400 Broad St") and one-tap
 categories (gas, food, coffee, parking, EV charging, groceries). Pick a place
 and the route is worked out straight away; tap Go for turn-by-turn directions
 (spoken directions are off until turned on). The map fills the screen beside
-the rail, is light by day and dark at night, draws traffic lights and stop
-signs, shows the speed limit, and also runs small on the Home screen.
+the rail and also runs small on the Home screen. The 3D truck and the sign
+icons are built by the scripts in `tools/` (see `tools/sign-icons/` for the
+icons' sources and licences).
 
 To send a place from the iPhone, scan the QR code in Settings > Map: it opens a
 page on the Pi with a paste box and the steps for a "Send to Baja" Share-sheet
@@ -153,11 +296,12 @@ python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
 ./deploy/quiet-boot-undo.sh   # puts the original boot screen and console back
 ```
 
-`setup-pi.sh` makes Wi-Fi keep retrying at boot (power saving off), hides the
-rainbow screen, kernel text, logos and console login, installs the Baja OS
-boot screen, and installs `baja-os.service`, which takes the display straight
-from the boot screen so the truck stays up until the dashboard appears. It
-also lets your user restart that one service without a password:
+`setup-pi.sh` installs the packages, turns on the sound board, makes Wi-Fi
+keep retrying at boot (power saving off), hides the rainbow screen, kernel
+text, logos and console login, installs the Baja OS boot screen, and installs
+`baja-os.service`, which takes the display straight from the boot screen so
+the truck stays up until the dashboard appears. It also lets your user
+restart that one service without a password:
 
 ```bash
 sudo systemctl restart baja-os

@@ -8,7 +8,8 @@
 #     and the dashboard may join networks (the phone's hotspot), use the phone
 #     over Bluetooth as a backup, and reboot or shut down the Pi (polkit)
 #   - The equalizer in front of the speakers (a user PipeWire filter)
-#   - gpsd for the GPS receiver (GT-U7, u-blox 7 over USB), always reading
+#   - gpsd for the GPS receiver (a u-blox on USB), always reading
+#   - libgpiod's Python bindings, for the volume knob on the pin header
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
 #   - Baja OS as a system service started at boot
@@ -34,7 +35,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     qml6-module-qtquick3d qml6-module-qtquick3d-assetutils qt6-quick3d-assetimporters-plugin \
     bluez bluez-tools libspa-0.2-bluetooth \
     python3-pyqt6.qtwebengine qml6-module-qtwebengine python3-pyqt6.qtwebsockets \
-    gpsd gpsd-clients
+    gpsd gpsd-clients python3-libgpiod
 # The user's PipeWire session (audio) runs at boot without anyone logging in,
 # with the PulseAudio-compatible socket that Qt Multimedia plays through.
 loginctl enable-linger "$USER_NAME"

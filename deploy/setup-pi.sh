@@ -10,7 +10,6 @@
 #   - The equalizer in front of the speakers (a user PipeWire filter)
 #   - gpsd for the GPS receiver (a u-blox on USB), always reading
 #   - libgpiod's Python bindings, for the volume knob on the pin header
-#   - Key-off shutdown: a service that powers off cleanly after key-off
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
 #   - Baja OS as a system service started at boot
@@ -142,14 +141,13 @@ RebootWatchdogSec=2min
 CONF
 systemctl daemon-reexec                    # pick up the new manager settings
 
-echo "== Key-off shutdown"
-# Watches the key on GPIO5 and powers off cleanly once it has stayed off
-# (backend/ignition.py). Harmless with nothing wired: a bare pin reads as
-# key on, and it never acts before it has seen the key on.
-sed "s|@APP@|$APP|g" "$HERE/power/baja-ignition.service" > /etc/systemd/system/baja-ignition.service
-systemctl daemon-reload
-systemctl enable baja-ignition.service
-systemctl restart baja-ignition.service
+# Key-off shutdown now runs in the dashboard (backend/ignition.py, through
+# the OBD adapter); take out the old GPIO service if an earlier run added it.
+if [ -f /etc/systemd/system/baja-ignition.service ]; then
+    systemctl disable --now baja-ignition.service 2>/dev/null || true
+    rm -f /etc/systemd/system/baja-ignition.service
+    systemctl daemon-reload
+fi
 
 echo "== Baja OS service"
 sed -e "s|@USER@|$USER_NAME|g" -e "s|@UID@|$USER_ID|g" -e "s|@APP@|$APP|g" \

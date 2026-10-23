@@ -28,6 +28,7 @@ from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.eq import Equalizer
 from backend.gps import Gps
+from backend.ignition import KeyOff
 from backend.roadinfo import RoadInfo
 from backend.routing import Router
 from backend.voice import Voice
@@ -143,6 +144,9 @@ def main():
     road = RoadInfo(gps)
     voice = Voice(settings)
     routing.speak.connect(voice.say)
+    # Shut down cleanly once the truck is turned off (the car stops
+    # answering the OBD adapter), inside the power relay's hold time.
+    key_off = KeyOff(obd, gps, settings, power_off=system.powerOff)
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
@@ -156,6 +160,7 @@ def main():
     ctx.setContextProperty("eq", eq)
     ctx.setContextProperty("wifi", wifi)
     ctx.setContextProperty("system", system)
+    ctx.setContextProperty("keyOff", key_off)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
     ctx.setContextProperty("road", road)
@@ -189,13 +194,14 @@ def main():
     network.start()
     knob.start()
     obd.start()
+    key_off.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

@@ -225,6 +225,56 @@ Window {
         opacity: (1 - display.brightness / 100) * 0.85
     }
 
+    // The truck was turned off: the Pi shuts down at the end of the
+    // countdown (backend/ignition.py) unless "Keep on" is tapped.
+    Rectangle {
+        id: keyOffPrompt
+        readonly property int secondsLeft: typeof keyOff === "undefined" ? -1 : keyOff.countdown
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.6)
+        opacity: secondsLeft >= 0 ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+
+        Card {
+            anchors.centerIn: parent
+            width: 720
+            height: promptColumn.implicitHeight + 64
+            ColumnLayout {
+                id: promptColumn
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
+                spacing: 12
+                Label {
+                    text: "The truck is off"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
+                }
+                RowLayout {
+                    Layout.topMargin: 12
+                    spacing: 14
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "Keep on"; primary: true
+                        onClicked: keyOff.keepOn()
+                    }
+                    TextButton {
+                        Layout.preferredHeight: Theme.touch
+                        icon: "power"; text: "Shut down now"; danger: true
+                        onClicked: system.powerOff()
+                    }
+                }
+            }
+        }
+    }
+
     // Startup animation, on top of everything until it fades out.
     Splash {
         anchors.fill: parent

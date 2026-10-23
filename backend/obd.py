@@ -111,9 +111,12 @@ def convert(pid, d, baro):
 
 class ObdReader(QObject):
     """Feeds VehicleData. `reading` carries a dict of fresh values; `lost`
-    says the car stopped answering (key off, unplugged)."""
+    says the readings stopped (key off, unplugged). `quiet` says the car
+    itself stopped answering with the adapter still there: the key going
+    off (backend/ignition.py)."""
     reading = pyqtSignal(dict)
     lost = pyqtSignal()
+    quiet = pyqtSignal()
 
     def start(self):
         threading.Thread(target=self._run, name="obd", daemon=True).start()
@@ -182,5 +185,6 @@ class ObdReader(QObject):
                 time.sleep(max(0.0, ROUND_MIN_S - (time.monotonic() - started)))
             self._since = time.monotonic()
             print("OBD: the car stopped answering", flush=True)
+            safe_emit(self, "quiet")
         finally:
             elm.close()

@@ -732,6 +732,19 @@ Item {
                     visible: !system.canPower
                     text: "To reboot or shut down from here, run deploy/setup-pi.sh once on the Pi."
                 }
+                SettingRow {
+                    label: "Shut down with key"
+                    SegmentedControl {
+                        options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                        current: keyOff.enabled
+                        onPicked: (v) => keyOff.setEnabled(v)
+                    }
+                }
+                Note {
+                    text: keyOff.enabled
+                          ? "When the truck is turned off (it stops answering the OBD adapter), the Pi counts down 25 s and shuts down, inside the power relay's hold time. Keep on stops it."
+                          : "Turn this on once the Pi runs through the power relay. On any other power, a shut-down Pi stays off until it's unplugged and plugged back in."
+                }
             }
 
             Section {

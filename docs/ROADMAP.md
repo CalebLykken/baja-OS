@@ -275,8 +275,7 @@ off by default, at the owner's request.
 ## Hardware track
 
 All 12 V signals into the RP2040 (dimmer, speed sensor, reverse) go through
-opto-isolators, as the key sense into the Pi does (H4). Relay coils are
-driven by a transistor with a flyback diode.
+opto-isolators. Relay coils are driven by a transistor with a flyback diode.
 
 - **H1. Audio:**
   - DAC HAT as the default output.
@@ -303,25 +302,29 @@ driven by a transistor with a flyback diode.
 - **H4. Car power and safe shutdown** (replanned 2026-10-20: the CarPiHAT
   PRO 5 power board is no longer sold, so it's built from screw-terminal
   modules; wiring in the README, under Wiring):
-  - **Relay:** a 12 V off-delay relay feeds the Pi's converter from the
-    always-on wire (harness yellow, 5 A fuse) while the key is on (harness
-    red), and holds about 60 s after key-off.
+  - **Relay:** a 12 V off-delay relay feeds the Pi's converter from an
+    always-on feed (a fuse tap on an always-on fuse, or harness yellow; 5 A
+    fuse) while the key is on (the cigarette lighter's wire, tapped), and
+    holds about 2 minutes after key-off. The Pi is off the amp's circuit.
   - **Converter:** 12 V→5 V 5 A with USB-C, with transient protection. It
     doesn't do USB PD, so the bootloader is told it's a 5 A supply:
     `PSU_MAX_CURRENT=5000` (USB gets 1.6 A, not 600 mA; replaces
     `usb_max_current_enable=1`). Plus `POWER_OFF_ON_HALT=1`, so a shut-down
     Pi draws about 0.01 W, not 1-1.4 W.
-  - **Key sense:** a PC817 optocoupler module (12 V input) on the accessory
-    wire, into GPIO5 (pin 29). `backend/ignition.py`, its own service,
-    ignores drops under 5 s (cranking drops the accessory feed) and then
-    runs a clean `systemctl poweroff`, well inside the relay's minute. It
-    acts only after seeing the key on, so a bench Pi never shuts itself
-    down. Done in software and tested off the Pi; waiting on the modules.
+  - **Key sense (replanned 2026-10-22):** no module: the OBD adapter. The
+    engine computer goes quiet when the key goes off; after 15 s of quiet
+    the dashboard counts down 10 s with Keep on, then runs `systemctl
+    poweroff` (`backend/ignition.py`, in the dashboard, which owns the
+    adapter). Not before the car has answered once, not when the adapter
+    is unplugged, not while moving (the car's last speed or the GPS). Off
+    until turned on in Settings > System. Limit: ACC looks like off (the
+    ECU is off at ACC); Keep on covers it. Done and tested on the Pi's
+    screen without powering off; waiting on the relay.
   - **Amp:** stays on the harness (yellow to 12 V through its own fuse, red
     to REM), so it switches off with the key by itself. The OBD adapter
     sleeps by itself once polling stops (H3).
   - Known limit: if the key comes back on during a shutdown, the Pi stays
-    off until the relay drops out (key off for a minute) or its power
+    off until the relay drops out (key off for its hold time) or its power
     button is pressed.
   - Bench test on a fused 12 V supply: key-off shutdown, a 2-3 s drop like
     cranking, and the key back on mid-shutdown.
@@ -426,3 +429,7 @@ parked/moving lockouts; the Pi goes in a cooler spot with its active cooler.
   amp keeps its own REM switching), a non-PD 5 V 5 A converter with
   `PSU_MAX_CURRENT=5000`, and the key sensed by the Pi through an
   optocoupler instead of by the RP2040.
+- **Key sense, replanned (2026-10-22):** no optocoupler: the Pi learns the
+  key is off from the car going quiet on the OBD adapter, and powers the Pi
+  from its own feeds (the lighter wire for the key, an always-on fuse tap),
+  so the amp keeps the radio harness to itself.

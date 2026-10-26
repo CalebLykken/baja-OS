@@ -241,7 +241,7 @@ class Router(QObject):
         self._off_count = 0
         self._spoken = set()
         self._route.locate(self._gps.lon, self._gps.lat)
-        if reroute and self._started:
+        if reroute and self._started and not self._gps.stale:
             self._begin("Rerouting. ")
         self.changed.emit()
         self.progressChanged.emit()
@@ -316,6 +316,14 @@ class Router(QObject):
     def _on_fix(self):
         r = self._route
         if not r or not self._started or not self._gps.hasFix:
+            return
+        if self._gps.stale:
+            # The receiver's last position, held while it has no sky (a
+            # tunnel, a garage): nothing new to follow, so no reroute and
+            # nothing said until it's back.
+            if self._off_count:
+                self._off_count = 0
+                self.progressChanged.emit()
             return
         r.locate(self._gps.lon, self._gps.lat)
         if r.remaining < ARRIVED_M and not self._arrived:

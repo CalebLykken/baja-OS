@@ -628,6 +628,7 @@ Item {
                         font.pixelSize: Theme.fontBody
                         text: !parent.parent.has ? "Not available"
                               : gps.realFix ? "Position found" + (gps.satellites > 0 ? ", " + gps.satellites + " satellites" : "")
+                              : gps.stale && gps.receiverConnected ? "Lost the signal"
                               : gps.receiverConnected ? "Looking for satellites" + (gps.satellitesInView > 0 ? ": " + gps.satellitesInView + " in view" : "")
                               : "No receiver"
                     }
@@ -635,8 +636,10 @@ Item {
                 Note {
                     text: !parent.has ? ""
                           : gps.realFix ? "The map and directions follow the truck's real position."
-                          : gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two; until then the map follows a practice drive around Seattle."
-                          : "Plug the GPS receiver into a USB port. Until then the map follows a practice drive around Seattle."
+                          : gps.stale ? "The map holds the truck's last position, and directions wait, until the receiver has a position again."
+                          : (gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two."
+                                                   : "Plug the GPS receiver into a USB port.")
+                            + (gps.source === "demo" ? " Until then the map follows a practice drive around Seattle." : "")
                 }
             }
             Section {

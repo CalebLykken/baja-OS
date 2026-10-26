@@ -182,8 +182,8 @@ phone locked; the dashboard controls work; it comes back after a reboot.
   follow mode (tilted, heading-up, truck low on screen, zooming out with
   speed, shop labels hidden) starts with the first fix, stops when the map
   is touched and comes back with the follow key; a speed chip sits on the
-  map. In demo mode the truck drives a 20 km loop through Seattle
-  (backend/demo_route.json) until the GPS has a fix. gpsd is installed and
+  map. In demo mode (no GPS receiver and no engine data) the truck drives
+  a 20 km loop through Seattle (backend/demo_route.json). gpsd is installed and
   read by backend/gps.py; it needs the GT-U7 plugged in to be tested.
 - **Attribution:** "© OpenStreetMap contributors" on the map.
 - **Traffic overlay (optional):** TomTom flow tiles, only if TomTom approves in

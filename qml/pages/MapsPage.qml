@@ -730,6 +730,7 @@ Item {
                 Text { anchors.centerIn: parent; text: parent.parent.limit; font.pixelSize: 52; font.bold: true; color: "black" }
             }
             Sheet {                                       // speed now
+                visible: !gps.stale                       // not known while the signal is lost
                 width: 112
                 height: 108
                 color: parent.over ? page.cRed : page.cPanel

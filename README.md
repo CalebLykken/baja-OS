@@ -287,8 +287,10 @@ drive and the status bar shows **DEMO DATA**.
 
 The u-blox receiver is read straight from its USB serial port (NMEA), or
 through gpsd if gpsd is running. Settings > Map > GPS shows how many
-satellites it can see, and when it has found your position. Until it has a
-position, the map follows a simulated drive around Seattle.
+satellites it can see, and when it has found your position. If it loses the
+sky on the way (a tunnel, a garage), the map holds the last position and
+directions wait until it's back. With no receiver and no engine data (a Mac,
+or a Pi on the bench), the map follows a simulated drive around Seattle.
 
 It needs a view of the sky: put it on top of the dash, under the windshield,
 on a USB extension cable. Keep it away from the Pi and the screen, which give

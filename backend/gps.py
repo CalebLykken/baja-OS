@@ -4,9 +4,13 @@ or a simulated drive around Seattle in demo mode.
 The receiver (a u-blox on USB) is read through gpsd when gpsd is running
 (127.0.0.1:2947), else straight from its serial port: it reports in NMEA,
 the standard text sentences (RMC for position, speed and course; GGA and
-GSV for satellites). It switches to gpsd if that starts later. With no real
-fix and simulated vehicle data, the truck drives the loop in
-demo_route.json at the simulated speed, so the map has something to follow.
+GSV for satellites). It switches to gpsd if that starts later.
+
+When the receiver loses the sky (a tunnel, a garage), its last position is
+held and marked stale until it's back. The demo drive (the loop in
+demo_route.json at the simulated speed, so the map has something to
+follow) only runs while no receiver has been seen since start and the
+vehicle data is simulated: on a Mac, or a Pi on the bench.
 """
 
 import glob
@@ -132,6 +136,63 @@ class DemoRoute:
         return self.points[-1]
 
 
+class Position:
+    """Which position to show, without Qt: the receiver's while it's fresh,
+    its last one held (stale) once it stops, and the demo drive only while
+    no receiver has been seen and the car's data is simulated. Tests drive
+    it with a fake clock."""
+
+    def __init__(self, demo=False, stale_s=STALE_S):
+        self.demo = demo
+        self.stale_s = stale_s
+        self.fix = None                 # dict: lat, lon, speed (m/s), heading, source
+        self.real_at = None             # when the last real fix arrived
+        self.receiver_seen = False      # a receiver has talked since start
+        self.was_fresh = False          # what the last check found
+
+    def receiver(self):
+        """A receiver is talking, with or without a position: no more demo."""
+        self.receiver_seen = True
+        if self.fix and self.fix["source"] == "demo":
+            self.fix = None
+
+    def real(self, report, now):
+        self.receiver()
+        # Below walking pace the receiver's track is noise; keep the last.
+        if report["heading"] is None or report["speed"] < 1.0:
+            report["heading"] = self.fix["heading"] if self.fix else 0.0
+        self.fix = report
+        self.real_at = now
+        self.was_fresh = True
+
+    def simulated(self, report):
+        self.fix = report
+
+    def fresh(self, now):
+        return self.real_at is not None and now - self.real_at < self.stale_s
+
+    def stale(self, now):
+        """The receiver's last position is held: it hasn't had a new one lately."""
+        return self.real_at is not None and not self.fresh(now)
+
+    def demo_allowed(self, live):
+        """Whether the demo drive may run (`live`: the car's data is real)."""
+        return self.demo and not self.receiver_seen and not live
+
+    def check(self, now, live):
+        """Once a second: True when what's shown has changed (the fix went
+        stale, or the demo drive stopped)."""
+        changed = False
+        if self.fix and self.fix["source"] == "demo" and not self.demo_allowed(live):
+            self.fix = None
+            changed = True
+        fresh = self.fresh(now)
+        if fresh != self.was_fresh:
+            self.was_fresh = fresh
+            changed = True
+        return changed
+
+
 class Gps(QObject):
     changed = pyqtSignal()
     _report = pyqtSignal(dict)
@@ -139,9 +200,7 @@ class Gps(QObject):
     def __init__(self, vehicle=None, demo=False, parent=None):
         super().__init__(parent)
         self._vehicle = vehicle
-        self._demo = demo
-        self._fix = None                 # dict: lat, lon, speed (m/s), heading, source
-        self._real_at = None             # when the last real fix arrived (monotonic)
+        self._pos = Position(demo)
         self._gpsd = False               # a receiver is connected (through gpsd or directly)
         self._sats = 0                   # satellites used for the fix
         self._in_view = 0                # satellites the receiver can see
@@ -150,17 +209,17 @@ class Gps(QObject):
         self._travelled = 0.0
         self._path = None                # a one-way route to drive instead (navigation demo)
         self._path_travelled = 0.0
-        self._demo_timer = QTimer(self, interval=1000, timeout=self._demo_tick)
+        # Once a second: notice a fix going stale, and step the demo drive.
+        self._timer = QTimer(self, interval=1000, timeout=self._tick)
 
     def start(self):
         threading.Thread(target=self._receiver_loop, name="gps", daemon=True).start()
-        if self._demo:
+        if self._pos.demo:
             try:
                 self._route = DemoRoute()
             except (OSError, ValueError, KeyError):
                 self._route = None
-            if self._route:
-                self._demo_timer.start()
+        self._timer.start()
 
     # ---- the receiver -----------------------------------------------------
     def _receiver_loop(self):
@@ -190,12 +249,17 @@ class Gps(QObject):
             s.sendall(b'?WATCH={"enable":true,"json":true}\n')
             s.settimeout(30)
             safe_emit(self, "_report", {"gpsd": True})
+            talking = False
             for line in s.makefile("r", encoding="utf-8", errors="replace"):
                 try:
                     msg = json.loads(line)
                 except ValueError:
                     continue
-                if msg.get("class") != "TPV":
+                kind = msg.get("class")
+                if not talking and (kind == "TPV" or kind == "DEVICES" and msg.get("devices")):
+                    talking = True                # a receiver, not just gpsd on its own
+                    safe_emit(self, "_report", {"receiver": True})
+                if kind != "TPV":
                     continue
                 if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:
                     safe_emit(self, "_report", {
@@ -217,6 +281,7 @@ class Gps(QObject):
             a[4] = a[5] = termios.B9600
             termios.tcsetattr(fd, termios.TCSANOW, a)
             safe_emit(self, "_report", {"gpsd": True})
+            safe_emit(self, "_report", {"receiver": True})
             print(f"GPS: reading {os.path.basename(path)}", flush=True)
             buf, in_view, checked = b"", {}, time.monotonic()
             found, used, logged = False, 0, time.monotonic()
@@ -265,15 +330,17 @@ class Gps(QObject):
             os.close(fd)
 
     # ---- the simulated drive ----------------------------------------------------
-    def _real_fresh(self):
-        return self._real_at is not None and time.monotonic() - self._real_at < STALE_S
+    def _tick(self):
+        live = self._vehicle is not None and self._vehicle.live
+        if self._pos.check(time.monotonic(), live):
+            self.changed.emit()
+        if self._route and self._pos.demo_allowed(live):
+            self._demo_step()
 
-    def _demo_tick(self):
-        if self._real_fresh():
-            return                           # a real fix wins
+    def _demo_step(self):
         mph = self._vehicle.speed if self._vehicle is not None else 30.0
         speed = mph * MPH_TO_MS
-        step = speed * self._demo_timer.interval() / 1000
+        step = speed * self._timer.interval() / 1000
         if self._path:
             # Driving a navigation route: stop at the end of it.
             if self._path_travelled >= self._path.length:
@@ -283,7 +350,8 @@ class Gps(QObject):
         else:
             self._travelled += step
             lon, lat, heading = self._route.at(self._travelled)
-        self._apply({"lat": lat, "lon": lon, "speed": speed, "heading": heading, "source": "demo"})
+        self._pos.simulated({"lat": lat, "lon": lon, "speed": speed, "heading": heading, "source": "demo"})
+        self.changed.emit()
 
     def _apply(self, report):
         if "gpsd" in report:
@@ -298,12 +366,13 @@ class Gps(QObject):
                 self._sats, self._in_view = report["sats"], report["view"]
                 self.changed.emit()
             return
-        if report["source"] == "gps":
-            self._real_at = time.monotonic()
-            # Below walking pace the receiver's track is noise; keep the last.
-            if report["heading"] is None or report["speed"] < 1.0:
-                report["heading"] = self._fix["heading"] if self._fix else 0.0
-        self._fix = report
+        if "receiver" in report:
+            had = self._pos.fix
+            self._pos.receiver()
+            if self._pos.fix is not had:
+                self.changed.emit()              # the demo drive gave way
+            return
+        self._pos.real(report, time.monotonic())
         self.changed.emit()
 
     def followPath(self, points):
@@ -318,32 +387,33 @@ class Gps(QObject):
     # ---- what QML sees ------------------------------------------------------
     @pyqtProperty(bool, notify=changed)
     def hasFix(self):
-        if not self._fix:
-            return False
-        return self._fix["source"] == "demo" or self._real_fresh()
+        """There's a position: the receiver's (maybe stale) or the demo drive's."""
+        return self._pos.fix is not None
 
     @pyqtProperty(float, notify=changed)
     def lat(self):
-        return self._fix["lat"] if self._fix else 0.0
+        return self._pos.fix["lat"] if self._pos.fix else 0.0
 
     @pyqtProperty(float, notify=changed)
     def lon(self):
-        return self._fix["lon"] if self._fix else 0.0
+        return self._pos.fix["lon"] if self._pos.fix else 0.0
 
     @pyqtProperty(float, notify=changed)
     def speed(self):
-        """Metres per second."""
-        return self._fix["speed"] if self._fix else 0.0
+        """Metres per second (0 while the position is stale: it isn't known)."""
+        if not self._pos.fix or self._pos.stale(time.monotonic()):
+            return 0.0
+        return self._pos.fix["speed"]
 
     @pyqtProperty(float, notify=changed)
     def heading(self):
         """Degrees clockwise from north."""
-        return self._fix["heading"] if self._fix else 0.0
+        return self._pos.fix["heading"] if self._pos.fix else 0.0
 
     @pyqtProperty(str, notify=changed)
     def source(self):
         """'gps', 'demo' or '' (no position)."""
-        return self._fix["source"] if self.hasFix else ""
+        return self._pos.fix["source"] if self._pos.fix else ""
 
     @pyqtProperty(bool, notify=changed)
     def receiverConnected(self):
@@ -352,8 +422,15 @@ class Gps(QObject):
 
     @pyqtProperty(bool, notify=changed)
     def realFix(self):
-        """True while the position comes from the receiver, not the demo drive."""
-        return self._real_fresh()
+        """True while the receiver's position is fresh."""
+        return self._pos.fresh(time.monotonic())
+
+    @pyqtProperty(bool, notify=changed)
+    def stale(self):
+        """True while the receiver's last position is held because it has
+        lost the sky (a tunnel, a garage): the truck stays where it was,
+        and directions wait."""
+        return self._pos.stale(time.monotonic())
 
     @pyqtProperty(int, notify=changed)
     def satellites(self):

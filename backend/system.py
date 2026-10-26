@@ -19,6 +19,7 @@ from backend import safe_emit
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
+POWER_TIMEOUT_S = 10    # systemctl answers at once, either way
 
 
 def _read(path):
@@ -93,6 +94,23 @@ def version_text():
         return ""
 
 
+def power(action):
+    """Ask systemd to 'reboot' or 'poweroff': '' once it has said yes, else
+    why not (no polkit rule from setup-pi.sh, logind said no, not a Pi)."""
+    try:
+        r = subprocess.run(["systemctl", "--no-ask-password", action], capture_output=True,
+                           text=True, timeout=POWER_TIMEOUT_S)
+    except FileNotFoundError:
+        return "systemctl isn't installed here"
+    except subprocess.TimeoutExpired:
+        return f"systemctl {action} didn't answer in {POWER_TIMEOUT_S} s"
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    if r.returncode != 0:
+        return (r.stderr or r.stdout).strip() or f"systemctl {action} failed ({r.returncode})"
+    return ""
+
+
 def can_power():
     try:
         out = subprocess.run(["busctl", "--system", "call", "org.freedesktop.login1",
@@ -105,7 +123,9 @@ def can_power():
 
 class SystemInfo(QObject):
     changed = pyqtSignal()
+    powerFailed = pyqtSignal(str)       # a reboot or shut down didn't happen, and why
     _read_done = pyqtSignal(dict)
+    _power_done = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,7 +133,9 @@ class SystemInfo(QObject):
                    "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False}
         self._version = version_text()
         self._busy = False
+        self._power_error = ""
         self._read_done.connect(self._apply)
+        self._power_done.connect(self._powered)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
@@ -190,10 +212,30 @@ class SystemInfo(QObject):
         # The service restarts the app whenever it exits.
         QCoreApplication.exit(0)
 
+    @pyqtProperty(str, notify=changed)
+    def powerError(self):
+        """Why the last reboot or shut down didn't happen, else ''."""
+        return self._power_error
+
+    def _power(self, action):
+        # On a worker thread: logind can take a moment to say no.
+        if self._power_error:
+            self._power_error = ""
+            self.changed.emit()
+        threading.Thread(target=lambda: safe_emit(self, "_power_done", power(action)),
+                         daemon=True).start()
+
+    def _powered(self, why):
+        if why:
+            print(f"System: couldn't reboot or shut down: {why}", flush=True)
+            self._power_error = why
+            self.changed.emit()
+            self.powerFailed.emit(why)
+
     @pyqtSlot()
     def reboot(self):
-        subprocess.Popen(["systemctl", "reboot"])
+        self._power("reboot")
 
     @pyqtSlot()
     def powerOff(self):
-        subprocess.Popen(["systemctl", "poweroff"])
+        self._power("poweroff")

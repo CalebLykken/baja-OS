@@ -9,7 +9,9 @@ the engine computer answers it while the key is on and goes quiet when the
 key is turned off. Once the car has been quiet for QUIET_S (the adapter
 keeps asking every few seconds, so a hiccup comes straight back), the
 dashboard says it's shutting down and counts down WARN_S, with a button to
-keep it on, then runs a normal `systemctl poweroff`.
+keep it on, then runs a normal `systemctl poweroff`. If that fails (no
+polkit rule from setup-pi.sh), the prompt says so instead, and the next
+key-off tries again.
 
 It never acts:
   - unless "Shut down when the truck is off" is on in Settings > System
@@ -50,11 +52,13 @@ class KeyOffLogic:
         self.quiet_at = None        # when the car went quiet, while it's quiet
         self.last_mph = 0.0         # the car's last reported speed
         self.kept_on = False        # "Keep on" was tapped for this quiet spell
+        self.done = False           # the shutdown was asked for this quiet spell
 
     def answered(self, mph=None):
         self.seen_on = True
         self.quiet_at = None
         self.kept_on = False
+        self.done = False
         if mph is not None:
             self.last_mph = mph
 
@@ -65,6 +69,19 @@ class KeyOffLogic:
     def keep_on(self):
         if self.quiet_at is not None:
             self.kept_on = True
+
+    def failed(self):
+        """The shutdown didn't happen: drop this countdown, as if kept on,
+        so the dashboard is usable. The next key-off tries again."""
+        self.done = False
+        self.keep_on()
+
+    def power_off_now(self, left):
+        """True once, when the countdown (`left`) reaches 0."""
+        if left == 0 and not self.done:
+            self.done = True
+            return True
+        return False
 
     def seconds_left(self, now, moving=False):
         """Whole seconds until power off (0: now), or None while there's
@@ -82,7 +99,8 @@ class KeyOffLogic:
 
 class KeyOff(QObject):
     """The dashboard's side: follows the OBD reader and the GPS, shows the
-    countdown (`countdown`, -1 when there's none), and powers off."""
+    countdown (`countdown`, -1 when there's none), and powers off. Told
+    through power_failed() when that didn't work (`error`)."""
     changed = pyqtSignal()
 
     def __init__(self, obd, gps, settings, power_off, parent=None):
@@ -91,7 +109,7 @@ class KeyOff(QObject):
         self._logic = KeyOffLogic()
         self._enabled = str(settings.get(SETTING, "false")) == "true"
         self._countdown = -1
-        self._done = False
+        self._error = ""
         obd.reading.connect(self._answered)
         obd.quiet.connect(self._quiet)
         self._timer = QTimer(self, interval=1000, timeout=self._tick)
@@ -101,6 +119,9 @@ class KeyOff(QObject):
 
     def _answered(self, values):
         self._logic.answered(values.get("speed"))
+        if self._error:
+            self._error = ""                # a new drive: the old failure is done with
+            self.changed.emit()
         self._tick()
 
     def _quiet(self):
@@ -118,10 +139,19 @@ class KeyOff(QObject):
         if countdown != self._countdown:
             self._countdown = countdown
             self.changed.emit()
-        if left == 0 and not self._done:
-            self._done = True
+        if self._logic.power_off_now(left):
             print("Key off: the car has been quiet; shutting down", flush=True)
             self._power_off()
+
+    def power_failed(self, why):
+        """systemctl poweroff didn't work: show why instead of the countdown."""
+        if self._countdown < 0 and not self._logic.done:
+            return                          # not from here (Settings > Shut down)
+        print(f"Key off: couldn't shut down: {why}", flush=True)
+        self._logic.failed()
+        self._error = why
+        self._tick()
+        self.changed.emit()
 
     @pyqtProperty(int, notify=changed)
     def countdown(self):
@@ -131,6 +161,17 @@ class KeyOff(QObject):
     @pyqtProperty(bool, notify=changed)
     def enabled(self):
         return self._enabled
+
+    @pyqtProperty(str, notify=changed)
+    def error(self):
+        """Why the key-off shutdown failed, while that's on screen; else ''."""
+        return self._error
+
+    @pyqtSlot()
+    def dismiss(self):
+        if self._error:
+            self._error = ""
+            self.changed.emit()
 
     @pyqtSlot(bool)
     def setEnabled(self, on):

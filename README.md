@@ -234,7 +234,10 @@ is moving (the car's last speed, or the GPS).
 Turn it on in **Settings > System > Shut down with key** once the Pi runs
 through the relay. On any other power, a shut-down Pi stays off until it's
 unplugged and plugged back in. The Pi also needs the polkit rule from
-`setup-pi.sh` to shut itself down (Settings > System says if it's missing).
+`setup-pi.sh` to shut itself down: without it the switch can't be turned on,
+Settings > System says it's missing, and a shutdown that fails ends the
+countdown with "Couldn't shut down" (OK puts the dashboard back) instead of
+leaving it stuck at 0 s. The next key-off tries again.
 
 The engine computer is off at ACC too, so parking with the key at ACC to keep
 listening looks like the truck being off: tap Keep on. If the key then goes

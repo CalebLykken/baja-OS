@@ -731,13 +731,24 @@ Item {
                     ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
                     ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
                 }
+                Label {
+                    visible: system.powerError !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.warn
+                    font.pixelSize: Theme.fontSmall
+                    text: "Couldn't do that: " + system.powerError
+                }
                 Note {
                     visible: !system.canPower
-                    text: "To reboot or shut down from here, run deploy/setup-pi.sh once on the Pi."
+                    text: "To reboot or shut down, from here or with the key, run deploy/setup-pi.sh once on the Pi."
                 }
                 SettingRow {
                     label: "Shut down with key"
                     SegmentedControl {
+                        // Off can always be picked; On needs the Pi to be allowed to shut down.
+                        enabled: system.canPower || keyOff.enabled
+                        opacity: enabled ? 1 : 0.5
                         options: [{ label: "On", value: true }, { label: "Off", value: false }]
                         current: keyOff.enabled
                         onPicked: (v) => keyOff.setEnabled(v)

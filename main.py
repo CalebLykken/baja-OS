@@ -148,6 +148,7 @@ def main():
     # Shut down cleanly once the truck is turned off (the car stops
     # answering the OBD adapter), inside the power relay's hold time.
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff)
+    system.powerFailed.connect(key_off.power_failed)
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()

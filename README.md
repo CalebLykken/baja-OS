@@ -283,6 +283,12 @@ key off it checks every few seconds, then every 20 s after a minute, so the
 adapter can sleep. While the car isn't answering, the gauges run a simulated
 drive and the status bar shows **DEMO DATA**.
 
+While the car's own readings are out of range (coolant over 230 °F, battery
+under 12 V or over 15 V, boost over 15 psi), a red chip at the foot of the
+nav rail shows the reading on every page, Maps and Music included; tap it
+for the gauges. The thresholds are `LIMITS` in `backend/vehicle.py`. The
+simulated data never warns.
+
 ## GPS
 
 The u-blox receiver is read straight from its USB serial port (NMEA), or

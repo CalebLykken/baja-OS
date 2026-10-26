@@ -24,3 +24,4 @@ SignalBars 1.0 SignalBars.qml
 EqSlider 1.0 EqSlider.qml
 EqualizerPanel 1.0 EqualizerPanel.qml
 Keyboard 1.0 Keyboard.qml
+EngineWarning 1.0 EngineWarning.qml

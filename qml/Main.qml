@@ -134,6 +134,13 @@ Window {
             Timer { interval: 5000; running: true; repeat: true; onTriggered: parent.now = new Date() }
         }
 
+        // An engine reading from the car out of range: here, so it shows
+        // on every page, Maps and Music included. Tap for the gauges.
+        EngineWarning {
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
+            onTapped: root.page = 3
+        }
+
         Column {
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
             Repeater {

@@ -89,13 +89,13 @@ Item {
         Label {
             anchors.verticalCenter: parent.verticalCenter
             text: Math.round(Units.temp(vehicle.coolant)) + Units.tempUnit
-            color: vehicle.coolant > 230 ? Theme.warn : Theme.textDim
+            color: vehicle.warnings.indexOf("coolant") >= 0 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
             text: vehicle.voltage.toFixed(1) + " V"
-            color: Theme.textDim
+            color: vehicle.warnings.indexOf("voltage") >= 0 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }
     }

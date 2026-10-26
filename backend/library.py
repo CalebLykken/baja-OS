@@ -193,7 +193,7 @@ class LibraryPlayer(QObject):
 
     def _heard(self, index):
         """The next song started by itself (no gap): show it."""
-        if index != self._index:
+        if 0 <= index < len(self._queue) and index != self._index:
             self._index = index
             self.trackChanged.emit()
             self.positionChanged.emit()

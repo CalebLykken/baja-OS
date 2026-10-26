@@ -50,8 +50,9 @@ def audio_format():
 class _Song:
     """One song's samples on their way to the speakers."""
 
-    def __init__(self, index):
+    def __init__(self, index, gen):
         self.index = index
+        self.gen = gen              # the play_from it follows on from
         self.chunks = deque()       # decoder appends (main thread), feed pops (audio thread)
         self.done = False           # decoding finished (or failed)
         self.played = 0             # bytes handed to the stream so far
@@ -80,7 +81,7 @@ class _Feed(QIODevice):
 class _Output(QObject):
     """The stream and its feed. Lives on the audio thread; reads the songs
     and fade state the engine shares under its lock."""
-    joined = pyqtSignal(int, int)       # a song took over: its index, ms until heard
+    joined = pyqtSignal(int, int, int)  # a song took over: its index, generation, ms until heard
     wantDecode = pyqtSignal()           # songs changed: the main thread decodes
 
     def __init__(self, engine):
@@ -142,7 +143,7 @@ class _Output(QObject):
                 if e._pending is not None:      # faded out: now switch songs
                     index, e._pending = e._pending, None
                     e._songs.clear()
-                    e._songs.append(_Song(index))
+                    e._songs.append(_Song(index, e._gen))
                     self.wantDecode.emit()
                     if e._want_play:
                         e._target = 1.0
@@ -166,10 +167,11 @@ class _Output(QObject):
                     if not e._songs:
                         n = e._count()
                         if n:
-                            e._songs.append(_Song((song.index + 1) % n))
+                            e._songs.append(_Song((song.index + 1) % n, song.gen))
                     if e._songs:
                         ahead = held + len(out)
-                        self.joined.emit(e._songs[0].index, int(ahead * 1000 / BYTES_PER_S))
+                        nxt = e._songs[0]
+                        self.joined.emit(nxt.index, nxt.gen, int(ahead * 1000 / BYTES_PER_S))
                     self.wantDecode.emit()
                 else:
                     break                       # decoding hasn't caught up
@@ -199,7 +201,8 @@ class GaplessEngine(QObject):
     """Plays songs from a list, one after another, without gaps.
 
     `path_of(i)` and `count()` describe the list (it can change: call
-    `play_from` after). `trackStarted(i)` says song i is now being heard."""
+    `play_from` after). `trackStarted(i)` says song i is now being heard;
+    it's never sent for a song from before the latest `play_from`."""
     trackStarted = pyqtSignal(int)
     _toDevice = pyqtSignal(object)
     _toVolume = pyqtSignal(float)
@@ -213,6 +216,7 @@ class GaplessEngine(QObject):
         self._want_play = False
         self._gain, self._target = 0.0, 0.0
         self._pending = None        # a song to switch to once faded out
+        self._gen = 0               # counts play_from calls (the list may have changed)
         self._latency = 0           # bytes queued in the stream (set by the feed)
         self._decoder = None
         self._decoding = None       # the _Song being decoded
@@ -244,12 +248,13 @@ class GaplessEngine(QObject):
     def set_volume(self, v):
         self._toVolume.emit(float(v))
 
-    def _joined(self, index, ms):
+    def _joined(self, index, gen, ms):
         """Say song `index` is playing once the audio queued ahead of it has
-        been heard."""
+        been heard, unless play_from has started something else by then:
+        the index would be into a list that's gone."""
         if DEBUG:
             print(f"audio: song {index} joins in {ms} ms", flush=True)
-        QTimer.singleShot(ms, lambda: self.trackStarted.emit(index))
+        QTimer.singleShot(ms, lambda: gen == self._gen and self.trackStarted.emit(index))
 
     # ---- decoding (main thread) ---------------------------------------------
     def _decode_more(self):
@@ -263,7 +268,8 @@ class GaplessEngine(QObject):
             if self._songs and self._songs[-1].done and len(self._songs) < 2:
                 n = self._count()
                 if n:
-                    self._songs.append(_Song((self._songs[-1].index + 1) % n))
+                    last = self._songs[-1]
+                    self._songs.append(_Song((last.index + 1) % n, last.gen))
             song = next((s for s in self._songs if not s.done), None)
         if song is None:
             return
@@ -313,13 +319,14 @@ class GaplessEngine(QObject):
         """Start song `index` now, fading out whatever is playing first."""
         with self._lock:
             self._want_play = play
+            self._gen += 1
             if self._gain > 0.0:
                 self._pending = index
                 self._target = 0.0
                 return                           # the feed switches once faded out
             self._pending = None
             self._songs.clear()
-            self._songs.append(_Song(index))
+            self._songs.append(_Song(index, self._gen))
             self._target = 1.0 if play else 0.0
         self._decode_more()
 

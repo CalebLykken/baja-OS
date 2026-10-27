@@ -134,6 +134,13 @@ Window {
             Timer { interval: 5000; running: true; repeat: true; onTriggered: parent.now = new Date() }
         }
 
+        // An engine reading from the car out of range: here, so it shows
+        // on every page, Maps and Music included. Tap for the gauges.
+        EngineWarning {
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
+            onTapped: root.page = 3
+        }
+
         Column {
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter }
             Repeater {
@@ -226,13 +233,18 @@ Window {
     }
 
     // The truck was turned off: the Pi shuts down at the end of the
-    // countdown (backend/ignition.py) unless "Keep on" is tapped.
+    // countdown (backend/ignition.py) unless "Keep on" is tapped. If the
+    // shutdown fails, it says so instead, until OK.
     Rectangle {
         id: keyOffPrompt
         readonly property int secondsLeft: typeof keyOff === "undefined" ? -1 : keyOff.countdown
+        readonly property bool failed: typeof keyOff !== "undefined" && keyOff.error !== ""
+        property bool showError: false            // kept while it fades out
+        onFailedChanged: if (failed) showError = true
+        onSecondsLeftChanged: if (secondsLeft >= 0) showError = false
         anchors.fill: parent
         color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: secondsLeft >= 0 ? 1 : 0
+        opacity: secondsLeft >= 0 || failed ? 1 : 0
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
         MouseArea { anchors.fill: parent }        // nothing underneath while it's up
@@ -246,7 +258,7 @@ Window {
                 anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
                 spacing: 12
                 Label {
-                    text: "The truck is off"
+                    text: keyOffPrompt.showError ? "Couldn't shut down" : "The truck is off"
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
                 }
@@ -255,9 +267,29 @@ Window {
                     wrapMode: Text.WordWrap
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody
-                    text: "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
+                    text: keyOffPrompt.showError
+                          ? "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
+                          : "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
+                }
+                Label {
+                    visible: keyOffPrompt.showError
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                    text: typeof keyOff !== "undefined" ? keyOff.error : ""
                 }
                 RowLayout {
+                    visible: keyOffPrompt.showError
+                    Layout.topMargin: 12
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "OK"; primary: true
+                        onClicked: keyOff.dismiss()
+                    }
+                }
+                RowLayout {
+                    visible: !keyOffPrompt.showError
                     Layout.topMargin: 12
                     spacing: 14
                     TextButton {

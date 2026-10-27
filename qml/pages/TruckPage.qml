@@ -155,13 +155,13 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 label: "Boost"; value: Units.boost(vehicle.boost).toFixed(Units.boostDecimals); unit: Units.boostUnit
-                warning: vehicle.boost > 15
+                warning: vehicle.warnings.indexOf("boost") >= 0
             }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 label: "Coolant"; value: Math.round(Units.temp(vehicle.coolant)); unit: Units.tempUnit
-                warning: vehicle.coolant > 230
+                warning: vehicle.warnings.indexOf("coolant") >= 0
             }
         }
     }

@@ -4,6 +4,10 @@ Real engine data comes from the OBD-II adapter (backend/obd.py) whenever
 the car answers; `live` is then True. Without it (no adapter, key off, at
 a desk) a simulated drive keeps the gauges moving. Gear isn't reported over
 OBD, so it's worked out from speed and RPM.
+
+LIMITS are the one place for the warning thresholds: the gauges draw their
+red zones from them, and `warnings` (from the car only, never the
+simulation) drives the warning on every page and the red readouts.
 """
 
 import math
@@ -16,6 +20,29 @@ STALE_MS = 4000  # no engine data for this long: back to the simulation
 
 # Rough 5-speed gearing for the 2005 Baja Turbo: mph per 1000 rpm in each gear.
 GEARS = [6.5, 11.5, 17.0, 22.5, 28.0]
+
+# Where a reading needs attention, in the truck's units (rpm, psi, °F, volts).
+LIMITS = {
+    "rpmHigh": 6000.0,
+    "boostHigh": 15.0,          # overboost
+    "coolantHigh": 230.0,       # overheating
+    "intakeHigh": 150.0,
+    "voltageLow": 12.0,         # not charging
+    "voltageHigh": 15.0,        # overcharging
+}
+
+
+def warnings(coolant, voltage, boost):
+    """The engine readings out of range, most urgent first: 'coolant',
+    'voltage' and 'boost'."""
+    found = []
+    if coolant > LIMITS["coolantHigh"]:
+        found.append("coolant")
+    if not LIMITS["voltageLow"] <= voltage <= LIMITS["voltageHigh"]:
+        found.append("voltage")
+    if boost > LIMITS["boostHigh"]:
+        found.append("boost")
+    return found
 
 
 def estimate_gear(mph, rpm):
@@ -69,11 +96,23 @@ class VehicleData(QObject):
         if self._live:
             self._live = False
             self.liveChanged.emit()
+            self.changed.emit()            # no more warnings
 
     @pyqtProperty(bool, notify=liveChanged)
     def live(self):
         """True while the numbers come from the car, not the simulation."""
         return self._live
+
+    @pyqtProperty("QVariantMap", constant=True)
+    def limits(self):
+        """The warning thresholds (LIMITS), for the gauges' red zones."""
+        return LIMITS
+
+    @pyqtProperty("QStringList", notify=changed)
+    def warnings(self):
+        """The readings out of range ('coolant', 'voltage', 'boost'), from
+        the car only: the simulation never warns."""
+        return warnings(self._coolant, self._voltage, self._boost) if self._live else []
 
     # ---- the simulated drive ----------------------------------------------
     def _tick(self):

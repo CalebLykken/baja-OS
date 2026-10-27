@@ -628,6 +628,7 @@ Item {
                         font.pixelSize: Theme.fontBody
                         text: !parent.parent.has ? "Not available"
                               : gps.realFix ? "Position found" + (gps.satellites > 0 ? ", " + gps.satellites + " satellites" : "")
+                              : gps.stale && gps.receiverConnected ? "Lost the signal"
                               : gps.receiverConnected ? "Looking for satellites" + (gps.satellitesInView > 0 ? ": " + gps.satellitesInView + " in view" : "")
                               : "No receiver"
                     }
@@ -635,8 +636,10 @@ Item {
                 Note {
                     text: !parent.has ? ""
                           : gps.realFix ? "The map and directions follow the truck's real position."
-                          : gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two; until then the map follows a practice drive around Seattle."
-                          : "Plug the GPS receiver into a USB port. Until then the map follows a practice drive around Seattle."
+                          : gps.stale ? "The map holds the truck's last position, and directions wait, until the receiver has a position again."
+                          : (gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two."
+                                                   : "Plug the GPS receiver into a USB port.")
+                            + (gps.source === "demo" ? " Until then the map follows a practice drive around Seattle." : "")
                 }
             }
             Section {
@@ -728,13 +731,24 @@ Item {
                     ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
                     ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
                 }
+                Label {
+                    visible: system.powerError !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.warn
+                    font.pixelSize: Theme.fontSmall
+                    text: "Couldn't do that: " + system.powerError
+                }
                 Note {
                     visible: !system.canPower
-                    text: "To reboot or shut down from here, run deploy/setup-pi.sh once on the Pi."
+                    text: "To reboot or shut down, from here or with the key, run deploy/setup-pi.sh once on the Pi."
                 }
                 SettingRow {
                     label: "Shut down with key"
                     SegmentedControl {
+                        // Off can always be picked; On needs the Pi to be allowed to shut down.
+                        enabled: system.canPower || keyOff.enabled
+                        opacity: enabled ? 1 : 0.5
                         options: [{ label: "On", value: true }, { label: "Off", value: false }]
                         current: keyOff.enabled
                         onPicked: (v) => keyOff.setEnabled(v)

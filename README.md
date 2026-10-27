@@ -234,7 +234,10 @@ is moving (the car's last speed, or the GPS).
 Turn it on in **Settings > System > Shut down with key** once the Pi runs
 through the relay. On any other power, a shut-down Pi stays off until it's
 unplugged and plugged back in. The Pi also needs the polkit rule from
-`setup-pi.sh` to shut itself down (Settings > System says if it's missing).
+`setup-pi.sh` to shut itself down: without it the switch can't be turned on,
+Settings > System says it's missing, and a shutdown that fails ends the
+countdown with "Couldn't shut down" (OK puts the dashboard back) instead of
+leaving it stuck at 0 s. The next key-off tries again.
 
 The engine computer is off at ACC too, so parking with the key at ACC to keep
 listening looks like the truck being off: tap Keep on. If the key then goes
@@ -283,12 +286,20 @@ key off it checks every few seconds, then every 20 s after a minute, so the
 adapter can sleep. While the car isn't answering, the gauges run a simulated
 drive and the status bar shows **DEMO DATA**.
 
+While the car's own readings are out of range (coolant over 230 °F, battery
+under 12 V or over 15 V, boost over 15 psi), a red chip at the foot of the
+nav rail shows the reading on every page, Maps and Music included; tap it
+for the gauges. The thresholds are `LIMITS` in `backend/vehicle.py`. The
+simulated data never warns.
+
 ## GPS
 
 The u-blox receiver is read straight from its USB serial port (NMEA), or
 through gpsd if gpsd is running. Settings > Map > GPS shows how many
-satellites it can see, and when it has found your position. Until it has a
-position, the map follows a simulated drive around Seattle.
+satellites it can see, and when it has found your position. If it loses the
+sky on the way (a tunnel, a garage), the map holds the last position and
+directions wait until it's back. With no receiver and no engine data (a Mac,
+or a Pi on the bench), the map follows a simulated drive around Seattle.
 
 It needs a view of the sky: put it on top of the dash, under the windshield,
 on a USB extension cable. Keep it away from the Pi and the screen, which give

@@ -117,7 +117,7 @@ strip as Home.
 | Pressed | Fill steps up one level (Olive → Moss → Contour) and scales to 0.97, like key travel |
 | Selected | Blaze fill inside a segmented control, or a Blaze bar plus Blaze icon in the nav |
 | Primary | The one main key per screen (play/pause, Pair phone) is Blaze with a Basin icon |
-| Warning | Ember numerals and segments; the redline's unlit segments are Ember at 30 % |
+| Warning | Ember numerals and segments; the redline's unlit segments are Ember at 30 %. An engine warning from the car is an Ember chip with a Basin icon and reading at the foot of the nav rail, on every page |
 | Disabled | 50 % Lichen |
 
 ## Motion

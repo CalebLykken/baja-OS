@@ -41,7 +41,7 @@ class RoadInfo(QObject):
         self._timer.start()
 
     def _on_fix(self):
-        if self._gps.hasFix:
+        if self._gps.hasFix and not self._gps.stale:
             self._fixes.append((self._gps.lat, self._gps.lon))
 
     def _check(self):

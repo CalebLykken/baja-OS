@@ -138,7 +138,8 @@ def main():
     phone = PhoneSend(args.maps_dir)
     wifi = Wifi(settings)
     system = SystemInfo()
-    # Simulated drive around Seattle until the GPS receiver has a fix.
+    # A simulated drive around Seattle while there's no GPS receiver and no
+    # engine data (a Mac, or a Pi on the bench).
     gps = Gps(vehicle, demo=True)
     routing = Router(gps, settings)
     road = RoadInfo(gps)
@@ -147,6 +148,7 @@ def main():
     # Shut down cleanly once the truck is turned off (the car stops
     # answering the OBD adapter), inside the power relay's hold time.
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff)
+    system.powerFailed.connect(key_off.power_failed)
 
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()

@@ -103,6 +103,10 @@ python3 -m venv .venv
 .venv/bin/python main.py
 ```
 
+That installs PyQt6, Qt WebEngine (`PyQt6-WebEngine`, for the map) and
+mutagen (music tags). With no truck attached, the engine data and the drive
+are simulated.
+
 ## Run on the Pi
 
 ```bash

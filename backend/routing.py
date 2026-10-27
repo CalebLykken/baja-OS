@@ -9,6 +9,12 @@ guidance starts with go(), like Start in other car maps.
 Valhalla runs as its own local service on 127.0.0.1:8002, so a crash
 there can't take the dashboard down; requests go over plain HTTP on a
 worker thread.
+
+The route is saved in settings, so a restart (a gas stop is a fresh boot
+once the key-off shutdown is on) doesn't lose it: once there's a position
+and the service answers, it's worked out again, and guidance carries on by
+itself if it had started. A route that ended, arrived, or wasn't driven for
+a few hours stays gone.
 """
 
 import json
@@ -35,6 +41,9 @@ JUMP_FIXES = 3            # ... or further once this many in a row, moving, put 
 ARRIVED_M = 35
 FAST_MS = 20              # above ~45 mph, warn about turns from further out
 THEN_M = 300              # a turn this soon after the next one is shown with it
+RESUME_S = 3 * 3600       # after a restart, a route saved this recently comes back ...
+HERE_M = 300              # ... unless the truck is already this close to its end
+RESAVE_S = 60             # while guiding, the saved route's time is kept this fresh
 
 # Early warnings: (metres, how to say it), imperial and metric.
 ALERTS = {
@@ -80,10 +89,38 @@ def decode_polyline6(encoded):
     return coords
 
 
+def route_record(name, lon, lat, started, now):
+    """What's saved in settings for a route: JSON."""
+    return json.dumps({"name": name, "lon": lon, "lat": lat, "started": started, "at": now})
+
+
+def saved_route(text, now):
+    """The route to pick up again after a restart, from what was saved:
+    {name, lon, lat, started}, or None if there's none or it's too old.
+    Without its battery the Pi's clock can be behind after a restart, so a
+    save that looks a little in the future still counts."""
+    try:
+        r = json.loads(text) if text else None
+        if not isinstance(r, dict) or not isinstance(r.get("name"), str):
+            return None
+        if abs(now - float(r["at"])) > RESUME_S:
+            return None
+        return {"name": r["name"], "lon": float(r["lon"]), "lat": float(r["lat"]),
+                "started": r.get("started") is True}
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def _xy(p, lat0):
     """Metres east/north of the origin, near enough for a city."""
     k = math.cos(math.radians(lat0))
     return p[0] * 111320.0 * k, p[1] * 110540.0
+
+
+def _metres(a, b):
+    """Straight-line distance between two (lon, lat) points, near enough."""
+    (ax, ay), (bx, by) = _xy(a, a[1]), _xy(b, a[1])
+    return math.hypot(bx - ax, by - ay)
 
 
 def _project(p, a, b, lat0):
@@ -212,6 +249,7 @@ class Router(QObject):
     changed = pyqtSignal()          # route started/ended, computing, availability
     progressChanged = pyqtSignal()  # where the truck is along the route
     speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
+    resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
     _got = pyqtSignal(object, str, str, bool)   # response, error, destination name, reroute
     _status = pyqtSignal(bool)
 
@@ -229,6 +267,11 @@ class Router(QObject):
         self._off_count = 0
         self._last_reroute = 0.0
         self._arrived = False
+        # The route from before a restart, until it can be asked for again,
+        # then while that answer is on its way.
+        self._resume = saved_route(str(settings.get("route", "")), time.time()) if settings else None
+        self._resuming = None
+        self._saved_at = 0.0
         self._got.connect(self._on_route)
         self._status.connect(self._on_status)
         self._check_timer = QTimer(self, interval=30000, timeout=self._check)
@@ -253,6 +296,37 @@ class Router(QObject):
         if ok != self._available:
             self._available = ok
             self.changed.emit()
+        self._resume_if_ready()
+
+    # ---- kept between runs ----------------------------------------------------------
+    def _save(self):
+        """Save the destination and whether guidance is on, with the time."""
+        if self._settings and self._dest:
+            name, lon, lat = self._dest
+            self._settings.set("route", route_record(name, lon, lat, self._started, time.time()))
+            self._saved_at = time.monotonic()
+
+    def _forget(self):
+        self._resume = self._resuming = None
+        if self._settings:
+            self._settings.set("route", "")
+
+    def _resume_if_ready(self):
+        """Ask for the route from before the restart again, once there's a
+        position and the service answers."""
+        r = self._resume
+        if not r or not self._available or not self._gps.hasFix or self._gps.stale:
+            return
+        self._resume = None
+        if self._dest:
+            return                                  # a new place was picked meanwhile
+        if _metres((self._gps.lon, self._gps.lat), (r["lon"], r["lat"])) < HERE_M:
+            print(f"Maps: already at {r['name']}; not resuming the route")
+            self._forget()
+            return
+        print(f"Maps: resuming the route to {r['name']}")
+        self._route_to(r["name"], r["lon"], r["lat"])    # saved as it was, time and all
+        self._resuming = r
 
     # ---- asking for a route ---------------------------------------------------------
     def _request(self, name, lon, lat, reroute=False):
@@ -292,9 +366,17 @@ class Router(QObject):
 
     def _on_route(self, data, error, name, reroute):
         self._computing = False
+        resumed = None if reroute else self._resuming
+        if not reroute:
+            self._resuming = None
         if data is None:
             self._error = ("No road route to there" if "No path" in error or "No suitable" in error
                            else error)
+            if resumed:
+                # Nobody asked for it this run, so there's nowhere to show why.
+                print(f"Maps: couldn't resume the route to {name} ({self._error})")
+                self.stop()
+                return
             if not reroute:
                 self._route = None
             self.changed.emit()
@@ -306,6 +388,10 @@ class Router(QObject):
         self._route.locate(self._gps.lon, self._gps.lat)
         if reroute and self._started and not self._gps.stale:
             self._begin("Rerouting. ")
+        if resumed and resumed["started"]:
+            self._go(f"Continuing to {name}. ")
+        elif resumed:
+            self.resumed.emit(name, resumed["lon"], resumed["lat"])
         self.changed.emit()
         self.progressChanged.emit()
 
@@ -320,10 +406,14 @@ class Router(QObject):
     @pyqtSlot()
     def go(self):
         """Start guidance on the previewed route."""
+        self._go()
+
+    def _go(self, prefix=""):
         if self._route and not self._started:
             self._started = True
             self._route.locate(self._gps.lon, self._gps.lat)
-            self._begin()
+            self._begin(prefix)
+            self._save()
             self.changed.emit()
             self.progressChanged.emit()
 
@@ -357,6 +447,11 @@ class Router(QObject):
     @pyqtSlot(str, float, float)
     def routeTo(self, name, lon, lat):
         """Work out a route to preview (a new place replaces any route)."""
+        self._resume = self._resuming = None
+        self._route_to(name, lon, lat)
+        self._save()
+
+    def _route_to(self, name, lon, lat):
         if self._started:
             self._gps.clearPath()
         self._started = False
@@ -372,11 +467,14 @@ class Router(QObject):
         self._dest = None
         self._error = ""
         self._computing = False
+        self._forget()
         self.changed.emit()
         self.progressChanged.emit()
 
     # ---- following it --------------------------------------------------------------
     def _on_fix(self):
+        if self._resume:
+            self._resume_if_ready()
         r = self._route
         if not r or not self._started or not self._gps.hasFix:
             return
@@ -391,10 +489,13 @@ class Router(QObject):
         r.locate(self._gps.lon, self._gps.lat, self._gps.heading, self._gps.speed)
         if r.remaining < ARRIVED_M and r.to_end < ARRIVED_M and not self._arrived:
             self._arrived = True
+            self._forget()                          # shown a little longer, but done
             self._say(f"You have arrived at {r.name}.")
             QTimer.singleShot(20000, lambda: self.stop() if self._arrived else None)
         elif not self._arrived:
             self._prompt(r)
+            if time.monotonic() - self._saved_at > RESAVE_S:
+                self._save()                        # still being driven
         if r.off > OFF_ROUTE_M and not self._arrived:
             self._off_count += 1
             now = time.monotonic()

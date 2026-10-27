@@ -1,12 +1,19 @@
 """Off-Pi tests for following a route (backend/routing.py) with a fake GPS:
-no reroute and nothing said while the position is stale.
+no reroute and nothing said while the position is stale; the route saved
+in settings and picked up again after a restart.
 
     python3 -m unittest tests.test_routing
 """
 
+import json
+import time
 import unittest
 
-from backend.routing import OFF_ROUTE_FIXES, Router
+from PyQt6.QtCore import QCoreApplication
+
+from backend.routing import OFF_ROUTE_FIXES, RESUME_S, Router, route_record, saved_route
+
+app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
 # North 2.2 km, then right (east) for 760 m.
 START, CORNER, END = (-122.0, 47.0), (-122.0, 47.02), (-121.99, 47.02)
@@ -119,6 +126,163 @@ class FollowingTest(unittest.TestCase):
         self.router._on_route(ROUTE, "", "Shop", True)
         self.assertEqual(self.said, [])
         self.assertTrue(self.router.active)
+
+
+class FakeSettings:
+    def __init__(self, **values):
+        self.values = dict(values)
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set(self, key, value):
+        self.values[key] = value
+
+
+class SavedRouteTest(unittest.TestCase):
+    """What's saved, read back with a clock that's just a number."""
+
+    def test_read_back(self):
+        text = route_record("Shop", -121.99, 47.02, True, 1000.0)
+        self.assertEqual(saved_route(text, 1000.0 + 600),
+                         {"name": "Shop", "lon": -121.99, "lat": 47.02, "started": True})
+
+    def test_too_old(self):
+        text = route_record("Shop", -121.99, 47.02, True, 1000.0)
+        self.assertIsNotNone(saved_route(text, 1000.0 + RESUME_S - 1))
+        self.assertIsNone(saved_route(text, 1000.0 + RESUME_S + 1))
+
+    def test_a_clock_behind_after_a_restart_still_counts(self):
+        text = route_record("Shop", -121.99, 47.02, False, 1000.0)
+        self.assertIsNotNone(saved_route(text, 1000.0 - 600))
+
+    def test_nothing_or_junk(self):
+        for text in ("", "None", "[]", "{", '{"name": "Shop"}', '{"name": 3, "lon": 0, "lat": 0, "at": 0}',
+                     '{"name": "Shop", "lon": "x", "lat": 0, "at": 0}'):
+            self.assertIsNone(saved_route(text, 0.0), text)
+
+
+class ResumeTest(unittest.TestCase):
+    """A restart with a route saved: the router asks for it again once the
+    service answers and there's a position, and carries on."""
+
+    def make(self, started=True, at=None, gps=None):
+        self.gps = gps or FakeGps()
+        record = route_record("Shop", *END, started, time.time() if at is None else at)
+        self.settings = FakeSettings(route=record)
+        router = Router(self.gps, self.settings)
+        self.said, self.asked, self.resumed = [], [], []
+        router.speak.connect(self.said.append)
+        router.resumed.connect(lambda *a: self.resumed.append(a))
+        router._request = lambda *a, **k: self.asked.append(a)
+        return router
+
+    def saved(self):
+        return saved_route(self.settings.values["route"], time.time())
+
+    def test_guidance_carries_on(self):
+        router = self.make(started=True)
+        self.assertEqual(self.asked, [])             # no service yet
+        router._on_status(True)
+        self.assertEqual(self.asked, [("Shop", *END)])
+        router._on_route(ROUTE, "", "Shop", False)
+        self.assertTrue(router.active)
+        self.assertEqual(self.said, ["Continuing to Shop. Drive north."])
+        self.assertEqual(self.resumed, [])
+        self.assertTrue(self.saved()["started"])
+
+    def test_waits_for_a_position(self):
+        gps = FakeGps()
+        gps.hasFix = False
+        router = self.make(gps=gps)
+        router._on_status(True)
+        self.assertEqual(self.asked, [])
+        gps.hasFix = True
+        router._on_fix()
+        self.assertEqual(self.asked, [("Shop", *END)])
+        router._on_fix()                             # asked once only
+        self.assertEqual(len(self.asked), 1)
+
+    def test_a_preview_comes_back_as_a_preview(self):
+        router = self.make(started=False, at=time.time() - 600)
+        router._on_status(True)
+        router._on_route(ROUTE, "", "Shop", False)
+        self.assertTrue(router.previewing)
+        self.assertEqual(self.said, [])
+        self.assertEqual(self.resumed, [("Shop", *END)])
+        # Still saved from when it was picked: a preview doesn't stay fresh.
+        self.assertLess(json.loads(self.settings.values["route"])["at"], time.time() - 500)
+
+    def test_too_old_stays_gone(self):
+        router = self.make(at=time.time() - RESUME_S - 60)
+        router._on_status(True)
+        router._on_fix()
+        self.assertEqual(self.asked, [])
+        self.assertFalse(router.active)
+
+    def test_already_there(self):
+        gps = FakeGps()
+        gps.at(END[0] - 0.001, END[1])               # 76 m away: parked at it
+        router = self.make(gps=gps)
+        router._on_status(True)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.settings.values["route"], "")
+
+    def test_a_place_picked_first_wins(self):
+        router = self.make()
+        router.routeTo("Cafe", -122.01, 47.01)
+        router._on_status(True)
+        self.assertEqual(self.asked, [("Cafe", -122.01, 47.01)])
+        self.assertEqual(self.saved()["name"], "Cafe")
+
+    def test_no_route_now_forgets_it(self):
+        router = self.make()
+        router._on_status(True)
+        router._on_route(None, "No path could be found", "Shop", False)
+        self.assertFalse(router.active)
+        self.assertEqual(router.destinationName, "")
+        self.assertEqual(self.settings.values["route"], "")
+
+
+class SavingTest(unittest.TestCase):
+    """What gets saved as the route changes."""
+
+    def setUp(self):
+        self.gps = FakeGps()
+        self.settings = FakeSettings()
+        self.router = Router(self.gps, self.settings)
+        self.router._request = lambda *a, **k: None
+
+    def saved(self):
+        return saved_route(self.settings.values.get("route", ""), time.time())
+
+    def test_preview_then_go_then_end(self):
+        self.router.routeTo("Shop", *END)
+        self.assertEqual(self.saved(), {"name": "Shop", "lon": END[0], "lat": END[1], "started": False})
+        self.router._on_route(ROUTE, "", "Shop", False)
+        self.router.go()
+        self.assertTrue(self.saved()["started"])
+        self.router.stop()
+        self.assertEqual(self.settings.values["route"], "")
+
+    def test_arriving_forgets_it(self):
+        self.router.routeTo("Shop", *END)
+        self.router._on_route(ROUTE, "", "Shop", False)
+        self.router.go()
+        self.gps.at(END[0] - 0.0001, END[1])
+        self.router._on_fix()
+        self.assertTrue(self.router.arrived)
+        self.assertEqual(self.settings.values["route"], "")
+
+    def test_kept_fresh_while_driving(self):
+        self.router.routeTo("Shop", *END)
+        self.router._on_route(ROUTE, "", "Shop", False)
+        self.router.go()
+        self.settings.values["route"] = route_record("Shop", *END, True, time.time() - 3000)
+        self.router._saved_at -= 61                  # a minute since the last save
+        self.gps.at(-122.0, 47.005)
+        self.router._on_fix()
+        self.assertGreater(json.loads(self.settings.values["route"])["at"], time.time() - 5)
 
 
 if __name__ == "__main__":

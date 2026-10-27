@@ -744,28 +744,16 @@ function revealRoute(ms = 900) {
 let routeCoords = null;
 let trimFrom = 0, trimmedAt = 0;      // the route segment the truck is on
 
-// Once a second, drop the part of the line the truck has already driven:
-// snap the truck to the nearest route segment just ahead of the last one
-// and draw from there.
+// Once a second while navigating, drop the part of the line the truck has
+// already driven: draw from the truck on, from the segment the dashboard
+// has it on (setRouteAt). The dashboard knows which way the truck is going
+// and how far it could have got, so where the route comes back near itself
+// (a U-turn, a loop ramp) the line isn't cut away to the later part.
 function trimRoute(now) {
-    if (!routeCoords || !shown || now - trimmedAt < 1000 || !map.getSource("route")) return;
+    if (!routeCoords || !guiding || !shown || now - trimmedAt < 1000 || !map.getSource("route")) return;
     trimmedAt = now;
-    const k = Math.cos(shown.lat * Math.PI / 180);
-    let best = trimFrom, bestD = Infinity;
-    const end = Math.min(routeCoords.length - 1, trimFrom + 300);
-    for (let i = trimFrom; i < end; i++) {
-        const [ax, ay] = routeCoords[i], [bx, by] = routeCoords[i + 1];
-        const dx = (bx - ax) * k, dy = by - ay;
-        const px = (shown.lon - ax) * k, py = shown.lat - ay;
-        const len = dx * dx + dy * dy;
-        const t = len ? Math.max(0, Math.min(1, (px * dx + py * dy) / len)) : 0;
-        const ex = px - t * dx, ey = py - t * dy;
-        const d = ex * ex + ey * ey;
-        if (d < bestD) { bestD = d; best = i; }
-    }
-    trimFrom = best;
     map.getSource("route").setData({ type: "Feature", properties: {},
-        geometry: { type: "LineString", coordinates: [[shown.lon, shown.lat]].concat(routeCoords.slice(best + 1)) } });
+        geometry: { type: "LineString", coordinates: [[shown.lon, shown.lat]].concat(routeCoords.slice(trimFrom + 1)) } });
 }
 
 // isStyleLoaded() is false whenever tiles are still loading (nearly always
@@ -888,6 +876,8 @@ window.baja = {
     setPosition,
     // Metres to the next turn while navigating (zooms in a little as it nears).
     setApproach(m) { approach = m; },
+    // The route segment the truck is on while navigating.
+    setRouteAt(i) { if (routeCoords) trimFrom = Math.max(0, Math.min(i, routeCoords.length - 2)); },
     showPlace,
     clearPlace() { pinMarker.remove(); },
     // The whole route, framed beside the place card, before Go.

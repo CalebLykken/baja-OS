@@ -44,8 +44,10 @@ WebEngineView {
     function sendPosition() {
         if (typeof gps !== "undefined" && gps.hasFix)
             call("setPosition(" + gps.lon + "," + gps.lat + "," + gps.heading + "," + gps.speed + ")")
-        if (typeof routing !== "undefined" && routing.active)
+        if (typeof routing !== "undefined" && routing.active) {
             call("setApproach(" + Math.round(routing.distanceToTurn) + ")")
+            call("setRouteAt(" + routing.segment + ")")
+        }
     }
 
     // Set once, not bound: a day/night change restyles the running map.

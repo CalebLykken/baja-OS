@@ -27,6 +27,11 @@ ROUTER = "http://127.0.0.1:8002"
 OFF_ROUTE_M = 60          # this far from the line ...
 OFF_ROUTE_FIXES = 3       # ... for this many fixes in a row means a new route
 REROUTE_EVERY_S = 10
+HEADING_MS = 2            # faster than this the GPS heading counts, and a part of the route
+WRONG_WAY_DEG = 60        # ... running further off it than this counts as
+WRONG_WAY_M = 40          # ... this much further away
+JUMP_M = 30               # a fix can move the truck along the route this much more than it could have driven ...
+JUMP_FIXES = 3            # ... or further once this many in a row, moving, put it there
 ARRIVED_M = 35
 FAST_MS = 20              # above ~45 mph, warn about turns from further out
 THEN_M = 300              # a turn this soon after the next one is shown with it
@@ -101,28 +106,86 @@ class Route:
         self.shape = decode_polyline6(leg["shape"])
         self.lat0 = self.shape[0][1]
         self.cum = [0.0]
+        self.bearing = []             # each segment's compass bearing (None if it has no length)
         for a, b in zip(self.shape, self.shape[1:]):
             ax, ay = _xy(a, self.lat0)
             bx, by = _xy(b, self.lat0)
             self.cum.append(self.cum[-1] + math.hypot(bx - ax, by - ay))
+            self.bearing.append(math.degrees(math.atan2(bx - ax, by - ay)) % 360
+                                if (bx, by) != (ax, ay) else None)
         self.length = self.cum[-1]
         self.time = float(data["trip"]["summary"]["time"])
         self.maneuvers = leg["maneuvers"]
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
         self.off = 0.0                # metres from the line
+        self.to_end = math.inf        # metres from the end of the route, in a straight line
+        self._p, self._at = None, None    # the last position it was located at, and when
+        self._away = 0                # fixes in a row that put it further along (or back) than it could have got
 
-    def locate(self, lon, lat):
-        """Snap the truck to the route, looking a little back and ahead."""
+    def locate(self, lon, lat, heading=None, speed=None, now=None):
+        """Snap the truck to the route, looking a little back and ahead.
+
+        The route can come back near itself (a U-turn, a loop ramp, a
+        place across a divided road), so while following it (with the
+        GPS's heading and speed) this isn't just the nearest part. Moving,
+        a part running the other way counts as further off. And the truck
+        only moves along the route, either way, as far as it could have
+        driven since the last fix, unless somewhere else on it is clearly
+        where it is: what it could have got to is off-route far away, or a
+        few fixes in a row while moving put it there. Without them (a new
+        route, Go) it's the nearest part."""
+        now = time.monotonic() if now is None else now
         p = (lon, lat)
-        best = (1e18, self.seg, 0.0)
+        if speed is not None and p == self._p:
+            return                    # the same fix again (the GPS also says when satellites change)
+        moving = heading is not None and speed is not None and speed > HEADING_MS
+        span = math.inf
+        if speed is not None and self._at is not None:
+            span = speed * max(0.0, now - self._at) + JUMP_M
+        lo_m, hi_m = self.along - span, self.along + span
+        near, far = [], []            # (metres off plus any wrong-way extra, metres off, segment, fraction)
         lo, hi = max(0, self.seg - 5), min(len(self.shape) - 1, self.seg + 150)
         for i in range(lo, hi):
-            d, t = _project(p, self.shape[i], self.shape[i + 1], self.lat0)
-            if d < best[0]:
-                best = (d, i, t)
-        self.off, self.seg, t = best
+            a, b = self.shape[i], self.shape[i + 1]
+            extra = WRONG_WAY_M if moving and self._wrong_way(i, heading) else 0.0
+            d, t = _project(p, a, b, self.lat0)
+            c0, seg_m = self.cum[i], self.cum[i + 1] - self.cum[i]
+            if lo_m <= c0 + t * seg_m <= hi_m:
+                near.append((d + extra, d, i, t))
+                continue
+            far.append((d + extra, d, i, t))
+            if c0 < hi_m and c0 + seg_m > lo_m:
+                # The nearest point on the part of it the truck could have got to.
+                t = min(max(t, (lo_m - c0) / seg_m), (hi_m - c0) / seg_m)
+                c = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+                d = _project(p, c, c, self.lat0)[0]
+                near.append((d + extra, d, i, t))
+        best = min(near, default=(math.inf, math.inf, self.seg, 0.0))
+        jump = min(far, default=None)
+        if jump and jump[0] < best[0] and jump[1] < OFF_ROUTE_M:
+            if best[1] > OFF_ROUTE_M:
+                best = jump           # nowhere near where it could have got, but on the route there
+            elif moving:
+                self._away += 1
+                if self._away >= JUMP_FIXES:
+                    best = jump
+            else:
+                self._away = 0        # parked, the GPS wanders: it hasn't gone anywhere
+        else:
+            self._away = 0
+        if best is jump:
+            self._away = 0
+        _, self.off, self.seg, t = best
         self.along = self.cum[self.seg] + t * (self.cum[self.seg + 1] - self.cum[self.seg])
+        self._p, self._at = p, now
+        (px, py), (ex, ey) = _xy(p, self.lat0), _xy(self.shape[-1], self.lat0)
+        self.to_end = math.hypot(ex - px, ey - py)
+
+    def _wrong_way(self, i, heading):
+        """Segment i runs too far off the truck's heading."""
+        b = self.bearing[i]
+        return b is not None and abs((heading - b + 180) % 360 - 180) > WRONG_WAY_DEG
 
     def next_maneuver(self):
         for m in self.maneuvers:
@@ -325,8 +388,8 @@ class Router(QObject):
                 self._off_count = 0
                 self.progressChanged.emit()
             return
-        r.locate(self._gps.lon, self._gps.lat)
-        if r.remaining < ARRIVED_M and not self._arrived:
+        r.locate(self._gps.lon, self._gps.lat, self._gps.heading, self._gps.speed)
+        if r.remaining < ARRIVED_M and r.to_end < ARRIVED_M and not self._arrived:
             self._arrived = True
             self._say(f"You have arrived at {r.name}.")
             QTimer.singleShot(20000, lambda: self.stop() if self._arrived else None)
@@ -410,6 +473,11 @@ class Router(QObject):
             return 0.0
         m = r.next_maneuver()
         return max(0.0, r.cum[m["begin_shape_index"]] - r.along)
+
+    @pyqtProperty(int, notify=progressChanged)
+    def segment(self):
+        """The route segment the truck is on (the map draws the line from there)."""
+        return self._route.seg if self._route else 0
 
     @pyqtProperty(float, notify=progressChanged)
     def remainingDistance(self):

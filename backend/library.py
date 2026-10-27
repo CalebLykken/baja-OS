@@ -6,6 +6,8 @@ a cover.jpg beside the files) are read with mutagen. Playback is gapless
 (backend/gapless.py), so songs that run into each other on an album do
 here too. Songs are grouped into albums by their tags, and playing an
 album makes it the queue; "all songs" plays everything in folder order.
+After a restart it picks up the album, song and place in it that the hub
+saved (backend/hub.py), and it never starts playing by itself otherwise.
 """
 
 import functools
@@ -142,6 +144,33 @@ def group_albums(tracks):
     return [albums[k] for k in sorted(albums, key=lambda k: (k[0], k[1]))]
 
 
+def resume_point(albums, tracks, state):
+    """Where to pick up from a saved state: (album index or -1 for all
+    songs, song index in that queue, seconds in). The album is found by
+    name and the song by its file, so songs added since don't shift them;
+    a song that's gone falls back to its place in the queue, then to the
+    first song."""
+    state = state if isinstance(state, dict) else {}
+    album, same_queue = -1, True
+    want = state.get("album")
+    if isinstance(want, list) and len(want) == 2:
+        key = [str(v).casefold() for v in want]
+        album = next((i for i, a in enumerate(albums)
+                      if [a["artist"].casefold(), a["title"].casefold()] == key), -1)
+        same_queue = album >= 0
+    queue = albums[album]["tracks"] if album >= 0 else range(len(tracks))
+    paths = [tracks[i]["path"] for i in queue]
+    index = state.get("index")
+    if state.get("path") in paths:
+        index = paths.index(state["path"])
+    elif not (same_queue and isinstance(index, int) and 0 <= index < len(paths)):
+        index = 0
+    position = state.get("position")
+    if paths[index] != state.get("path") or not isinstance(position, (int, float)):
+        position = 0                         # not the same song: from its start
+    return album, index, max(0, int(position))
+
+
 def preferred_output():
     """The equalizer when it's running, so music goes through it and on to
     whichever output is the default (the sound board); else the default.
@@ -167,6 +196,8 @@ class LibraryPlayer(QObject):
         self._queue = list(tracks)      # what's playing through: an album, or all songs
         self._album = -1                # index into _albums, or -1 for all songs
         self._index = 0
+        self._start_at = 0              # seconds into the first song (from restore())
+        self._start_playing = False
         self._volume = 40
 
         self._engine = GaplessEngine(lambda i: self._queue[i]["path"], lambda: len(self._queue),
@@ -180,8 +211,30 @@ class LibraryPlayer(QObject):
         self._tick.start()
         self._apply_volume()
 
+    def restore(self, state, play=False):
+        """Pick up where the last run left off (what state() saved): its
+        album, song and place in the song, playing only if `play`. Call it
+        before start()."""
+        album, self._index, self._start_at = resume_point(self._albums, self._all, state)
+        if album >= 0:
+            self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
+        self._album = album
+        self._start_playing = play
+
+    def state(self):
+        """Where local music is up to, to save between runs."""
+        album = self._albums[self._album] if self._album >= 0 else None
+        return {"album": [album["artist"], album["title"]] if album else None,
+                "path": self._queue[self._index]["path"], "index": self._index,
+                "position": self._engine.position()}
+
     def start(self):
-        self._go(self._index)
+        # Paused unless restore() says it was playing: a fresh boot never
+        # starts the first song of everything by itself.
+        self._engine.play_from(self._index, play=self._start_playing, at=self._start_at)
+        self.trackChanged.emit()
+        self.positionChanged.emit()
+        self.playingChanged.emit()
 
     def _pick_output(self):
         self._engine.set_device(preferred_output())

@@ -148,9 +148,10 @@ def main():
         pass
     spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
     local = make_media_player(args.music_dir)
+    # It picks up where music was before a restart, and saves that as it goes.
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),
-                     max_volume=settings.get_int("maxVolume", 100))
+                     max_volume=settings.get_int("maxVolume", 100), settings=settings)
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
     # The dash knob: turn for volume, press to play or pause.

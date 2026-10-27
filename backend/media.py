@@ -35,6 +35,21 @@ class MediaPlayer(QObject):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
 
+    def restore(self, state, play=False):
+        """Pick up the song and place in it from the last run (as
+        LibraryPlayer does), playing only if `play`. With nothing saved
+        the demo plays from where it always has."""
+        state = state if isinstance(state, dict) else {}
+        if isinstance(state.get("index"), int):
+            self._index = state["index"] % len(self._queue)
+        if isinstance(state.get("position"), int):
+            self._position = max(0, min(state["position"], self.duration - 1))
+        self._playing = play
+
+    def state(self):
+        """Where the demo is up to, in LibraryPlayer's shape."""
+        return {"album": None, "path": "", "index": self._index, "position": self._position}
+
     def start(self):
         self._timer.start()
 

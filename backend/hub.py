@@ -22,9 +22,16 @@ e.g. on a Mac). `maxVolume` is a ceiling on the Pi's output for every source
 
 It also prepares the current cover as a rounded square for the album-art
 frame; Spotify covers are downloaded and cached first.
+
+Which source was on, and where local music was up to, are saved in
+settings (every few seconds while it plays, and whenever that changes), so
+a restart picks up the same album and song, near the same place. Local
+music plays again only if it was what was playing; after Spotify or the
+phone it waits, paused, for them to come back.
 """
 
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
@@ -49,6 +56,7 @@ FADE_STEP_MS = 30
 START_WAIT_MS = 120
 SETTLE_MS = 250            # after pausing, before the volume goes back up
 FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
+SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
 
 
 def _rounded_card(img, out, size=600, radius_frac=0.014):
@@ -97,6 +105,20 @@ def cached_art(url):
     return QUrl.fromLocalFile(str(out)).toString()
 
 
+def read_state(text):
+    """What the last run saved ({source, playing, local}), or None."""
+    try:
+        state = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def plays_on_start(state):
+    """Local music starts playing only if it was the source and was playing."""
+    return bool(state) and state.get("source") == "local" and state.get("playing") is True
+
+
 class MediaHub(QObject):
     trackChanged = pyqtSignal()
     positionChanged = pyqtSignal()
@@ -109,10 +131,15 @@ class MediaHub(QObject):
     maxVolumeChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
 
-    def __init__(self, local, phone, spotify, volume=40, max_volume=100, parent=None):
+    def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
         super().__init__(parent)
         self._sources = {"local": local, "phone": phone, "spotify": spotify}
         self._source = "local"
+        self._settings = settings
+        saved = read_state(str(settings.get("music", ""))) if settings else None
+        if saved is not None:
+            local.restore(saved.get("local"), play=plays_on_start(saved))
+        self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
         self._system_volume = bool(shutil.which("wpctl"))
         # The output level goes out through one thread, in order, latest
         # wins (a fade sends a quick run of them).
@@ -161,6 +188,18 @@ class MediaHub(QObject):
     def start(self):
         for src in self._sources.values():
             src.start()
+        if self._settings:
+            # Only from here: before it starts, local music doesn't know its place.
+            for sig in (self.sourceChanged, self.playingChanged, self.trackChanged):
+                sig.connect(self._save)
+            self._save_timer.start()
+
+    def _save(self):
+        """Save which source is on, whether it's playing, and where local
+        music is up to; unchanged, nothing is written."""
+        self._settings.set("music", json.dumps({
+            "source": self._source, "playing": bool(self.playing),
+            "local": self._sources["local"].state()}))
 
     # ---- source switching -------------------------------------------------
     @property

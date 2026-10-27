@@ -50,12 +50,13 @@ def audio_format():
 class _Song:
     """One song's samples on their way to the speakers."""
 
-    def __init__(self, index, gen):
+    def __init__(self, index, gen, skip=0):
         self.index = index
         self.gen = gen              # the play_from it follows on from
         self.chunks = deque()       # decoder appends (main thread), feed pops (audio thread)
         self.done = False           # decoding finished (or failed)
-        self.played = 0             # bytes handed to the stream so far
+        self.skip = skip            # bytes still to leave out from its start (resuming partway)
+        self.played = skip          # bytes into the song handed to the stream so far
 
 
 class _Feed(QIODevice):
@@ -141,9 +142,9 @@ class _Output(QObject):
         with e._lock:
             if e._gain == 0.0 and e._target == 0.0:
                 if e._pending is not None:      # faded out: now switch songs
-                    index, e._pending = e._pending, None
+                    (index, skip), e._pending = e._pending, None
                     e._songs.clear()
-                    e._songs.append(_Song(index, e._gen))
+                    e._songs.append(_Song(index, e._gen, skip))
                     self.wantDecode.emit()
                     if e._want_play:
                         e._target = 1.0
@@ -215,7 +216,7 @@ class GaplessEngine(QObject):
         self._songs = deque()
         self._want_play = False
         self._gain, self._target = 0.0, 0.0
-        self._pending = None        # a song to switch to once faded out
+        self._pending = None        # (song, bytes in) to switch to once faded out
         self._gen = 0               # counts play_from calls (the list may have changed)
         self._latency = 0           # bytes queued in the stream (set by the feed)
         self._decoder = None
@@ -286,7 +287,13 @@ class GaplessEngine(QObject):
         while dec.bufferAvailable():
             buf = dec.read()
             if buf.byteCount():
-                song.chunks.append(buf.constData().asstring(buf.byteCount()))
+                data = buf.constData().asstring(buf.byteCount())
+                if song.skip:
+                    cut = min(song.skip, len(data))
+                    song.skip -= cut
+                    data = data[cut:]
+                if data:
+                    song.chunks.append(data)
 
     def _decode_done(self, dec, song):
         self._decoded(dec, song)
@@ -315,18 +322,20 @@ class GaplessEngine(QObject):
             dec.deleteLater()
 
     # ---- controls -----------------------------------------------------------
-    def play_from(self, index, play=True):
-        """Start song `index` now, fading out whatever is playing first."""
+    def play_from(self, index, play=True, at=0):
+        """Start song `index` now, `at` seconds in, fading out whatever is
+        playing first. With play False it waits there, paused."""
+        skip = int(max(0, at) * RATE) * FRAME
         with self._lock:
             self._want_play = play
             self._gen += 1
             if self._gain > 0.0:
-                self._pending = index
+                self._pending = (index, skip)
                 self._target = 0.0
                 return                           # the feed switches once faded out
             self._pending = None
             self._songs.clear()
-            self._songs.append(_Song(index, self._gen))
+            self._songs.append(_Song(index, self._gen, skip))
             self._target = 1.0 if play else 0.0
         self._decode_more()
 
@@ -345,4 +354,7 @@ class GaplessEngine(QObject):
         with self._lock:
             if not self._songs or self._pending is not None:
                 return 0
-            return max(0, self._songs[0].played - self._latency) // BYTES_PER_S
+            # Paused, what's queued in the stream is silence: counting it
+            # would put a restored song (and each save of it) a bit earlier.
+            held = self._latency if self._want_play else 0
+            return max(0, self._songs[0].played - held) // BYTES_PER_S

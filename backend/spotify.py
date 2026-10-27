@@ -29,30 +29,44 @@ RETRY_MS = 3000
 RECENTS_MAX = 12
 KIND_WORDS = {"playlist": "Playlist", "artist": "Artist", "show": "Podcast",
               "collection": "Liked Songs", "station": "Radio"}
+NUMBER = (int, float)
+
+
+def _get(obj, *keys, want=dict):
+    """obj[key1][key2]... if it's a `want` (a type, or a tuple of them),
+    else an empty one. A key that's missing or null, or a step that isn't
+    an object, reads as empty: Soloist sends null for parts it doesn't
+    have (a cover, an album), and its API can change under us."""
+    for key in keys:
+        obj = obj.get(key) if isinstance(obj, dict) else None
+    if isinstance(obj, want):
+        return obj
+    return want[0]() if isinstance(want, tuple) else want()
 
 
 def _name(entity):
-    return ((entity or {}).get("decorations") or {}).get("identity", {}).get("name", "")
+    return _get(entity, "decorations", "identity", "name", want=str)
 
 
 def _cover(entity, prefer=("large", "xlarge", "default", "small")):
-    covers = ((entity or {}).get("decorations") or {}).get("visual_identity", {}).get("cover") or []
-    by_size = {c.get("size"): c.get("url") for c in covers if c.get("url")}
+    covers = _get(entity, "decorations", "visual_identity", "cover", want=list)
+    urls = ((_get(c, "size", want=str), _get(c, "url", want=str)) for c in covers)
+    by_size = {size: url for size, url in urls if url}
     return next((by_size[s] for s in prefer if s in by_size), "")
 
 
 def _artists(entity):
     # Each creator is wrapped: {"entity": {..., "decorations": {"identity": ...}}}
-    creators = ((entity or {}).get("decorations") or {}).get("creators") or []
-    return ", ".join(n for n in (_name(c.get("entity", c)) for c in creators) if n)
+    creators = _get(entity, "decorations", "creators", want=list)
+    return ", ".join(n for n in (_name(_get(c, "entity") or c) for c in creators) if n)
 
 
 def _duration_ms(entity):
-    return int(((entity or {}).get("decorations") or {}).get("playback", {}).get("duration_ms") or 0)
+    return int(_get(entity, "decorations", "playback", "duration_ms", want=NUMBER))
 
 
 def _parent(entity):
-    return ((entity or {}).get("decorations") or {}).get("parent", {}).get("entity") or {}
+    return _get(entity, "decorations", "parent", "entity")
 
 
 class SpotifyPlayer(QObject):
@@ -126,19 +140,25 @@ class SpotifyPlayer(QObject):
             ev = json.loads(text)
         except ValueError:
             return
-        kind = ev.get("type")
+        kind = _get(ev, "type", want=str)
+        try:
+            self._handle(ev, kind)
+        except Exception as e:      # drop the one odd event; it mustn't stop the dashboard
+            print(f"Spotify: ignored a {kind} event that didn't parse ({e!r})")
+
+    def _handle(self, ev, kind):
         if kind == "auth_state":
             self._logged_in = bool(ev.get("logged_in"))
             self._active = bool(ev.get("is_active"))
-            self._device = ev.get("device_name") or self._device
+            self._device = _get(ev, "device_name", want=str) or self._device
             self.changed.emit()
             if self._logged_in:
                 self._command("get_queue", limit=10)
         elif kind == "playback_state":
             self._note_context(ev.get("context"))
             self._set_item(ev.get("item"))
-            self._set_status(ev.get("status"))
-            self._set_position(ev.get("position"))
+            self._set_status(_get(ev, "status", want=str))
+            self._set_position(_get(ev, "position"))
             self._set_volume(ev.get("volume"))
             self._set_active(ev.get("is_active"))
         elif kind == "track_changed":
@@ -146,23 +166,23 @@ class SpotifyPlayer(QObject):
         elif kind == "context_changed":
             self._note_context(ev.get("context"))
         elif kind == "playback_changed":
-            self._set_status(ev.get("status"))
+            self._set_status(_get(ev, "status", want=str))
         elif kind == "position_sync":
-            self._set_position(ev.get("position"))
+            self._set_position(_get(ev, "position"))
         elif kind == "volume_changed":
             self._set_volume(ev.get("volume"))
         elif kind == "device_changed":
-            self._device = ev.get("device_name") or self._device
+            self._device = _get(ev, "device_name", want=str) or self._device
             self._set_active(ev.get("is_active"))
         elif kind == "queue_changed":
-            self._up_next = [{"title": _name(e.get("item")), "artist": _artists(e.get("item"))}
-                             for e in (ev.get("upcoming") or [])][:10]
+            self._up_next = [{"title": _name(_get(e, "item")), "artist": _artists(_get(e, "item"))}
+                             for e in _get(ev, "upcoming", want=list)][:10]
             self.queueChanged.emit()
         elif kind == "error":
             print(f"Spotify: {ev.get('message')}")
 
     def _set_item(self, item):
-        item = item or {}
+        item = item if isinstance(item, dict) else {}
         if item != self._item:
             self._item = item
             self.trackChanged.emit()
@@ -173,10 +193,10 @@ class SpotifyPlayer(QObject):
     # ---- recently played here ---------------------------------------------
     def _note_context(self, ctx):
         """Put what's playing (an album or playlist) first in `recents`."""
-        uri, name = (ctx or {}).get("uri") or "", _name(ctx)
+        uri, name = _get(ctx, "uri", want=str), _name(ctx)
         if not uri or not name:
             return
-        kind = ctx.get("entity_type") or uri.split(":")[1]
+        kind = _get(ctx, "entity_type", want=str) or (uri.split(":") + [""])[1]
         old = next((r for r in self._recents if r["uri"] == uri), None)
         entry = {"uri": uri, "kind": kind, "title": name,
                  "subtitle": old["subtitle"] if old else "",
@@ -216,13 +236,13 @@ class SpotifyPlayer(QObject):
             return
         # The server's timestamp is the same machine's clock, so convert it
         # to an age and anchor to our monotonic clock for interpolation.
-        age = max(0.0, time.time() - (pos.get("timestamp_ms") or 0) / 1000)
-        self._pos = (int(pos.get("position_ms") or 0), time.monotonic() - age,
-                     float(pos.get("speed") or 0.0))
+        age = max(0.0, time.time() - _get(pos, "timestamp_ms", want=NUMBER) / 1000)
+        self._pos = (int(_get(pos, "position_ms", want=NUMBER)), time.monotonic() - age,
+                     float(_get(pos, "speed", want=NUMBER)))
         self.positionChanged.emit()
 
     def _set_volume(self, volume):
-        if volume is not None and int(volume) != self._volume:
+        if isinstance(volume, NUMBER) and int(volume) != self._volume:
             self._volume = int(volume)
             self.volumeChanged.emit()
 

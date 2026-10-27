@@ -8,6 +8,7 @@ here too. Songs are grouped into albums by their tags, and playing an
 album makes it the queue; "all songs" plays everything in folder order.
 """
 
+import functools
 import hashlib
 import re
 import tempfile
@@ -58,9 +59,9 @@ def _number(tags, *keys):
     return 0
 
 
-def _folder_art(path):
-    """A cover picture saved beside the song (cover.jpg and the like), or ''."""
-    for f in sorted(path.parent.iterdir()):
+def _folder_art(folder):
+    """A cover picture saved in a song's folder (cover.jpg and the like), or ''."""
+    for f in sorted(folder.iterdir()):
         if f.suffix.lower() in COVER_TYPES and f.stem.lower() in COVER_NAMES:
             return QUrl.fromLocalFile(str(f)).toString()
     return ""
@@ -90,6 +91,8 @@ def _extract_art(path, audio):
 def scan(folder):
     """Return a sorted list of track dicts for every audio file under folder."""
     tracks = []
+    # Once per folder: listing the folder for every song made a big one O(n²).
+    folder_art = functools.cache(_folder_art)
     for path in sorted(Path(folder).expanduser().rglob("*")):
         if path.suffix.lower() not in AUDIO_EXTENSIONS or not path.is_file():
             continue
@@ -106,7 +109,7 @@ def scan(folder):
                 "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
                 "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
                 "duration": int(audio.info.length),
-                "art": _extract_art(path, audio) or _folder_art(path),
+                "art": _extract_art(path, audio) or folder_art(path.parent),
                 "album": _first_tag(tags, "TALB", "\xa9alb", "album") or path.parent.name,
                 "albumArtist": _first_tag(tags, "TPE2", "aART", "albumartist", "album artist"),
                 "disc": _number(tags, "TPOS", "disk", "discnumber"),
@@ -193,7 +196,7 @@ class LibraryPlayer(QObject):
 
     def _heard(self, index):
         """The next song started by itself (no gap): show it."""
-        if index != self._index:
+        if 0 <= index < len(self._queue) and index != self._index:
             self._index = index
             self.trackChanged.emit()
             self.positionChanged.emit()

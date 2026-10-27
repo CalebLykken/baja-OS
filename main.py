@@ -14,6 +14,8 @@ import json
 import os
 import signal
 import sys
+import threading
+import traceback
 from pathlib import Path
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
@@ -80,6 +82,30 @@ def make_media_player(music_dir):
     return LibraryPlayer(tracks)
 
 
+_errors = 0
+
+
+def log_exception(exc_type, exc, tb):
+    """Log an uncaught error and carry on. Without its own sys.excepthook,
+    PyQt aborts the whole dashboard (exit 134) when an exception escapes a
+    slot, a timer or a property QML reads."""
+    global _errors
+    _errors += 1
+    print(f"Uncaught error #{_errors}:", file=sys.stderr)
+    traceback.print_exception(exc_type, exc, tb)
+    sys.stderr.flush()
+
+
+def log_thread_exception(args):
+    """Log a worker thread that died, with its name."""
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread else "?"
+    print(f"Thread {name} stopped on an error:", file=sys.stderr)
+    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+    sys.stderr.flush()
+
+
 def init_web_engine():
     """Qt WebEngine (for the map) must be set up before the app object
     exists. Returns False if it isn't installed; the Maps page says so."""
@@ -94,6 +120,8 @@ def init_web_engine():
 
 def main():
     args = parse_args()
+    sys.excepthook = log_exception
+    threading.excepthook = log_thread_exception
     # Qt's event loop never hands control back to Python's Ctrl-C handler, so
     # let SIGINT kill the process directly (matters when started over SSH).
     signal.signal(signal.SIGINT, signal.SIG_DFL)

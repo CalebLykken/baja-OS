@@ -33,7 +33,10 @@ Item {
         if (visible) { if (hasMaps) maps.refresh() }
         else typing = false
     }
-    onMapReadyChanged: if (mapReady && pending) { choose(pending); pending = null }
+    onMapReadyChanged: {
+        if (mapReady && pending) { choose(pending); pending = null }
+        else if (mapReady && panel === "place" && place) map.call("showPlace(" + place.lon + "," + place.lat + ")")
+    }
 
     readonly property bool hasMaps: typeof maps !== "undefined"
     readonly property bool hasFix: typeof gps !== "undefined" && gps.hasFix
@@ -136,6 +139,19 @@ Item {
         else pending = p
     }
     property var pending: null
+    // After a restart the router works out the route that was on again
+    // (backend/routing.py). Guidance that had started just carries on; a
+    // place that was only being looked at comes back here, ready for Go.
+    Connections {
+        target: page.hasRouting ? routing : null
+        function onResumed(name, lon, lat) {
+            var p = { name: name, label: "", lon: lon, lat: lat }
+            page.place = page.recents.find(r => page.samePlace(r, p)) || p
+            page.typing = false
+            page.panel = "place"
+            if (page.mapReady) page.map.call("showPlace(" + lon + "," + lat + ")")
+        }
+    }
     function cancelPlace() {
         if (hasRouting && !routing.active) routing.stop()
         place = null

@@ -64,6 +64,11 @@ def parse_args():
                         help="folder of audio files to play (demo playlist if empty)")
     parser.add_argument("--maps-dir", default=str(DEFAULT_DATA_DIR),
                         help="offline map data from deploy/maps/install-map.sh")
+    demo = parser.add_mutually_exclusive_group()
+    demo.add_argument("--demo", dest="demo", action="store_true", default=None,
+                      help="always fill in made-up data where real data is missing")
+    demo.add_argument("--no-demo", dest="demo", action="store_false",
+                      help="never show made-up data (the truck)")
     return parser.parse_known_args()[0]
 
 

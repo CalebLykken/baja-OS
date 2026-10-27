@@ -7,7 +7,8 @@ clock that's just a number.
 import unittest
 from unittest import mock
 
-from backend.ignition import KeyOff, KeyOffLogic
+from backend.ignition import RUNNING_V, VOLTS_FRESH_S, KeyOff, KeyOffLogic
+from backend.obd import VOLTS_FOR_S
 
 QUIET_S, WARN_S = 15.0, 10.0
 
@@ -128,6 +129,77 @@ class KeyOffTest(unittest.TestCase):
         k.quiet(100)
         self.assertTrue(k.power_off_now(k.seconds_left(125)))
 
+    def test_no_countdown_while_the_battery_is_charging(self):
+        k = logic()
+        k.answered(0)
+        k.voltage(0, 14.2)                         # idling at a red light
+        k.quiet(0)                                 # and the K-line drops
+        for t in range(0, 600):
+            k.voltage(t, 14.1)                     # the reader, once a second
+            self.assertIsNone(k.seconds_left(t))
+
+    def test_counts_down_once_the_battery_falls(self):
+        k = logic()
+        k.answered(0)
+        k.voltage(0, 14.2)
+        k.quiet(0)
+        for t in range(0, 40):                     # a slow fall: the veto holds
+            k.voltage(t, 13.5)
+            self.assertIsNone(k.seconds_left(t))
+        k.voltage(40, 13.1)                        # the engine's off
+        self.assertEqual(k.seconds_left(40.5), 10) # the prompt, straight away
+        self.assertEqual(k.seconds_left(45), 5)
+        self.assertEqual(k.seconds_left(50), 0)
+
+    def test_a_quick_fall_doesnt_delay_it(self):
+        k = logic()
+        k.answered(0)
+        k.voltage(0, 14.2)                         # read while the engine ran
+        k.quiet(0)                                 # the key goes off
+        for t, volts in ((1, 13.2), (2, 12.9), (5, 12.8), (10, 12.7)):
+            k.voltage(t, volts)
+            self.assertIsNone(k.seconds_left(t))
+        self.assertEqual(k.seconds_left(15), 10)
+        self.assertEqual(k.seconds_left(25), 0)    # as without a battery reading
+
+    def test_at_the_threshold_isnt_charging(self):
+        k = logic()
+        k.answered(0)
+        k.quiet(0)
+        k.voltage(1, RUNNING_V)
+        self.assertEqual(k.seconds_left(25), 0)
+
+    def test_without_a_battery_reading_it_counts_down_as_before(self):
+        k = logic()
+        k.answered(0)
+        k.quiet(0)
+        self.assertIsNone(k.volts)
+        self.assertIsNone(k.seconds_left(14))
+        self.assertEqual(k.seconds_left(15), 10)
+        self.assertEqual(k.seconds_left(25), 0)
+
+    def test_an_old_battery_reading_stops_counting(self):
+        k = logic()
+        k.answered(0)
+        k.voltage(0, 14.2)                         # then the reader stops
+        k.quiet(0)
+        for t in range(0, int(VOLTS_FRESH_S)):
+            self.assertIsNone(k.seconds_left(t))
+        self.assertEqual(k.seconds_left(VOLTS_FRESH_S), 10)  # the prompt, not straight to 0
+        self.assertEqual(k.seconds_left(VOLTS_FRESH_S + WARN_S), 0)
+
+    def test_a_charging_battery_hides_a_countdown_already_showing(self):
+        k = logic()
+        k.answered(0)
+        k.quiet(0)
+        k.voltage(0, 12.6)
+        self.assertEqual(k.seconds_left(18), 7)
+        for t in range(19, 300):                   # running, but the car still quiet
+            k.voltage(t, 14.0)
+            self.assertIsNone(k.seconds_left(t))
+        k.voltage(300, 12.6)
+        self.assertEqual(k.seconds_left(300), 10)
+
 
 class Signal:
     def connect(self, slot):
@@ -135,7 +207,7 @@ class Signal:
 
 
 class FakeObd:
-    reading, quiet = Signal(), Signal()
+    reading, quiet, voltage = Signal(), Signal(), Signal()
 
 
 class FakeGps:
@@ -156,9 +228,10 @@ class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.now = 1000.0
         self.powered = []
-        for p in (mock.patch("backend.ignition.time.monotonic", lambda: self.now),
-                  mock.patch("builtins.print")):
-            p.start()
+        patches = (mock.patch("backend.ignition.time.monotonic", lambda: self.now),
+                   mock.patch("builtins.print"))
+        _, self.print = [p.start() for p in patches]
+        for p in patches:
             self.addCleanup(p.stop)
         self.k = KeyOff(FakeObd(), FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now))
 
@@ -194,6 +267,36 @@ class DashboardTest(unittest.TestCase):
     def test_a_failure_from_settings_isnt_shown_here(self):
         self.k.power_failed("Access denied")      # Settings > Shut down, no countdown
         self.assertEqual(self.k.error, "")
+
+    def battery_lines(self):
+        return [c.args[0] for c in self.print.call_args_list if "Key off? Battery" in c.args[0]]
+
+    def test_a_charging_battery_keeps_it_on(self):
+        self.k._answered({"speed": 0})
+        self.k._voltage(14.1)
+        self.k._quiet()
+        for _ in range(300):
+            self.now += 1
+            self.k._voltage(14.1)
+            self.k._second()
+        self.assertEqual(self.k.countdown, -1)
+        self.assertEqual(self.powered, [])
+
+    def test_logs_the_battery_each_second_for_two_minutes(self):
+        self.k._answered({"speed": 0})
+        self.k._second()                           # the car's answering: nothing
+        self.assertEqual(self.battery_lines(), [])
+        self.k._quiet()
+        self.k._second()
+        self.assertEqual(self.battery_lines(), ["Key off? Battery not read, 0 s after the car went quiet"])
+        self.k._voltage(13.04)
+        self.now += 1
+        self.k._second()
+        self.assertEqual(self.battery_lines()[-1], "Key off? Battery 13.0 V, 1 s after the car went quiet")
+        for _ in range(int(VOLTS_FOR_S) + 30):
+            self.now += 1
+            self.k._second()
+        self.assertEqual(len(self.battery_lines()), int(VOLTS_FOR_S))
 
 
 if __name__ == "__main__":

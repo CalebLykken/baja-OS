@@ -21,7 +21,11 @@ It never acts:
     bench, or the adapter unplugged);
   - when the adapter itself goes away, only when the car goes quiet;
   - while the truck is moving: the last speed the car reported was over
-    MOVING_MPH, or the GPS (with a real position) says it's moving.
+    MOVING_MPH, or the GPS (with a real position) says it's moving;
+  - while the battery is over RUNNING_V: the alternator is charging, so the
+    engine is running and only the K-line dropped (at a red light, say).
+    The adapter reads the battery with the car quiet too. Without a
+    reading in the last VOLTS_FRESH_S, the car going quiet is all it has.
 
 Known limit: the engine computer is off at ACC too, so parking with the
 key at ACC to keep listening looks like the truck being off. "Keep on"
@@ -35,9 +39,19 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend.obd import VOLTS_FOR_S
+
 QUIET_S = 15.0          # the car quiet this long before the countdown starts
 WARN_S = 10.0           # the countdown on screen, with "Keep on"
 MOVING_MPH = 3.0        # faster than this, it's a hiccup, not the key
+# The battery: about 13.6-14.5 V with the alternator charging (the engine
+# running), falling to about 12.4-12.8 V within a minute or so of the
+# engine stopping. Not measured on this truck yet: the journal's "Key off?
+# Battery" lines give it once a second for the first two minutes after the
+# car goes quiet. Measure idling with the lights and fan on, and a real
+# key-off, and set this between the two.
+RUNNING_V = 13.3        # over this, the engine's running: a dropout, not the key
+VOLTS_FRESH_S = 30.0    # an older reading doesn't count (the reader stopped)
 MPH_TO_MS = 0.44704
 SETTING = "shutdownWhenOff"
 
@@ -49,14 +63,17 @@ class KeyOffLogic:
     def __init__(self, quiet_s=QUIET_S, warn_s=WARN_S):
         self.quiet_s, self.warn_s = quiet_s, warn_s
         self.seen_on = False        # the car has answered since the Pi started
-        self.quiet_at = None        # when the car went quiet, while it's quiet
+        self.quiet_at = None        # when the wait started, while the car's quiet
+        self.quiet_since = None     # when the car went quiet, while it's quiet
         self.last_mph = 0.0         # the car's last reported speed
+        self.volts = None           # the battery's latest reading
+        self.charging_until = -math.inf  # the battery says the engine's running until then
         self.kept_on = False        # "Keep on" was tapped for this quiet spell
         self.done = False           # the shutdown was asked for this quiet spell
 
     def answered(self, mph=None):
         self.seen_on = True
-        self.quiet_at = None
+        self.quiet_at = self.quiet_since = None
         self.kept_on = False
         self.done = False
         if mph is not None:
@@ -64,7 +81,20 @@ class KeyOffLogic:
 
     def quiet(self, now):
         if self.seen_on and self.quiet_at is None:
-            self.quiet_at = now
+            self.quiet_at = self.quiet_since = now
+
+    def voltage(self, now, volts):
+        """A battery reading. Over RUNNING_V, it counts for VOLTS_FRESH_S
+        (the reader may stop) or until a lower one."""
+        self.volts = volts
+        if volts > RUNNING_V:
+            self.charging_until = now + VOLTS_FRESH_S
+        elif self.charging(now):
+            self.charging_until = now
+
+    def charging(self, now):
+        """The battery says the engine's running."""
+        return now < self.charging_until
 
     def keep_on(self):
         if self.quiet_at is not None:
@@ -91,16 +121,21 @@ class KeyOffLogic:
         if moving:
             self.quiet_at = now             # start the wait again once it stops
             return None
-        left = self.quiet_at + self.quiet_s + self.warn_s - now
+        if self.charging(now):
+            return None
+        # The prompt comes after the quiet wait, or as soon as the battery
+        # falls if that's later: proof enough that the engine stopped.
+        left = max(self.quiet_at + self.quiet_s, self.charging_until) + self.warn_s - now
         if left > self.warn_s:
             return None
         return max(0, math.ceil(left))
 
 
 class KeyOff(QObject):
-    """The dashboard's side: follows the OBD reader and the GPS, shows the
-    countdown (`countdown`, -1 when there's none), and powers off. Told
-    through power_failed() when that didn't work (`error`)."""
+    """The dashboard's side: follows the OBD reader (the car and the
+    battery) and the GPS, shows the countdown (`countdown`, -1 when there's
+    none), and powers off. Told through power_failed() when that didn't
+    work (`error`)."""
     changed = pyqtSignal()
 
     def __init__(self, obd, gps, settings, power_off, parent=None):
@@ -112,7 +147,8 @@ class KeyOff(QObject):
         self._error = ""
         obd.reading.connect(self._answered)
         obd.quiet.connect(self._quiet)
-        self._timer = QTimer(self, interval=1000, timeout=self._tick)
+        obd.voltage.connect(self._voltage)
+        self._timer = QTimer(self, interval=1000, timeout=self._second)
 
     def start(self):
         self._timer.start()
@@ -128,7 +164,21 @@ class KeyOff(QObject):
         self._logic.quiet(time.monotonic())
         if self._enabled and self._logic.seen_on:
             print(f"Key off? The car stopped answering: shutting down in "
-                  f"{QUIET_S + WARN_S:g} s unless it answers again", flush=True)
+                  f"{QUIET_S + WARN_S:g} s unless it answers again or the "
+                  f"battery is over {RUNNING_V:g} V", flush=True)
+
+    def _voltage(self, volts):
+        self._logic.voltage(time.monotonic(), volts)
+
+    def _second(self):
+        # The battery's fall after the key goes off, to set RUNNING_V by;
+        # logged whether or not "Shut down with key" is on.
+        since, volts = self._logic.quiet_since, self._logic.volts
+        if since is not None and time.monotonic() - since < VOLTS_FOR_S:
+            battery = "not read" if volts is None else f"{volts:.1f} V"
+            print(f"Key off? Battery {battery}, {time.monotonic() - since:.0f} s "
+                  f"after the car went quiet", flush=True)
+        self._tick()
 
     def _moving(self):
         return self._gps.realFix and self._gps.speed > MOVING_MPH * MPH_TO_MS

@@ -9,7 +9,10 @@ update a few times a second.
 
 Read only: it never sends mode 04 (clear codes) or anything that writes.
 With no adapter, or the key off, it just keeps looking, and VehicleData
-carries on with its simulated drive.
+carries on with its simulated drive. While it waits for the car it still
+reads the battery: the adapter measures that itself (ATRV), so it works
+with the engine computer silent, and it tells key-off (backend/ignition.py)
+whether the engine is still running.
 """
 
 import glob
@@ -32,6 +35,12 @@ ROUND_MIN_S = 0.1                    # at most 10 updates a second, however fast
 # rarely, so a parked car's adapter can go to sleep instead of being woken
 # every few seconds (it draws from the car's battery).
 RETRY_S, RETRY_SLOW_S, SLOW_AFTER_S = 3.0, 20.0, 60.0
+# Waking the car: the first time the adapter searches for its protocol,
+# which can take several seconds. Cut short, the next command stops it.
+WAKE_TIMEOUT_S = 15.0
+# The battery while waiting: every second for the first two minutes after
+# the car goes quiet (past the power relay's hold time), then with each try.
+VOLTS_EVERY_S, VOLTS_FOR_S = 1.0, 120.0
 LOG_EVERY_S = 15.0                   # a one-line summary in the journal while live
 
 
@@ -68,6 +77,9 @@ class Elm:
 
     def send(self, command, timeout=3.0):
         """The reply's text (without the prompt), or raises OSError."""
+        # Drop what's left of an earlier reply that came after its timeout:
+        # read as this one's, it would shift every answer after it.
+        termios.tcflush(self.fd, termios.TCIFLUSH)
         os.write(self.fd, (command + "\r").encode())
         buf, end = b"", time.monotonic() + timeout
         while time.monotonic() < end:
@@ -77,9 +89,16 @@ class Elm:
                     break
         return buf.decode(errors="replace").replace(">", "").replace("\r", " ").strip()
 
-    def pid(self, pid):
+    def volts(self):
+        """The adapter's supply voltage (the car's battery), or None."""
+        try:
+            return float(self.send("ATRV").rstrip("V"))
+        except ValueError:
+            return None
+
+    def pid(self, pid, timeout=3.0):
         """Mode 01 data bytes, e.g. 0x0C -> [0x1A, 0xF8], or None."""
-        reply = self.send(f"01{pid:02X}").replace(" ", "")
+        reply = self.send(f"01{pid:02X}", timeout).replace(" ", "")
         head = f"41{pid:02X}"
         i = reply.find(head)
         if i < 0:
@@ -113,22 +132,25 @@ class ObdReader(QObject):
     """Feeds VehicleData. `reading` carries a dict of fresh values; `lost`
     says the readings stopped (key off, unplugged). `quiet` says the car
     itself stopped answering with the adapter still there: the key going
-    off (backend/ignition.py)."""
+    off (backend/ignition.py). `voltage` carries the battery whenever it's
+    read, with the car answering or not."""
     reading = pyqtSignal(dict)
     lost = pyqtSignal()
     quiet = pyqtSignal()
+    voltage = pyqtSignal(float)
 
     def start(self):
         threading.Thread(target=self._run, name="obd", daemon=True).start()
 
     def _run(self):
         self._since = time.monotonic()        # when the car last went quiet
+        self._protocol = "0"                  # search, until the car has answered
         while True:
             path = find_port()
             if path:
                 try:
                     self._session(path)
-                except OSError:
+                except (OSError, termios.error):
                     pass                      # unplugged mid-read: look again
                 safe_emit(self, "lost")
             time.sleep(retry_wait(self._since))
@@ -138,53 +160,84 @@ class ObdReader(QObject):
         try:
             elm.send("ATZ", 4)
             time.sleep(0.5)
-            for c in ("ATE0", "ATL0", "ATS0", "ATH0", "ATAT2", "ATSP0"):
+            for c in ("ATE0", "ATL0", "ATS0", "ATH0", "ATAT2", "ATSP" + self._protocol):
                 elm.send(c)
-            # Wake the engine computer; with the key off it doesn't answer.
-            while not elm.pid(0x00):
-                time.sleep(retry_wait(self._since))
-                if not os.path.exists(path):
-                    return
-            print("OBD: the car answered", flush=True)
-            baro = 101.3                      # kPa, until the car tells us
-            misses, turn, logged, last = 0, 0, 0.0, {}
-            while misses < GIVE_UP_AFTER:
-                started = time.monotonic()
-                values = {}
-                for item in FAST + (SLOW[turn % len(SLOW)],):
-                    if item == "ATRV":
-                        try:
-                            values["voltage"] = float(elm.send("ATRV").rstrip("V"))
-                        except ValueError:
-                            pass
-                        continue
-                    d = elm.pid(item)
-                    if not d:
-                        misses += 1
-                        continue
-                    misses = 0
-                    try:
-                        key, value = convert(item, d, baro)
-                    except IndexError:
-                        continue
-                    if key:
-                        values[key] = value
-                # With the engine stopped (key on), the manifold sits at the
-                # outside air pressure: the zero for boost from here on.
-                if values.get("rpm") == 0 and "map" in values:
-                    baro = values["map"]
-                if "map" in values:
-                    values["boost"] = (values.pop("map") - baro) * 0.145038
-                if values:
-                    safe_emit(self, "reading", values)
-                    last.update(values)
-                if time.monotonic() - logged > LOG_EVERY_S and last:
-                    logged = time.monotonic()
-                    print("OBD: " + ", ".join(f"{k} {v:.1f}" for k, v in sorted(last.items())), flush=True)
-                turn += 1
-                time.sleep(max(0.0, ROUND_MIN_S - (time.monotonic() - started)))
-            self._since = time.monotonic()
-            print("OBD: the car stopped answering", flush=True)
-            safe_emit(self, "quiet")
+            while self._wait(elm, path):
+                print("OBD: the car answered", flush=True)
+                if self._protocol == "0":
+                    # The protocol the search found ("A5" is ISO 14230-4,
+                    # KWP fast init), so a reconnect doesn't search again.
+                    found = elm.send("ATDPN").lstrip("A")
+                    if len(found) == 1 and found in "123456789ABC":
+                        self._protocol = found
+                self._poll(elm)
+                self._since = time.monotonic()
+                print("OBD: the car stopped answering", flush=True)
+                safe_emit(self, "quiet")
+                safe_emit(self, "lost")
+                # Ask it the same way until it answers again: no search.
+                elm.send("ATSP" + self._protocol)
         finally:
             elm.close()
+
+    def _wait(self, elm, path):
+        """Wakes the engine computer (with the key off it doesn't answer):
+        True once it answers, False if the adapter goes away. Reads the
+        battery meanwhile."""
+        ask_at = time.monotonic()
+        while os.path.exists(path):
+            self._volts(elm)
+            if time.monotonic() >= ask_at:
+                if elm.pid(0x00, WAKE_TIMEOUT_S):
+                    return True
+                ask_at = time.monotonic() + retry_wait(self._since)
+            if time.monotonic() - self._since < VOLTS_FOR_S:
+                time.sleep(VOLTS_EVERY_S)
+            else:
+                time.sleep(max(0.0, ask_at - time.monotonic()))
+        return False
+
+    def _volts(self, elm):
+        volts = elm.volts()
+        if volts is not None:
+            safe_emit(self, "voltage", volts)
+        return volts
+
+    def _poll(self, elm):
+        """Reads the car until it stops answering."""
+        baro = 101.3                          # kPa, until the car tells us
+        misses, turn, logged, last = 0, 0, 0.0, {}
+        while misses < GIVE_UP_AFTER:
+            started = time.monotonic()
+            values = {}
+            for item in FAST + (SLOW[turn % len(SLOW)],):
+                if item == "ATRV":
+                    volts = self._volts(elm)
+                    if volts is not None:
+                        values["voltage"] = volts
+                    continue
+                d = elm.pid(item)
+                if not d:
+                    misses += 1
+                    continue
+                misses = 0
+                try:
+                    key, value = convert(item, d, baro)
+                except IndexError:
+                    continue
+                if key:
+                    values[key] = value
+            # With the engine stopped (key on), the manifold sits at the
+            # outside air pressure: the zero for boost from here on.
+            if values.get("rpm") == 0 and "map" in values:
+                baro = values["map"]
+            if "map" in values:
+                values["boost"] = (values.pop("map") - baro) * 0.145038
+            if values:
+                safe_emit(self, "reading", values)
+                last.update(values)
+            if time.monotonic() - logged > LOG_EVERY_S and last:
+                logged = time.monotonic()
+                print("OBD: " + ", ".join(f"{k} {v:.1f}" for k, v in sorted(last.items())), flush=True)
+            turn += 1
+            time.sleep(max(0.0, ROUND_MIN_S - (time.monotonic() - started)))

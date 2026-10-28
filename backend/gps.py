@@ -331,10 +331,12 @@ class Gps(QObject):
 
     # ---- the simulated drive ----------------------------------------------------
     def _tick(self):
-        live = self._vehicle is not None and self._vehicle.live
-        if self._pos.check(time.monotonic(), live):
+        # The demo drive goes with the simulated engine data: in a truck whose
+        # car has answered it never runs, even with the key off.
+        real = self._vehicle is not None and not self._vehicle.simulated
+        if self._pos.check(time.monotonic(), real):
             self.changed.emit()
-        if self._route and self._pos.demo_allowed(live):
+        if self._route and self._pos.demo_allowed(real):
             self._demo_step()
 
     def _demo_step(self):

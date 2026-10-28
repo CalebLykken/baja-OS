@@ -6,8 +6,13 @@ with a clock that's just a number.
 """
 
 import unittest
+from types import SimpleNamespace
 
-from backend.gps import Position
+from PyQt6.QtCore import QCoreApplication
+
+from backend.gps import DemoRoute, Gps, Position
+
+app = QCoreApplication.instance() or QCoreApplication([])
 
 STALE_S = 10.0
 
@@ -99,3 +104,22 @@ class PositionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DemoDriveFollowsTheEngineDataTest(unittest.TestCase):
+    """The demo drive goes with the simulated engine data, not just a quiet
+    car: in a truck whose car has answered, the key off isn't a reason to
+    show a made-up position."""
+
+    def tick(self, simulated):
+        car = SimpleNamespace(simulated=simulated, live=False, speed=30.0)
+        gps = Gps(car, demo=True)
+        gps._route = DemoRoute()
+        gps._tick()
+        return gps._pos.fix
+
+    def test_simulated_data_drives_the_demo(self):     # a Mac, or a bench Pi
+        self.assertEqual(self.tick(simulated=True)["source"], "demo")
+
+    def test_a_quiet_truck_shows_no_position(self):    # key off, no receiver
+        self.assertIsNone(self.tick(simulated=False))

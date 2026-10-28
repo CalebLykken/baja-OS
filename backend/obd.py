@@ -9,7 +9,7 @@ update a few times a second.
 
 Read only: it never sends mode 04 (clear codes) or anything that writes.
 With no adapter, or the key off, it just keeps looking, and VehicleData
-carries on with its simulated drive. While it waits for the car it still
+shows the engine values as unknown (backend/vehicle.py). While it waits for the car it still
 reads the battery: the adapter measures that itself (ATRV), so it works
 with the engine computer silent, and it tells key-off (backend/ignition.py)
 whether the engine is still running.

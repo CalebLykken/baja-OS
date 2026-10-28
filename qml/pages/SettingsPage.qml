@@ -544,6 +544,13 @@ Item {
                 id: mapCard
                 Layout.fillWidth: true
                 heading: "Offline map"
+                // The update cuts a fresh extract of the same area, so it's about
+                // the size of the map on the Pi (130 MB for the first Seattle one).
+                readonly property int downloadMb: maps.ready ? Math.max(1, Math.round(maps.sizeMb)) : 130
+                // An iPhone hotspot hands out 172.20.10.x addresses: that's the phone's data.
+                readonly property bool hotspot: network.ip.startsWith("172.20.10.")
+                property bool asking: false
+                onHotspotChanged: asking = false
                 readonly property string built: typeof maps === "undefined" || maps.build.length !== 8 ? ""
                     : new Date(+maps.build.slice(0, 4), +maps.build.slice(4, 6) - 1, +maps.build.slice(6))
                           .toLocaleDateString(Qt.locale("en_GB"), "d MMMM yyyy")
@@ -566,7 +573,7 @@ Item {
                         icon: "refresh"
                         text: maps.ready ? "Update map" : "Download map"
                         enabled: !maps.updating && network.online
-                        onClicked: maps.update()
+                        onClicked: mapCard.hotspot ? mapCard.asking = true : maps.update()
                     }
                     Label {
                         Layout.fillWidth: true
@@ -574,7 +581,30 @@ Item {
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                         text: maps.updating || maps.updateMessage !== "" ? maps.updateMessage
-                              : network.online ? "Downloads about 130 MB" : "Needs internet"
+                              : network.online ? "Downloads about " + mapCard.downloadMb + " MB" : "Needs internet"
+                    }
+                }
+                // On the phone's hotspot the download comes out of its data plan.
+                RowLayout {
+                    visible: mapCard.asking && mapCard.hotspot && !maps.updating
+                    Layout.fillWidth: true
+                    spacing: 16
+                    TextButton {
+                        icon: "refresh"
+                        text: "Download anyway"
+                        enabled: network.online
+                        onClicked: { mapCard.asking = false; maps.update() }
+                    }
+                    TextButton {
+                        text: "Not now"
+                        onClicked: mapCard.asking = false
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                        text: "You're on your phone's hotspot, so this uses about " + mapCard.downloadMb + " MB of its data."
                     }
                 }
             }

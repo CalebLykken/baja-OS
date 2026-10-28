@@ -368,9 +368,11 @@ Protomaps' daily OpenStreetMap build, with the label fonts and icons, into
 `~/.local/share/baja-os/maps`, then indexes every named place, business and
 street in it for the search key on the Maps page (`backend/places.py`). After
 that the map and search need no internet. Set
-`REGION` and `BBOX` for a different area (the script shows how). The map is
-MapLibre GL JS in Qt WebEngine, coloured from the current style, and starts the
-first time the Maps page opens.
+`REGION` and `BBOX` for a different area (the script shows how). It builds the
+new map in a `.new` folder inside the maps folder (not in `/tmp`, which is RAM)
+and renames it into place at the end, so the map can stay open while it runs.
+The map is MapLibre GL JS in Qt WebEngine, coloured from the current style, and
+starts the first time the Maps page opens.
 
 Search on the Maps page finds places, businesses and streets in the map with
 no signal. For turn-by-turn directions and the spoken voice, run these once on

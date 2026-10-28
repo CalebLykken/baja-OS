@@ -136,6 +136,25 @@ class DemoRoute:
         return self.points[-1]
 
 
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def sky_report(msg):
+    """The {"sats", "view"} report for a gpsd SKY message, the same one the
+    NMEA path makes: satellites used (uSat, else the ones marked used) and
+    in view (nSat, else the length of the list). None for a SKY that doesn't
+    count satellites: gpsd also sends one with only the DOPs."""
+    sats = msg.get("satellites")
+    sats = [s for s in sats if isinstance(s, dict)] if isinstance(sats, list) else None
+    used, view = _count(msg.get("uSat")), _count(msg.get("nSat"))
+    if used is None and sats is not None:
+        used = sum(1 for s in sats if s.get("used") is True)
+    if view is None and sats is not None:
+        view = len(sats)
+    return None if used is None or view is None else {"sats": used, "view": view}
+
+
 class Position:
     """Which position to show, without Qt: the receiver's while it's fresh,
     its last one held (stale) once it stops, and the demo drive only while
@@ -265,6 +284,11 @@ class Gps(QObject):
                 if not talking and (kind == "TPV" or kind == "DEVICES" and msg.get("devices")):
                     talking = True                # a receiver, not just gpsd on its own
                     safe_emit(self, "_report", {"receiver": True})
+                if kind == "SKY":
+                    report = sky_report(msg)
+                    if report:
+                        safe_emit(self, "_report", report)
+                    continue
                 if kind != "TPV":
                     continue
                 if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:

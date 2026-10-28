@@ -5,13 +5,14 @@ with a clock that's just a number; and which updates count as a new fix.
     python3 -m unittest tests.test_gps
 """
 
+import json
 import unittest
 from unittest import mock
 from types import SimpleNamespace
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.gps import DemoRoute, Gps, Position
+from backend.gps import DemoRoute, Gps, Position, sky_report
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -197,6 +198,91 @@ class FixSignalTest(unittest.TestCase):
         g._tick()
         self.assertFalse(g.hasFix)
         self.assertEqual(self.events, ["changed"])
+
+
+class FakeGpsd:
+    """A socket that plays canned gpsd JSON lines, then closes."""
+
+    def __init__(self, messages):
+        self.lines = "".join(json.dumps(m) + "\n" for m in messages)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def sendall(self, data):
+        pass
+
+    def settimeout(self, seconds):
+        pass
+
+    def makefile(self, *args, **kwargs):
+        return iter(self.lines.splitlines(True))
+
+
+class GpsdSatellitesTest(unittest.TestCase):
+    """gpsd's SKY reports give the same satellite counts as the NMEA path."""
+
+    SKY = {"class": "SKY", "device": "/dev/ttyACM0", "uSat": 7, "nSat": 11}
+    LISTED = {"class": "SKY", "satellites": [
+        {"PRN": 1, "used": True}, {"PRN": 2, "used": False},
+        {"PRN": 3, "used": True}, {"PRN": 4}]}
+
+    def test_the_counts_gpsd_gives(self):
+        self.assertEqual(sky_report(self.SKY), {"sats": 7, "view": 11})
+
+    def test_counting_the_satellite_list_when_there_are_no_counts(self):
+        self.assertEqual(sky_report(self.LISTED), {"sats": 2, "view": 4})
+
+    def test_the_counts_win_over_the_list(self):
+        self.assertEqual(sky_report(dict(self.LISTED, uSat=3, nSat=9)), {"sats": 3, "view": 9})
+
+    def test_no_satellites_in_view_is_zero_not_missing(self):
+        self.assertEqual(sky_report({"class": "SKY", "uSat": 0, "nSat": 0}), {"sats": 0, "view": 0})
+        self.assertEqual(sky_report({"class": "SKY", "satellites": []}), {"sats": 0, "view": 0})
+
+    def test_a_sky_with_only_dops_says_nothing(self):
+        self.assertIsNone(sky_report({"class": "SKY", "device": "/dev/ttyACM0", "hdop": 1.1}))
+
+    def test_odd_values_are_ignored(self):
+        self.assertIsNone(sky_report({"class": "SKY", "uSat": "7", "nSat": None, "satellites": "x"}))
+        self.assertEqual(sky_report({"class": "SKY", "satellites": [None, 3, {"used": True}]}),
+                         {"sats": 1, "view": 1})
+
+    def read(self, messages):
+        g = Gps(demo=False)
+        reports = []
+        g._report.connect(reports.append)
+        with mock.patch("backend.gps.socket.create_connection", lambda *a, **k: FakeGpsd(messages)):
+            self.assertTrue(g._read_gpsd())
+        return g, reports
+
+    def test_reading_gpsd_reports_the_satellites(self):
+        tpv = {"class": "TPV", "mode": 3, "lat": 47.0, "lon": -122.0, "speed": 5.0, "track": 90.0}
+        g, reports = self.read([{"class": "VERSION"}, self.SKY, tpv,
+                                {"class": "SKY", "hdop": 1.0}, dict(self.SKY, uSat=8)])
+        self.assertEqual([r for r in reports if "sats" in r],
+                         [{"sats": 7, "view": 11}, {"sats": 8, "view": 11}])
+        for r in reports:
+            g._apply(r)
+        self.assertEqual((g.satellites, g.satellitesInView), (8, 11))
+        self.assertTrue(g.hasFix)
+
+    def test_satellites_show_before_there_is_a_fix(self):
+        g, reports = self.read([self.SKY, {"class": "TPV", "mode": 1}])
+        for r in reports:
+            g._apply(r)
+        self.assertEqual((g.satellites, g.satellitesInView), (7, 11))
+        self.assertFalse(g.hasFix)
+
+    def test_gpsd_going_away_clears_the_counts(self):
+        g, reports = self.read([self.SKY])
+        for r in reports:
+            g._apply(r)
+        g._apply({"gpsd": False})
+        self.assertEqual((g.satellites, g.satellitesInView), (0, 0))
 
 
 if __name__ == "__main__":

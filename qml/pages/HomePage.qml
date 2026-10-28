@@ -202,7 +202,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Speed"
-                    value: vehicle.engineKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
+                    value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
                     unit: Units.speedUnit
                 }
             }

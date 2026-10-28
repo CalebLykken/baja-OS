@@ -774,7 +774,7 @@ Item {
             readonly property int limitKph: typeof road !== "undefined" ? road.speedLimit : 0
             // Shown in the local style: US sign in mph, round sign in km/h.
             readonly property int limit: Units.metric ? limitKph : Math.round(limitKph / 1.609344 / 5) * 5
-            readonly property real speedNow: Units.speed(gps.speed / 0.44704)
+            readonly property real speedNow: Units.speed(vehicle.speed)   // the same speed as Home
             readonly property bool over: limit > 0 && speedNow > limit + (Units.metric ? 8 : 5)
 
             Rectangle {                                   // US: SPEED LIMIT
@@ -801,7 +801,6 @@ Item {
                 Text { anchors.centerIn: parent; text: parent.parent.limit; font.pixelSize: 52; font.bold: true; color: "black" }
             }
             Sheet {                                       // speed now
-                visible: !gps.stale                       // not known while the signal is lost
                 width: 112
                 height: 108
                 color: parent.over ? page.cRed : page.cPanel
@@ -810,7 +809,7 @@ Item {
                     MapLabel {
                         anchors.horizontalCenter: parent.horizontalCenter
                         numeric: true
-                        text: Math.round(parent.parent.parent.speedNow)
+                        text: vehicle.speedKnown ? Math.round(parent.parent.parent.speedNow) : "—"
                         color: parent.parent.parent.over ? "white" : page.cText
                         font.pixelSize: Theme.fontReadout
                     }

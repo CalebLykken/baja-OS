@@ -7,9 +7,10 @@ the simulated drive, dashes, or the real battery.
 
 import unittest
 
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
-from backend.vehicle import LIMITS, VOLTS_MS, VehicleData, warnings
+from backend.gps import Gps
+from backend.vehicle import LIMITS, VOLTS_MS, VehicleData, estimate_gear, warnings
 
 # apply_obd restarts a QTimer, which wants an application object (no event loop).
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -36,6 +37,26 @@ class FakeSettings:
 def truck():
     """A truck whose car has answered before, and isn't answering now."""
     return VehicleData(FakeSettings(carAnswered="true"))
+
+
+class FakeGps(QObject):
+    """The bits of backend/gps.py that VehicleData reads: a fresh real fix
+    (`realFix`, `speed` in m/s) and `changed`."""
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.realFix = False
+        self.speed = 0.0
+
+    def fix(self, ms):
+        self.realFix, self.speed = True, ms
+        self.changed.emit()
+
+    def lose(self):
+        """The receiver went quiet: stale, so no real fix and a speed of 0."""
+        self.realFix, self.speed = False, 0.0
+        self.changed.emit()
 
 
 def count(signal):
@@ -202,6 +223,139 @@ class LiveTest(unittest.TestCase):
         fired = count(v.changed)
         v.lost_obd()
         self.assertEqual(len(fired), 1)
+
+
+MPH = 0.44704   # metres per second in one mph
+
+
+class SpeedTest(unittest.TestCase):
+    """The one speed every page reads: the car's, else the GPS's, else the
+    simulation's, else unknown."""
+
+    def vehicle(self, answered=True, demo=None, fix=None):
+        """A truck (a fresh install if not `answered`), with a GPS handed
+        over late, as main.py does, holding a fresh fix of `fix` m/s."""
+        v = VehicleData(FakeSettings(carAnswered="true") if answered else FakeSettings(), demo=demo)
+        gps = FakeGps()
+        v.set_gps(gps)
+        if fix is not None:
+            gps.fix(fix)
+        return v, gps
+
+    def test_the_car_and_no_gps(self):
+        v, gps = self.vehicle()
+        v.apply_obd(DRIVING)
+        self.assertEqual((v.speed, v.speedKnown), (40.0, True))
+
+    def test_the_car_wins_over_the_gps(self):
+        v, gps = self.vehicle(fix=30 * MPH)
+        self.assertEqual(round(v.speed), 30)
+        v.apply_obd(DRIVING)
+        self.assertEqual((v.speed, v.speedKnown), (40.0, True))
+        gps.fix(31 * MPH)                       # a new GPS speed changes nothing while the car answers
+        self.assertEqual(v.speed, 40.0)
+
+    def test_the_gps_alone_shows_in_mph(self):
+        v, gps = self.vehicle(fix=10.0)         # m/s
+        self.assertTrue(v.speedKnown)
+        self.assertAlmostEqual(v.speed, 22.369, places=3)
+        self.assertFalse(v.engineKnown)         # the engine stays unknown ...
+        self.assertEqual((v.rpm, v.gear), (0, 0))   # ... and so does the gear
+
+    def test_neither_car_nor_gps_is_unknown(self):
+        v, gps = self.vehicle()
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+        v, gps = self.vehicle(fix=20 * MPH)
+        gps.lose()                              # the fix went stale
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+        v, gps = self.vehicle()
+        v.apply_obd(DRIVING)
+        v.lost_obd()                            # the car went quiet, no GPS
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+
+    def test_the_gps_takes_over_when_the_car_goes_quiet(self):
+        v, gps = self.vehicle(fix=35 * MPH)
+        v.apply_obd(DRIVING)
+        v.lost_obd()
+        self.assertEqual((round(v.speed), v.speedKnown), (35, True))
+        gps.lose()
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+
+    def test_the_simulation_is_the_last_resort(self):
+        v, gps = self.vehicle(answered=False)   # a fresh install simulates
+        v._speed = 25.0
+        self.assertTrue(v.simulated)
+        self.assertEqual((v.speed, v.speedKnown), (25.0, True))
+        gps.fix(50 * MPH)                       # a real fix beats it
+        self.assertEqual(round(v.speed), 50)
+        gps.lose()
+        self.assertEqual(v.speed, 25.0)
+
+    def test_no_simulation_when_the_car_has_answered(self):
+        v, gps = self.vehicle(answered=True)
+        v._speed = 25.0                         # left over from before
+        for _ in range(5):
+            v._tick()
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+
+    def test_demo_simulates_with_no_gps_fix_and_yields_to_one(self):
+        v, gps = self.vehicle(answered=True, demo=True)
+        v._speed = 25.0
+        self.assertEqual((v.speed, v.speedKnown), (25.0, True))
+        gps.fix(40 * MPH)
+        self.assertEqual(round(v.speed), 40)
+
+    def test_no_gps_handed_over(self):
+        v = VehicleData(FakeSettings(carAnswered="true"))
+        self.assertEqual((v.speed, v.speedKnown), (0.0, False))
+        v.apply_obd(DRIVING)
+        self.assertEqual(v.speed, 40.0)
+
+    def test_gps_handed_over_with_a_fix_already(self):
+        v = VehicleData(FakeSettings(carAnswered="true"))
+        gps = FakeGps()
+        gps.fix(20 * MPH)
+        fired = count(v.speedKnownChanged)
+        v.set_gps(gps)
+        self.assertEqual((round(v.speed), v.speedKnown, len(fired)), (20, True, 1))
+
+    def test_the_gear_comes_from_the_cars_speed_only(self):
+        v, gps = self.vehicle(fix=80 * MPH)     # the GPS would make it another gear
+        self.assertEqual(v.gear, 0)             # no gear from the GPS alone
+        v.apply_obd(DRIVING)
+        self.assertEqual(v.gear, estimate_gear(40.0, 2500))
+        self.assertGreater(v.gear, 0)
+        gps.fix(5 * MPH)
+        self.assertEqual(v.gear, estimate_gear(40.0, 2500))
+        v.lost_obd()
+        self.assertEqual(v.gear, 0)
+
+    def test_the_gps_speed_signals_only_while_it_matters(self):
+        v, gps = self.vehicle()
+        known, values = count(v.speedKnownChanged), count(v.changed)
+        gps.fix(10 * MPH)                       # becomes known
+        self.assertEqual((len(known), len(values)), (1, 1))
+        gps.fix(11 * MPH)                       # a new speed
+        self.assertEqual((len(known), len(values)), (1, 2))
+        gps.fix(11 * MPH)                       # the same again
+        self.assertEqual((len(known), len(values)), (1, 2))
+        gps.lose()                              # unknown again
+        self.assertEqual((len(known), len(values)), (2, 3))
+        v.apply_obd(DRIVING)
+        values.clear()
+        gps.fix(12 * MPH)                       # the car answers: the GPS isn't shown
+        self.assertEqual(values, [])
+
+    def test_with_the_real_gps(self):
+        v = VehicleData(FakeSettings(carAnswered="true"))
+        gps = Gps(v)
+        v.set_gps(gps)
+        self.assertFalse(v.speedKnown)
+        gps._apply({"lat": 47.6, "lon": -122.3, "speed": 10.0, "heading": 90.0, "source": "gps"})
+        self.assertEqual((v.speedKnown, round(v.speed, 1)), (True, 22.4))
+        gps._pos.real_at -= 60                  # not heard from for a minute
+        gps.changed.emit()
+        self.assertEqual((v.speedKnown, v.speed), (False, 0.0))
 
 
 class BatteryTest(unittest.TestCase):

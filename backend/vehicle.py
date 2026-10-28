@@ -10,6 +10,11 @@ the adapter reads it with the engine computer asleep: a real reading counts
 for VOLTS_MS and beats the simulation's. Gear isn't reported over OBD, so
 it's worked out from speed and RPM.
 
+`speed` is the one speed every page reads (mph): the car's while it answers,
+else a fresh GPS fix's, else the simulation (where that's wanted), else
+unknown (`speedKnown` False, a dash in the UI). The gear only ever comes
+from the car's own speed.
+
 LIMITS are the one place for the warning thresholds: the gauges draw their
 red zones from them, and `warnings` (from the car only, never the
 simulation) drives the warning on every page and the red readouts.
@@ -21,6 +26,7 @@ import random
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
 from backend.demo import allowed
+from backend.gps import MPH_TO_MS
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
@@ -69,6 +75,7 @@ class VehicleData(QObject):
     liveChanged = pyqtSignal()
     simulatedChanged = pyqtSignal()
     engineKnownChanged = pyqtSignal()
+    speedKnownChanged = pyqtSignal()
     voltageKnownChanged = pyqtSignal()
 
     def __init__(self, settings=None, demo=None, parent=None):
@@ -89,6 +96,8 @@ class VehicleData(QObject):
         self._gear = 1
         self._live = False
         self._volts_real = False  # `_voltage` is the adapter's reading, current
+        self._gps = None
+        self._gps_mph = None      # the GPS's speed while its fix is real and fresh
         self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._volts_stale = QTimer(self, singleShot=True, interval=VOLTS_MS, timeout=self._volts_aged)
         self._timer = QTimer(self)
@@ -98,13 +107,30 @@ class VehicleData(QObject):
     def start(self):
         self._timer.start()
 
+    def set_gps(self, gps):
+        """Take the speed from `gps` (backend/gps.py) while the car isn't
+        answering. main.py makes the GPS after this, so it's handed over
+        later."""
+        self._gps = gps
+        gps.changed.connect(self._gps_changed)
+        self._gps_changed()
+
+    def _gps_changed(self):
+        """The GPS has news: its speed may be the one shown now."""
+        before, was = self._flags(), self.speed
+        gps = self._gps
+        self._gps_mph = gps.speed / MPH_TO_MS if gps.realFix else None
+        if self.speed != was or self._flags() != before:
+            self._settle(before)
+
     def _flags(self):
-        return self._live, self.simulated, self.engineKnown, self.voltageKnown
+        return self._live, self.simulated, self.engineKnown, self.speedKnown, self.voltageKnown
 
     def _settle(self, before):
         """Say which of the flags flipped since `before` (a _flags()), then
         that the values did, so the UI refreshes."""
-        signals = (self.liveChanged, self.simulatedChanged, self.engineKnownChanged, self.voltageKnownChanged)
+        signals = (self.liveChanged, self.simulatedChanged, self.engineKnownChanged,
+                   self.speedKnownChanged, self.voltageKnownChanged)
         for was, now, signal in zip(before, self._flags(), signals):
             if was != now:
                 signal.emit()
@@ -181,6 +207,12 @@ class VehicleData(QObject):
         the UI shows a dash when not."""
         return self._live or self.simulated
 
+    @pyqtProperty(bool, notify=speedKnownChanged)
+    def speedKnown(self):
+        """Whether `speed` is worth showing: the car's, a fresh GPS fix's or
+        the simulation's. Known from the GPS alone while the engine isn't."""
+        return self._speed_now() is not None
+
     @pyqtProperty(bool, notify=voltageKnownChanged)
     def voltageKnown(self):
         """Whether the battery voltage is worth showing: the adapter read it
@@ -245,9 +277,20 @@ class VehicleData(QObject):
     def rpm(self):
         return self._engine(self._rpm)
 
+    def _speed_now(self):
+        """The speed to show in mph, or None: the car's, else a real fresh
+        GPS fix's, else the simulation's (only where that's wanted)."""
+        if self._live:
+            return self._speed
+        if self._gps_mph is not None:
+            return self._gps_mph
+        return self._speed if self.simulated else None
+
     @pyqtProperty(float, notify=changed)
     def speed(self):
-        return self._engine(self._speed)
+        """mph, the one speed every page shows (0 while not `speedKnown`)."""
+        mph = self._speed_now()
+        return 0.0 if mph is None else mph
 
     @pyqtProperty(float, notify=changed)
     def boost(self):

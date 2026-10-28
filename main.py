@@ -187,6 +187,7 @@ def main():
     # A simulated drive around Seattle while there's no GPS receiver and no
     # engine data (a Mac, or a Pi on the bench).
     gps = Gps(vehicle, demo=True)
+    vehicle.set_gps(gps)          # its speed shows when the car isn't answering
     routing = Router(gps, settings)
     road = RoadInfo(gps)
     voice = Voice(settings)

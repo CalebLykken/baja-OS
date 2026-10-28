@@ -4,7 +4,8 @@ import "../components"
 
 // Six live gauges in a 3x2 grid. Warning thresholds (vehicle.limits, from
 // backend/vehicle.py) turn a gauge red. A reading that isn't known (the car
-// isn't answering) shows a dash instead of a number.
+// isn't answering) shows a dash instead of a number; the speed is also known
+// from the GPS.
 Item {
     id: page
     signal navigate(int index)
@@ -25,7 +26,7 @@ Item {
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "Speed  ·  gear " + (vehicle.engineKnown ? vehicle.gear || "N" : "—"); unit: Units.speedUnit
-            known: vehicle.engineKnown
+            known: vehicle.speedKnown
             value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
         }
         Gauge {

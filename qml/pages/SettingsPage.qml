@@ -891,6 +891,12 @@ Item {
         }
     }
 
+    // A saved network that now wants a different password: ask for it.
+    Connections {
+        target: wifi
+        function onPasswordNeeded(ssid) { joinSheet.open(ssid) }
+    }
+
     // ---- joining a Wi-Fi network: password and keyboard --------------------
     Rectangle {
         id: joinSheet

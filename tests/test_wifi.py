@@ -373,5 +373,38 @@ class RadioTest(unittest.TestCase):
         self.assertIn("working again", logged(self.printed)[-1])
 
 
+class WrongPasswordTest(unittest.TestCase):
+    """A saved network whose password changed asks for the new one."""
+
+    def setUp(self):
+        self.wifi = Wifi({})
+        self.wifi._available = False         # keep the refresh after joining out of it
+        self.wifi._saved = [{"uuid": "u-phone", "ssid": "Phone", "type": "802-11-wireless"}]
+        INLINE.start()
+        self.addCleanup(mock.patch.stopall)
+        self.asked = []
+        self.wifi.passwordNeeded.connect(self.asked.append)
+
+    def join(self, ssid, password, rc, err):
+        with mock.patch("backend.wifi.nmcli", return_value=(rc, "", err)):
+            self.wifi.join(ssid, password)
+
+    def test_a_wrong_saved_password_asks_for_a_new_one(self):
+        self.join("Phone", "", 4, "Error: Connection activation failed: (7) Secrets were required, but not provided.")
+        self.assertEqual(self.wifi.message, "Wrong password for Phone")
+        self.assertEqual(self.asked, ["Phone"])
+        self.assertEqual(self.wifi.busy, "")
+
+    def test_other_failures_and_successes_dont_ask(self):
+        self.join("Phone", "", 10, "Error: No network with SSID 'Phone' found.")
+        self.join("Phone", "", 0, "")
+        self.assertEqual(self.asked, [])
+
+    def test_a_wrong_password_typed_in_the_sheet_doesnt_loop(self):
+        self.join("Phone", "hunter22", 4, "Error: Secrets were required, but not provided.")
+        self.assertEqual(self.wifi.message, "Wrong password for Phone")
+        self.assertEqual(self.asked, [])
+
+
 if __name__ == "__main__":
     unittest.main()

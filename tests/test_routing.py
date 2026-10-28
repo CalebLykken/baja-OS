@@ -5,9 +5,12 @@ in settings and picked up again after a restart.
     python3 -m unittest tests.test_routing
 """
 
+import io
 import json
 import time
 import unittest
+import urllib.error
+from types import SimpleNamespace
 from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
@@ -400,6 +403,78 @@ class SavingTest(unittest.TestCase):
         self.gps.at(-122.0, 47.005)
         self.router._on_fix()
         self.assertGreater(json.loads(self.settings.values["route"])["at"], time.time() - 5)
+
+
+class InlineThread:
+    """Stands in for threading.Thread: start() runs the work on the spot."""
+
+    def __init__(self, target=None, name=None, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+class Reply(io.BytesIO):
+    """What urlopen hands back, as a context manager."""
+
+
+def http_error(body):
+    return urllib.error.HTTPError("http://router/route", 400, "Bad Request", {}, io.BytesIO(body))
+
+
+class RequestTest(unittest.TestCase):
+    """Whatever the router answers, the request comes back and `computing`
+    clears, or the Maps page would say "Finding a route" for good."""
+
+    def setUp(self):
+        inline = mock.patch("backend.routing.threading", SimpleNamespace(Thread=InlineThread))
+        inline.start()
+        self.addCleanup(inline.stop)
+        self.router = Router(FakeGps())
+
+    def ask(self, answer):
+        def urlopen(req, timeout):
+            if isinstance(answer, Exception):
+                raise answer
+            return Reply(answer)
+        with mock.patch("backend.routing.urllib.request.urlopen", urlopen), \
+                mock.patch("builtins.print"):
+            self.router.routeTo("Shop", *END)
+        self.assertFalse(self.router.computing)
+        return self.router.error
+
+    def test_a_route(self):
+        self.assertEqual(self.ask(json.dumps(ROUTE).encode()), "")
+        self.assertTrue(self.router.previewing)
+
+    def test_the_routers_own_words_for_why_not(self):
+        body = json.dumps({"error_code": 442, "error": "No path could be found for input"})
+        self.assertEqual(self.ask(http_error(body.encode())), "No road route to there")
+
+    def test_an_error_body_that_isnt_an_object(self):
+        for body in (b'["no"]', b'"no"', b"null", b'{"error": 7}', b"<html>", b""):
+            with self.subTest(body=body):
+                self.assertEqual(self.ask(http_error(body)), "No route found")
+
+    def test_no_router(self):
+        self.assertEqual(self.ask(urllib.error.URLError("refused")), "Routing isn't running")
+
+    def test_an_answer_that_isnt_a_route(self):
+        broken = {"trip": {"summary": {"time": 1}, "legs": [{"shape": polyline6([START, END]),
+                                                             "maneuvers": []}]}}
+        for body in (b"[1, 2]", b'"route"', b"null", b"{}", json.dumps(broken).encode()):
+            with self.subTest(body=body):
+                self.assertEqual(self.ask(body), "Couldn't read the route")
+                self.assertFalse(self.router.previewing)
+
+    def test_something_unexpected_still_comes_back(self):
+        # A bug in the request code: logged by threading.excepthook, and
+        # the request still ends.
+        with self.assertRaises(ZeroDivisionError):
+            self.ask(ZeroDivisionError("bug"))
+        self.assertFalse(self.router.computing)
+        self.assertEqual(self.router.error, "Couldn't get a route")
 
 
 if __name__ == "__main__":

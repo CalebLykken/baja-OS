@@ -24,6 +24,7 @@ Item {
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
+    readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
 
     function mmss(s) {
@@ -71,7 +72,8 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 18
-                    text: media.title
+                    text: page.idle ? "Nothing playing" : media.title
+                    color: page.idle ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
@@ -91,13 +93,15 @@ Item {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Label { text: page.idle ? "" : page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                     Item { Layout.fillWidth: true }
-                    Label { text: page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                 }
                 Row {
                     Layout.alignment: Qt.AlignHCenter
                     spacing: 28
+                    opacity: page.idle ? 0.4 : 1
+                    enabled: !page.idle
                     IconButton { icon: "previous"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
                     IconButton {
                         icon: media.playing ? "pause" : "play"
@@ -189,7 +193,7 @@ Item {
                 clip: true
                 heading: page.eqOpen ? "Equalizer"
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
-                                                  : media.album >= 0 ? "Playing the album " + page.albums[media.album].title
+                                                  : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
                                                   : "All songs on this Pi")
                          : page.tab === "albums" ? (page.openAlbum >= 0 ? "" : "Albums on this Pi")
                          : "Played here recently"

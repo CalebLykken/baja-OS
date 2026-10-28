@@ -4,10 +4,13 @@ import QtQuick.Layouts
 // The Home screen's music card: the cover as a framed print beside where the
 // music comes from, title and artist; progress and the transport keys run
 // across underneath. No heading: a song explains itself. Tap the cover to
-// open Music.
+// open Music. With no music on the Pi (and nothing from the phone or
+// Spotify) it says "Nothing playing", with the keys dimmed.
 Card {
     id: np
     signal openMusic()
+
+    readonly property bool idle: media.source === "local" && media.title === ""
 
     function mmss(s) {
         var m = Math.floor(s / 60), r = s % 60
@@ -44,7 +47,8 @@ Card {
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 2
-                    text: media.title
+                    text: np.idle ? "Nothing playing" : media.title
+                    color: np.idle ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
                     wrapMode: Text.WordWrap
@@ -70,14 +74,16 @@ Card {
         }
         RowLayout {
             Layout.fillWidth: true
-            Label { text: np.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+            Label { text: np.idle ? "" : np.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
             Item { Layout.fillWidth: true }
-            Label { text: np.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+            Label { text: np.idle ? "" : np.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
         }
 
         Row {
             Layout.alignment: Qt.AlignHCenter
             spacing: 20
+            opacity: np.idle ? 0.4 : 1
+            enabled: !np.idle
             IconButton { icon: "previous"; size: 76; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
             IconButton {
                 icon: media.playing ? "pause" : "play"

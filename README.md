@@ -133,7 +133,8 @@ headphones, and at 100% with the amp.
 Put albums in `~/Music` on the Pi (mp3, m4a, flac, ogg, wav). The Music page
 lists them under Albums, with title, artist and cover art from the tags.
 Songs play back to back with no gap, so albums whose songs run into each
-other sound as they should. With no files there, it plays a demo playlist.
+other sound as they should. With no files there, Home and Music say nothing's
+playing (a Mac, or `--demo`, plays a demo playlist instead).
 
 ## Wiring
 

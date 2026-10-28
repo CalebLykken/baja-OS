@@ -220,5 +220,72 @@ class RestoreTest(unittest.TestCase):
         self.assertEqual(self.player.title, "Blue 2")
 
 
+class EmptyPlayerTest(unittest.TestCase):
+    """No songs (an empty folder, or the card not there yet): nothing
+    playing, nothing raises, and the resume point it was given survives."""
+
+    SAVED = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": 81}
+
+    def setUp(self):
+        self.player = LibraryPlayer([])
+        self.addCleanup(self.player._engine._shutdown)
+        self.events = []
+        for name in ("trackChanged", "positionChanged", "playingChanged", "queueChanged"):
+            getattr(self.player, name).connect(lambda n=name: self.events.append(n))
+
+    def test_what_the_screen_reads(self):
+        p = self.player
+        self.assertEqual((p.title, p.artist, p.art), ("", "", ""))
+        self.assertEqual((p.duration, p.position, p.index, p.album), (0, 0, -1, -1))
+        self.assertEqual((p.queue, p.albums, p.albumTracks(0), p.albumTracks(-1)), ([], [], [], []))
+        self.assertFalse(p.playing)
+
+    def test_every_key_does_nothing(self):
+        p = self.player
+        p.start()
+        for key in (p.togglePlay, p.next, p.previous, p.playAll, p.togglePlay):
+            key()
+        for index in (0, 3, -1):
+            p.playIndex(index)
+        for album, start in ((0, 0), (-1, 0), (2, 5)):
+            p.playAlbum(album, start)
+        spin(200)
+        self.assertFalse(p.playing)
+        self.assertEqual((p.title, p.index, p.album, p.queue, p.position), ("", -1, -1, [], 0))
+        self.assertEqual(self.events, [])
+
+    def test_volume_still_works(self):
+        self.player.setVolume(70)
+        self.assertEqual(self.player.volume, 70)
+
+    def test_start_leaves_the_audio_engine_alone(self):
+        self.player.restore(self.SAVED, play=True)
+        with mock.patch.object(self.player._engine, "play_from") as play_from:
+            self.player.start()
+        play_from.assert_not_called()
+        spin(200)
+        self.assertFalse(self.player.playing)
+        self.assertEqual(self.player.position, 0)
+
+    def test_state_with_nothing_restored_is_a_blank_resume_point(self):
+        self.assertEqual(self.player.state(),
+                         {"album": None, "path": "", "index": 0, "position": 0})
+
+    def test_state_hands_back_what_restore_was_given(self):
+        self.player.restore(self.SAVED)
+        self.player.start()
+        self.assertEqual(self.player.state(), self.SAVED)
+        self.player.state()["index"] = 99            # a copy: saving it can't change it
+        self.assertEqual(self.player.state(), self.SAVED)
+
+    def test_junk_given_to_restore_is_a_blank_resume_point(self):
+        for junk in (None, [], "x"):
+            self.player.restore(junk)
+            self.assertEqual(self.player.state()["path"], "", junk)
+
+    def test_no_songs_means_no_resume_point(self):
+        self.assertEqual(resume_point([], [], self.SAVED), (-1, 0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

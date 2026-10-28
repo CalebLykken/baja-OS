@@ -8,6 +8,9 @@ here too. Songs are grouped into albums by their tags, and playing an
 album makes it the queue; "all songs" plays everything in folder order.
 After a restart it picks up the album, song and place in it that the hub
 saved (backend/hub.py), and it never starts playing by itself otherwise.
+With no songs (an empty folder, or the card not there yet) it's an honest
+empty player: nothing playing, every key does nothing, and the resume point
+it was given is kept for the next run that has music.
 """
 
 import functools
@@ -25,6 +28,8 @@ from backend.gapless import GaplessEngine
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
 ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
+NO_SONG = {"title": "", "artist": "", "art": "", "duration": 0}
+NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
 COVER_NAMES = ("cover", "folder", "front", "album")
@@ -150,6 +155,8 @@ def resume_point(albums, tracks, state):
     name and the song by its file, so songs added since don't shift them;
     a song that's gone falls back to its place in the queue, then to the
     first song."""
+    if not tracks:
+        return -1, 0, 0
     state = state if isinstance(state, dict) else {}
     album, same_queue = -1, True
     want = state.get("album")
@@ -198,6 +205,7 @@ class LibraryPlayer(QObject):
         self._index = 0
         self._start_at = 0              # seconds into the first song (from restore())
         self._start_playing = False
+        self._saved = None              # what restore() was given, kept while there are no songs
         self._volume = 40
 
         self._engine = GaplessEngine(lambda i: self._queue[i]["path"], lambda: len(self._queue),
@@ -215,14 +223,21 @@ class LibraryPlayer(QObject):
         """Pick up where the last run left off (what state() saved): its
         album, song and place in the song, playing only if `play`. Call it
         before start()."""
+        self._saved = dict(state) if isinstance(state, dict) else None
+        self._start_playing = play
+        if not self._queue:
+            return                      # no songs: state() hands it back as it was
         album, self._index, self._start_at = resume_point(self._albums, self._all, state)
         if album >= 0:
             self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
         self._album = album
-        self._start_playing = play
 
     def state(self):
-        """Where local music is up to, to save between runs."""
+        """Where local music is up to, to save between runs. With no songs,
+        what restore() was given, so a run where the music is missing
+        doesn't overwrite the resume point."""
+        if not self._queue:
+            return dict(NO_STATE if self._saved is None else self._saved)
         album = self._albums[self._album] if self._album >= 0 else None
         return {"album": [album["artist"], album["title"]] if album else None,
                 "path": self._queue[self._index]["path"], "index": self._index,
@@ -231,6 +246,8 @@ class LibraryPlayer(QObject):
     def start(self):
         # Paused unless restore() says it was playing: a fresh boot never
         # starts the first song of everything by itself.
+        if not self._queue:
+            return                      # nothing to play: leave the audio stream alone
         self._engine.play_from(self._index, play=self._start_playing, at=self._start_at)
         self.trackChanged.emit()
         self.positionChanged.emit()
@@ -241,6 +258,8 @@ class LibraryPlayer(QObject):
 
     def _go(self, index):
         """Play song `index` of the queue now."""
+        if not self._queue:
+            return
         self._index = index % len(self._queue)
         self._engine.play_from(self._index)
         self.trackChanged.emit()
@@ -260,25 +279,28 @@ class LibraryPlayer(QObject):
         self._engine.set_volume((self._volume / 100) ** 2)
 
     # ---- properties -------------------------------------------------------
+    def _song(self):
+        return self._queue[self._index] if self._queue else NO_SONG
+
     @pyqtProperty(str, notify=trackChanged)
     def title(self):
-        return self._queue[self._index]["title"]
+        return self._song()["title"]
 
     @pyqtProperty(str, notify=trackChanged)
     def artist(self):
-        return self._queue[self._index]["artist"]
+        return self._song()["artist"]
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):
-        return self._queue[self._index]["art"]
+        return self._song()["art"]
 
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):
-        return self._queue[self._index]["duration"]
+        return self._song()["duration"]
 
     @pyqtProperty(int, notify=trackChanged)
     def index(self):
-        return self._index
+        return self._index if self._queue else -1
 
     @pyqtProperty("QVariantList", notify=queueChanged)
     def queue(self):
@@ -318,6 +340,8 @@ class LibraryPlayer(QObject):
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def togglePlay(self):
+        if not self._queue:
+            return                      # nothing to play: stay paused
         self._engine.set_playing(not self._engine.playing)
         self.playingChanged.emit()
 
@@ -347,6 +371,8 @@ class LibraryPlayer(QObject):
     @pyqtSlot()
     def playAll(self):
         """Back to every song, in folder order, from the first."""
+        if not self._all:
+            return
         self._queue = list(self._all)
         self._album = -1
         self.queueChanged.emit()

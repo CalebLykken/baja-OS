@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--no-splash", action="store_true",
                         help="skip the startup animation")
     parser.add_argument("--music-dir", default="~/Music",
-                        help="folder of audio files to play (demo playlist if empty)")
+                        help="folder of audio files to play (a demo playlist if empty, off the Pi)")
     parser.add_argument("--maps-dir", default=str(DEFAULT_DATA_DIR),
                         help="offline map data from deploy/maps/install-map.sh")
     demo = parser.add_mutually_exclusive_group()
@@ -72,19 +72,30 @@ def parse_args():
     return parser.parse_known_args()[0]
 
 
-def make_media_player(music_dir):
-    """Real player over music_dir if it has audio files, else the demo one."""
+def make_media_player(music_dir, demo_flag=None, on_pi=None):
+    """The player for the Pi's own music: a real one over the audio files in
+    music_dir. With none, the made-up playlist where demo data is allowed (a
+    Mac, or --demo), else an empty player that says nothing's playing (the
+    truck). demo_flag is args.demo; on_pi (default: ask) is for tests."""
+    from backend import demo
+    show_demo = demo.allowed(demo_flag, not (demo.on_pi() if on_pi is None else on_pi))
     try:
         from backend.library import LibraryPlayer, scan
     except ImportError as e:  # QtMultimedia or mutagen not installed
-        print(f"Music: real playback unavailable ({e}); using demo playlist")
-        return MediaPlayer()
+        if show_demo:
+            print(f"Music: real playback unavailable ({e}); using demo playlist")
+            return MediaPlayer()
+        print(f"Music: real playback unavailable ({e}); nothing to play")
+        return MediaPlayer([])
     tracks = scan(music_dir)
-    if not tracks:
+    if tracks:
+        print(f"Music: {len(tracks)} track(s) from {music_dir}")
+        return LibraryPlayer(tracks)
+    if show_demo:
         print(f"Music: no audio files in {music_dir}; using demo playlist")
         return MediaPlayer()
-    print(f"Music: {len(tracks)} track(s) from {music_dir}")
-    return LibraryPlayer(tracks)
+    print(f"Music: no audio files in {music_dir}")
+    return LibraryPlayer([])
 
 
 _errors = 0
@@ -153,7 +164,7 @@ def main():
     except ValueError:
         pass
     spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
-    local = make_media_player(args.music_dir)
+    local = make_media_player(args.music_dir, args.demo)
     # It picks up where music was before a restart, and saves that as it goes.
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),

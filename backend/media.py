@@ -1,6 +1,8 @@
 """Media playback exposed to the UI.
 
-`MediaPlayer` fakes a playlist so the music screens have something to show.
+`MediaPlayer` fakes a playlist so the music screens have something to show
+(on a Mac; the truck only shows what's real). Given an empty queue it's an
+empty player instead: nothing playing, and every key does nothing.
 Later this becomes a real player (MPD, a Bluetooth/AirPlay sink, or Spotify
 audio metadata), and `volumeUp`/`volumeDown` get wired to the dash knob.
 """
@@ -15,6 +17,8 @@ DEMO_QUEUE = [
     {"title": "Head Gasket Heartbreak", "artist": "The Timing Belts", "duration": 176},
     {"title": "Ferry Line Daydream", "artist": "Sound & Puget", "duration": 222},
 ]
+NO_SONG = {"title": "", "artist": "", "duration": 0}
+NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
 class MediaPlayer(QObject):
@@ -24,12 +28,15 @@ class MediaPlayer(QObject):
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()             # never: the demo has no albums
 
-    def __init__(self, parent=None):
+    def __init__(self, queue=None, parent=None):
+        """The demo playlist, or `queue` (a list of {title, artist, duration};
+        [] for none)."""
         super().__init__(parent)
-        self._queue = list(DEMO_QUEUE)
-        self._index = 0
-        self._position = 37
-        self._playing = True
+        self._queue = list(DEMO_QUEUE if queue is None else queue)
+        self._index = 0 if self._queue else -1
+        self._position = 37 if self._queue else 0
+        self._playing = bool(self._queue)
+        self._saved = None              # what restore() was given, kept while the queue is empty
         self._volume = 40
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
@@ -39,6 +46,9 @@ class MediaPlayer(QObject):
         """Pick up the song and place in it from the last run (as
         LibraryPlayer does), playing only if `play`. With nothing saved
         the demo plays from where it always has."""
+        if not self._queue:
+            self._saved = dict(state) if isinstance(state, dict) else None   # state() hands it back
+            return
         state = state if isinstance(state, dict) else {}
         if isinstance(state.get("index"), int):
             self._index = state["index"] % len(self._queue)
@@ -47,11 +57,15 @@ class MediaPlayer(QObject):
         self._playing = play
 
     def state(self):
-        """Where the demo is up to, in LibraryPlayer's shape."""
+        """Where the demo is up to, in LibraryPlayer's shape (with an empty
+        queue, what restore() was given)."""
+        if not self._queue:
+            return dict(NO_STATE if self._saved is None else self._saved)
         return {"album": None, "path": "", "index": self._index, "position": self._position}
 
     def start(self):
-        self._timer.start()
+        if self._queue:
+            self._timer.start()
 
     def _tick(self):
         if not self._playing:
@@ -62,7 +76,12 @@ class MediaPlayer(QObject):
         else:
             self.positionChanged.emit()
 
+    def _song(self):
+        return self._queue[self._index] if self._queue else NO_SONG
+
     def _set_index(self, index):
+        if not self._queue:
+            return
         self._index = index % len(self._queue)
         self._position = 0
         self.trackChanged.emit()
@@ -71,11 +90,11 @@ class MediaPlayer(QObject):
     # ---- properties -------------------------------------------------------
     @pyqtProperty(str, notify=trackChanged)
     def title(self):
-        return self._queue[self._index]["title"]
+        return self._song()["title"]
 
     @pyqtProperty(str, notify=trackChanged)
     def artist(self):
-        return self._queue[self._index]["artist"]
+        return self._song()["artist"]
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):
@@ -83,7 +102,7 @@ class MediaPlayer(QObject):
 
     @pyqtProperty(int, notify=trackChanged)
     def duration(self):
-        return self._queue[self._index]["duration"]
+        return self._song()["duration"]
 
     @pyqtProperty(int, notify=trackChanged)
     def index(self):
@@ -128,6 +147,8 @@ class MediaPlayer(QObject):
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def togglePlay(self):
+        if not self._queue:
+            return
         self._playing = not self._playing
         self.playingChanged.emit()
 
@@ -146,6 +167,8 @@ class MediaPlayer(QObject):
 
     @pyqtSlot(int)
     def playIndex(self, index):
+        if not self._queue:
+            return
         self._set_index(index)
         if not self._playing:
             self.togglePlay()

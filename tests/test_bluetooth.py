@@ -84,6 +84,15 @@ class PlayerChoiceTest(unittest.TestCase):
         state = parse_objects(two_phones("playing", "paused"))
         self.assertEqual((state["transport"], state["volume"]), ("/org/bluez/hci0/dev_AA/fd0", 10))
 
+    def test_no_volume_from_the_other_phone(self):
+        # The playing phone has no absolute volume (or its transport isn't
+        # up yet): the slider mustn't take the passenger's instead.
+        objects = two_phones("paused", "playing")
+        del objects["/org/bluez/hci0/dev_BB/fd0"]
+        state = parse_objects(objects)
+        self.assertEqual(state["player"]["title"], "Song BB")
+        self.assertEqual((state["transport"], state["volume"]), (None, None))
+
     def test_when_neither_or_both_play_the_last_one_used_stays(self):
         for status in ("paused", "playing"):
             for last in ("AA", "BB"):

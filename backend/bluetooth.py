@@ -76,10 +76,14 @@ def parse_objects(objects, prefer=None):
                 "duration_ms": int(_v(track.get("Duration")) or 0),
             })
     state["player"] = _pick_player(players, prefer)
-    # The volume is the playing phone's own; with no player, any transport.
-    own = transports.get(state["player"]["device"]) if state["player"] else None
-    if own or transports:
-        state["transport"], state["volume"] = own or list(transports.values())[-1]
+    # The volume is the chosen phone's own, or none: another phone's would
+    # move the passenger's volume. With no player at all, any transport.
+    if state["player"]:
+        chosen = transports.get(state["player"]["device"])
+    else:
+        chosen = list(transports.values())[-1] if transports else None
+    if chosen:
+        state["transport"], state["volume"] = chosen
     connected = [(p, d) for p, d in devices.items() if _v(d.get("Connected"))]
     state["paired"] = sorted(
         ({"path": p, "name": _v(d.get("Alias")) or _v(d.get("Name")) or _v(d.get("Address")) or "Device",

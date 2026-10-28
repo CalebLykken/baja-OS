@@ -137,8 +137,9 @@ class MediaHub(QObject):
         self._source = "local"
         self._settings = settings
         saved = read_state(str(settings.get("music", ""))) if settings else None
+        self._was_playing = plays_on_start(saved)      # kept while local music has no songs
         if saved is not None:
-            local.restore(saved.get("local"), play=plays_on_start(saved))
+            local.restore(saved.get("local"), play=self._was_playing)
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
         self._system_volume = bool(shutil.which("wpctl"))
         # The output level goes out through one thread, in order, latest
@@ -196,10 +197,19 @@ class MediaHub(QObject):
 
     def _save(self):
         """Save which source is on, whether it's playing, and where local
-        music is up to; unchanged, nothing is written."""
+        music is up to; unchanged, nothing is written. With no songs to
+        play, "playing" stays as it was saved, so when they're back the next
+        run picks up as it was."""
+        playing = bool(self.playing)
+        if self._no_songs():
+            playing = self._was_playing
         self._settings.set("music", json.dumps({
-            "source": self._source, "playing": bool(self.playing),
+            "source": self._source, "playing": playing,
             "local": self._sources["local"].state()}))
+
+    def _no_songs(self):
+        """True when local music is the source and has nothing to play."""
+        return self._source == "local" and self._sources["local"].index < 0
 
     # ---- source switching -------------------------------------------------
     @property
@@ -492,6 +502,8 @@ class MediaHub(QObject):
     # ---- controls ---------------------------------------------------------
     @pyqtSlot()
     def togglePlay(self):
+        if self._no_songs():
+            return                        # nothing to fade: the knob must not mute the output
         if not self._system_volume:       # no output volume to fade (a Mac)
             self._active.togglePlay()
         elif self._active.playing:

@@ -32,6 +32,8 @@ from backend import safe_emit
 ROUTER = "http://127.0.0.1:8002"
 OFF_ROUTE_M = 60          # this far from the line ...
 OFF_ROUTE_FIXES = 3       # ... for this many fixes in a row means a new route
+OFF_ROUTE_S = 1.5         # ... at least this long after the first: 1 Hz fixes still take 3, even a little
+                          # early; a faster receiver waits
 REROUTE_EVERY_S = 10
 HEADING_MS = 2            # faster than this the GPS heading counts, and a part of the route
 WRONG_WAY_DEG = 60        # ... running further off it than this counts as
@@ -265,6 +267,8 @@ class Router(QObject):
         self._computing = False
         self._error = ""
         self._off_count = 0
+        self._off_since = 0.0         # when the current run of off-route fixes began
+        self._clock = time.monotonic  # for off-route timing (tests use a fake one)
         self._last_reroute = 0.0
         self._arrived = False
         # The route from before a restart, until it can be asked for again,
@@ -275,7 +279,8 @@ class Router(QObject):
         self._got.connect(self._on_route)
         self._status.connect(self._on_status)
         self._check_timer = QTimer(self, interval=30000, timeout=self._check)
-        gps.changed.connect(self._on_fix)
+        gps.fixChanged.connect(self._on_fix)    # new positions only, not status updates
+        gps.changed.connect(self._on_gps_changed)
 
     def start(self):
         self._check()
@@ -472,6 +477,14 @@ class Router(QObject):
         self.progressChanged.emit()
 
     # ---- following it --------------------------------------------------------------
+    def _on_gps_changed(self):
+        # The fix going stale (a tunnel) brings no new fix: end any run of
+        # off-route fixes there, so the first rough fixes after it don't
+        # finish it off.
+        if self._gps.stale and self._off_count:
+            self._off_count = 0
+            self.progressChanged.emit()
+
     def _on_fix(self):
         if self._resume:
             self._resume_if_ready()
@@ -497,9 +510,14 @@ class Router(QObject):
             if time.monotonic() - self._saved_at > RESAVE_S:
                 self._save()                        # still being driven
         if r.off > OFF_ROUTE_M and not self._arrived:
+            now = self._clock()
+            if not self._off_count:
+                self._off_since = now
             self._off_count += 1
-            now = time.monotonic()
-            if (self._off_count >= OFF_ROUTE_FIXES and not self._computing
+            # A receiver reporting several times a second would otherwise
+            # reroute after a fraction of a second off the line.
+            if (self._off_count >= OFF_ROUTE_FIXES and now - self._off_since >= OFF_ROUTE_S
+                    and not self._computing
                     and now - self._last_reroute > REROUTE_EVERY_S and self._dest):
                 self._last_reroute = now
                 self._request(*self._dest, reroute=True)

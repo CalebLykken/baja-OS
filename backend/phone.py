@@ -9,6 +9,9 @@ Wi-Fi), both needing the token in ~/.config/baja-os/send-token:
   paste a link or type a place, which also shows how to set up the
   Shortcut.
 
+Reset link in Settings makes a new token, which shuts out every phone that
+had the old one (say, a passenger who scanned the code) and its Shortcut.
+
 Whatever arrives (an Apple Maps or Google Maps link, short links included,
 coordinates, an address, a place name) is turned into a place with a
 position, checked against the offline map's area, and handed to the Maps
@@ -24,6 +27,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import tempfile
 import threading
 import time
 import urllib.error
@@ -59,11 +63,39 @@ def load_token():
             return token
     except OSError:
         pass
+    return new_token()
+
+
+def new_token():
+    """Make and save a fresh secret in place of any old one; raises OSError
+    if it can't be saved. It's written to a new file beside the old one and
+    renamed over it, so a crash or a power cut leaves the old token or the
+    new one, never an empty or half-written file."""
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
-    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(token + "\n")
+    fd, tmp = tempfile.mkstemp(dir=TOKEN_FILE.parent, prefix=".send-token-")   # made 0600
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(token + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, TOKEN_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # Make the rename itself stick, or a power cut soon after a reset could
+    # bring the old token back.
+    try:
+        dir_fd = os.open(TOKEN_FILE.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
     return token
 
 
@@ -320,9 +352,8 @@ class _Handler(BaseHTTPRequestHandler):
         return any(ip in net for net in ALLOWED_NETS)
 
     def _authorised(self):
-        svc = self.server.service
-        if svc.blocked(self.client_address[0]):
-            return False
+        """The current token if the request carries it (the Shortcut's header
+        or the page's cookie), else ""."""
         token = ""
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
@@ -331,10 +362,7 @@ class _Handler(BaseHTTPRequestHandler):
             k, _, v = part.strip().partition("=")
             if k == "baja_send" and not token:
                 token = v
-        ok = bool(token) and hmac.compare_digest(token.encode(), svc.token.encode())
-        if not ok:
-            svc.failed(self.client_address[0])
-        return ok
+        return self.server.service.check(self.client_address[0], token)
 
     def _send(self, code, body, ctype="application/json", extra=()):
         data = body.encode() if isinstance(body, str) else body
@@ -360,16 +388,18 @@ class _Handler(BaseHTTPRequestHandler):
         svc = self.server.service
         if key:
             # From the QR code: swap the key in the link for a cookie.
-            if not svc.blocked(self.client_address[0]) and hmac.compare_digest(key.encode(), svc.token.encode()):
+            if svc.check(self.client_address[0], key):
                 cookie = f"baja_send={key}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000"
                 return self._send(303, "", "text/plain", [("Location", "/send"), ("Set-Cookie", cookie)])
-            svc.failed(self.client_address[0])
             return self._send(403, "That link has expired; scan the code on the dashboard again.", "text/plain")
-        if not self._authorised():
+        token = self._authorised()
+        if not token:
             return self._send(403, "Scan the code in the dashboard's Settings > Map to open this page.", "text/plain")
         host = self.headers.get("Host", f"{svc.address}:{PORT}")
+        # The token this request was checked against: after a reset that
+        # lands mid-request, the phone still isn't shown the new one.
         page = (PAGE.replace("{{api}}", html.escape(f"http://{host}/api/v1/destination"))
-                    .replace("{{token}}", html.escape(svc.token)))
+                    .replace("{{token}}", html.escape(token)))
         self._send(200, page, "text/html; charset=utf-8")
 
     def do_POST(self):
@@ -395,7 +425,7 @@ class _Handler(BaseHTTPRequestHandler):
             place = resolve(payload, self.server.service.maps_dir)
         except ValueError as e:
             return self._json(422, False, str(e))
-        self.server.service.deliver(place)
+        self.server.service.deliver(place, self.client_address[0])
         return self._json(200, True, f"Sent to Baja: {place['name']}")
 
 
@@ -404,18 +434,23 @@ class PhoneSend(QObject):
 
     received = pyqtSignal("QVariantMap")
     changed = pyqtSignal()
+    _arrived = pyqtSignal(str, str)   # place name, the phone's address: over to the UI thread
 
     def __init__(self, maps_dir, parent=None):
         super().__init__(parent)
         self.maps_dir = Path(maps_dir)
         self.token = load_token()
+        self._old_tokens = ()         # replaced by Reset link, this run
         self._failures = {}           # ip -> [count, first failure time]
         self._server = None
         self._qr_dir = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
         self._qr_for = ""
         self._qr_path = None
+        self._revision = 0            # goes up with each Reset link
+        self._last_sent = {}
         self.address = ""
         self.received.connect(lambda _p: None)
+        self._arrived.connect(self._note_arrival)
 
     def start(self):
         try:
@@ -428,6 +463,21 @@ class PhoneSend(QObject):
         threading.Thread(target=self._server.serve_forever, name="phone-send", daemon=True).start()
 
     # ---- used by the request handler (worker threads) -------------------------------------
+    def check(self, ip, presented):
+        """The current token if `presented` is it, else "" (and a miss counts
+        against `ip`)."""
+        if self.blocked(ip):
+            return ""
+        current = self.token                # read once: Reset link may swap it meanwhile
+        if presented and hmac.compare_digest(presented.encode(), current.encode()):
+            return current
+        # A phone still holding a token from before a reset isn't guessing:
+        # turn it away without counting it, so the old Shortcut can't lock
+        # the owner's phone out of scanning the new code.
+        if not any(hmac.compare_digest(presented.encode(), old.encode()) for old in self._old_tokens):
+            self.failed(ip)
+        return ""
+
     def blocked(self, ip):
         count, first = self._failures.get(ip, (0, 0))
         if time.monotonic() - first > 600:
@@ -439,25 +489,57 @@ class PhoneSend(QObject):
         count, first = self._failures.get(ip, (0, time.monotonic()))
         self._failures[ip] = [count + 1, first]
 
-    def deliver(self, place):
+    def deliver(self, place, ip=""):
         safe_emit(self, "received", place)          # queued over to the UI thread
+        safe_emit(self, "_arrived", place.get("name", ""), ip)
+
+    def _note_arrival(self, name, ip):
+        self._last_sent = {"name": name, "ip": ip, "at": time.time() * 1000}
+        self.changed.emit()
 
     # ---- what QML sees -------------------------------------------------------------------
+    @pyqtSlot()
+    def resetToken(self):
+        """Settings' Reset link: a new token, so the old QR link, the cookies
+        made from it and the Shortcut's token are refused from now on."""
+        try:
+            token = new_token()
+        except OSError as e:
+            print(f"Send to Baja: couldn't save a new token ({e}); keeping the old one")
+            return
+        # Remember the old one first, so a request in between isn't counted
+        # as a guess. Each is one assignment: a request thread sees the old
+        # value or the new one, whole.
+        self._old_tokens = (self._old_tokens + (self.token,))[-5:]
+        self.token = token
+        self._failures = {}           # a fresh start for every phone
+        # Every QR image drawn so far holds the old token.
+        for path in self._qr_dir.glob("baja-send-qr-*.png"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        self._qr_for, self._qr_path = "", None
+        self._revision += 1
+        self.changed.emit()
+
     @pyqtSlot(str, result=str)
     def pageUrl(self, ip):
         """The link the QR code opens, for this Pi's current address."""
         return f"http://{ip}:{PORT}/send?k={self.token}" if ip else ""
 
-    @pyqtSlot(str, result=str)
-    def qrImage(self, ip):
-        """A file URL of the QR code for pageUrl(ip), drawn once per address."""
+    @pyqtSlot(str, int, result=str)
+    def qrImage(self, ip, revision):
+        """A file URL of the QR code for pageUrl(ip), drawn once per address
+        and token. `revision` goes unused here: QML passes phone.revision so
+        that its binding asks again after a reset."""
         url = self.pageUrl(ip)
         if not url:
             return ""
         if url != self._qr_for:
-            # A new file name per address: image links can't carry a query
-            # to defeat caching.
-            self._qr_path = self._qr_dir / f"baja-send-qr-{abs(hash(url)) % 100000}.png"
+            # A new file name per address and reset: image links can't carry
+            # a query to defeat caching.
+            self._qr_path = self._qr_dir / f"baja-send-qr-{self._revision}-{abs(hash(url)) % 100000}.png"
             qr = QrCode.encode_text(url, QrCode.Ecc.MEDIUM)
             n, scale, border = qr.get_size(), 8, 4
             size = (n + 2 * border) * scale
@@ -472,6 +554,17 @@ class PhoneSend(QObject):
             img.save(str(self._qr_path))
             self._qr_for = url
         return QUrl.fromLocalFile(str(self._qr_path)).toString()
+
+    @pyqtProperty(int, notify=changed)
+    def revision(self):
+        """How many times the link has been reset, this run."""
+        return self._revision
+
+    @pyqtProperty("QVariantMap", notify=changed)
+    def lastSent(self):
+        """The last place that came in this run: {name, ip (the phone's
+        address), at (ms since 1970)}, or {} before the first."""
+        return self._last_sent
 
     @pyqtProperty(int, constant=True)
     def port(self):

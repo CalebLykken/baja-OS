@@ -5,12 +5,14 @@ import "../components"
 // The Maps page, laid out like the car maps people already know (CarPlay,
 // Android Auto) and sized to read from the driver's seat:
 //
-// - Browsing: the map follows the truck; "Where to?" sits top-left.
-// - Searching: a panel down the left with the search box, Home, recent
-//   places and one-tap categories; the map stays visible on the right.
-//   Typing brings up the keyboard across the bottom.
-// - A picked place: the same panel shows it with the route already worked
-//   out (time, distance, arrival) and a big Go at the bottom.
+// - Browsing: the map follows the truck; "Where to?" sits top-left, with
+//   one-tap Home and Work beside it once they're saved.
+// - Searching: a panel down the left with the search box, Home, Work,
+//   favourites, recent places and one-tap categories; the map stays visible
+//   on the right. Typing brings up the keyboard across the bottom.
+// - A picked place: the same panel shows it with keys to save it as Home,
+//   Work or a favourite, the route already worked out (time, distance,
+//   arrival) and a big Go at the bottom.
 // - Driving a route: the next turn top-left, arrival bottom-left.
 // - Always: the speed limit and speed on the right, one strip of map keys
 //   bottom-right (zoom keys only appear after touching the map), and
@@ -68,25 +70,53 @@ Item {
     readonly property int cRadius: 26
 
 
-    // ---- Home and recent places, saved between runs ------------------------------
+    // ---- Home, Work, favourites and recent places, saved between runs --------------
+    function isPlace(p) {
+        return !!p && typeof p === "object" && typeof p.lon === "number" && typeof p.lat === "number"
+               && isFinite(p.lon) && isFinite(p.lat)
+    }
+    // A saved place, or a list of them (anything else in the file is dropped,
+    // so a hand-edited or damaged setting can't put a blank row on the page).
     function loadJson(key, fallback) {
         if (typeof settings === "undefined") return fallback
-        try { return JSON.parse(String(settings.get(key, JSON.stringify(fallback)))) } catch (e) { return fallback }
+        try {
+            var v = JSON.parse(String(settings.get(key, JSON.stringify(fallback))))
+            if (Array.isArray(fallback)) return Array.isArray(v) ? v.filter(isPlace) : fallback    // a list stays a list
+            return isPlace(v) ? v : fallback
+        } catch (e) { return fallback }
     }
     property var home: loadJson("homePlace", null)
+    property var work: loadJson("workPlace", null)
+    property var favourites: loadJson("favouritePlaces", [])    // in the order they were starred
     property var recents: loadJson("recentPlaces", [])
     function samePlace(a, b) {
         return !!a && !!b && a.name === b.name && Math.abs(a.lon - b.lon) < 1e-5 && Math.abs(a.lat - b.lat) < 1e-5
     }
+    function plain(p) { return { name: p.name, label: p.label, lon: p.lon, lat: p.lat } }
+    function isFavourite(p) { return favourites.some(f => samePlace(f, p)) }
+    // Already shown as Home, Work or a favourite: no need to list it as recent too.
+    function isSaved(p) { return samePlace(home, p) || samePlace(work, p) || isFavourite(p) }
     function remember(p) {
-        var keep = { name: p.name, label: p.label, lon: p.lon, lat: p.lat }
+        var keep = plain(p)
         recents = [keep].concat(recents.filter(r => !samePlace(r, keep))).slice(0, 6)
         settings.set("recentPlaces", JSON.stringify(recents))
     }
     function toggleHome(p) {
-        home = samePlace(home, p) ? null : { name: p.name, label: p.label, lon: p.lon, lat: p.lat }
+        home = samePlace(home, p) ? null : plain(p)
         settings.set("homePlace", JSON.stringify(home))
     }
+    function toggleWork(p) {
+        work = samePlace(work, p) ? null : plain(p)
+        settings.set("workPlace", JSON.stringify(work))
+    }
+    function toggleFavourite(p) {
+        favourites = isFavourite(p) ? favourites.filter(f => !samePlace(f, p)) : favourites.concat([plain(p)])
+        settings.set("favouritePlaces", JSON.stringify(favourites))
+    }
+    // The search panel lists each place once: Home and Work first, then
+    // favourites, then the recent places that are none of those.
+    readonly property var shownFavourites: favourites.filter(f => !samePlace(f, home) && !samePlace(f, work))
+    readonly property var shownRecents: recents.filter(r => !isSaved(r)).slice(0, 3)
 
     // ---- distances -------------------------------------------------------------------
     function distanceTo(p) {
@@ -129,7 +159,7 @@ Item {
         place = p
         typing = false
         panel = "place"
-        if (!p.isHome) remember(p)
+        if (!isSaved(p)) remember(p)
         map.call("showPlace(" + p.lon + "," + p.lat + ")")
         if (hasRouting && routing.available && hasFix) routing.routeTo(p.name, p.lon, p.lat)
     }
@@ -146,7 +176,7 @@ Item {
         target: page.hasRouting ? routing : null
         function onResumed(name, lon, lat) {
             var p = { name: name, label: "", lon: lon, lat: lat }
-            page.place = page.recents.find(r => page.samePlace(r, p)) || p
+            page.place = [page.home, page.work].concat(page.favourites, page.recents).find(r => page.samePlace(r, p)) || p
             page.typing = false
             page.panel = "place"
             if (page.mapReady) page.map.call("showPlace(" + lon + "," + lat + ")")
@@ -256,32 +286,25 @@ Item {
             }
             TapHandler { id: whereTap; onTapped: page.openSearch() }
         }
-        // One tap home, beside it.
-        Sheet {
-            visible: whereTo.visible && page.home !== null
+        // One tap Home or Work, beside it.
+        Row {
+            visible: whereTo.visible
             anchors { left: whereTo.right; leftMargin: 14; top: whereTo.top }
-            width: homeRow.implicitWidth + 48
-            height: 100
-            radius: page.cRadius
-            color: page.cPanel
-            scale: homeTap.pressed ? 0.98 : 1
-            Row {
-                id: homeRow
-                anchors.centerIn: parent
-                spacing: 14
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "home"; size: 40; color: page.cBlue }
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    MapLabel { text: "Home"; font.pixelSize: Theme.fontBody; font.weight: Font.DemiBold }
-                    MapLabel {
-                        visible: text !== ""
-                        text: Units.distanceText(page.distanceTo(page.home))
-                        color: page.cDim
-                        font.pixelSize: Theme.fontSmall
-                    }
-                }
+            spacing: 14
+            SavedKey {
+                visible: page.home !== null
+                icon: "home"
+                title: "Home"
+                place: page.home
+                onHit: page.choose(page.home)
             }
-            TapHandler { id: homeTap; onTapped: page.choose(Object.assign({}, page.home, { isHome: true })) }
+            SavedKey {
+                visible: page.work !== null
+                icon: "work"
+                title: "Work"
+                place: page.work
+                onHit: page.choose(page.work)
+            }
         }
 
         // ================================================================================
@@ -377,17 +400,10 @@ Item {
                     font.weight: Font.DemiBold
                 }
                 Item { visible: page.panel === "place"; Layout.fillWidth: true }
-                // Save a picked place as Home (lit when it is).
-                PanelKey {
-                    visible: page.panel === "place"
-                    icon: "home"
-                    lit: page.samePlace(page.home, page.place)
-                    onHit: page.toggleHome(page.place)
-                }
                 PanelKey { icon: "close"; onHit: page.closePanel() }
             }
 
-            // ---- search: Home, recents, categories ----
+            // ---- search: Home, Work, favourites, recents, categories ----
             Flickable {
                 visible: page.panel === "search" && !(page.typing && page.query !== "")
                 anchors { left: parent.left; right: parent.right; top: header.bottom; bottom: parent.bottom; margins: 14 }
@@ -405,10 +421,32 @@ Item {
                         title: "Home"
                         subtitle: page.home ? page.home.name : ""
                         trailing: Units.distanceText(page.distanceTo(page.home))
-                        onHit: page.choose(Object.assign({}, page.home, { isHome: true }))
+                        onHit: page.choose(page.home)
                     }
+                    ResultRow {
+                        visible: page.work !== null
+                        icon: "work"
+                        iconLit: true
+                        title: "Work"
+                        subtitle: page.work ? page.work.name : ""
+                        trailing: Units.distanceText(page.distanceTo(page.work))
+                        onHit: page.choose(page.work)
+                    }
+                    Heading { visible: page.shownFavourites.length > 0; text: "Favourites" }
                     Repeater {
-                        model: page.recents.filter(r => !page.samePlace(r, page.home)).slice(0, 3)
+                        model: page.shownFavourites
+                        ResultRow {
+                            icon: "star"
+                            iconLit: true
+                            title: modelData.name
+                            subtitle: modelData.label || ""
+                            trailing: Units.distanceText(page.distanceTo(modelData))
+                            onHit: page.choose(modelData)
+                        }
+                    }
+                    Heading { visible: page.shownRecents.length > 0; text: "Recent" }
+                    Repeater {
+                        model: page.shownRecents
                         ResultRow {
                             icon: "history"
                             title: modelData.name
@@ -417,14 +455,7 @@ Item {
                             onHit: page.choose(modelData)
                         }
                     }
-                    MapLabel {
-                        Layout.topMargin: 14
-                        Layout.bottomMargin: 6
-                        Layout.leftMargin: 6
-                        text: "Find nearby"
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.Bold
-                    }
+                    Heading { text: "Find nearby" }
                     GridLayout {
                         Layout.fillWidth: true
                         columns: 2
@@ -513,7 +544,31 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    Item { width: 1; height: 18 }
+                    Item { width: 1; height: 6 }
+                    // Keep it: Home, Work or a favourite (each lit when it is, tap to undo).
+                    RowLayout {
+                        width: parent.width
+                        spacing: 10
+                        SaveKey {
+                            icon: "home"
+                            label: "Home"
+                            lit: page.samePlace(page.home, page.place)
+                            onHit: page.toggleHome(page.place)
+                        }
+                        SaveKey {
+                            icon: "work"
+                            label: "Work"
+                            lit: page.samePlace(page.work, page.place)
+                            onHit: page.toggleWork(page.place)
+                        }
+                        SaveKey {
+                            icon: page.isFavourite(page.place) ? "star" : "star_outline"
+                            label: "Favourite"
+                            lit: page.isFavourite(page.place)
+                            onHit: page.toggleFavourite(page.place)
+                        }
+                    }
+                    Item { width: 1; height: 12 }
                     // The route, worked out as soon as the place was picked.
                     MapLabel {
                         visible: page.hasRouting && routing.previewing
@@ -910,6 +965,50 @@ Item {
                   charging_station: "charging", supermarket: "groceries", convenience: "groceries" })[kind] || "place"
     }
 
+    // A saved place, one tap away on the map: icon, what it is, how far.
+    component SavedKey: Item {
+        id: saved
+        property string icon
+        property string title
+        property var place: null
+        signal hit()
+        width: savedRow.implicitWidth + 48
+        height: 100
+        scale: savedTap.pressed ? 0.98 : 1
+        Behavior on scale { NumberAnimation { duration: 80 } }
+        Sheet { anchors.fill: parent }
+        Row {
+            id: savedRow
+            anchors.centerIn: parent
+            spacing: 14
+            Icon { anchors.verticalCenter: parent.verticalCenter; name: saved.icon; size: 40; color: page.cBlue }
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                MapLabel { text: saved.title; font.pixelSize: Theme.fontBody; font.weight: Font.DemiBold }
+                MapLabel {
+                    visible: text !== ""
+                    text: Units.distanceText(page.distanceTo(saved.place))
+                    color: page.cDim
+                    font.pixelSize: Theme.fontSmall
+                }
+            }
+        }
+        TapHandler { id: savedTap; onTapped: saved.hit() }
+    }
+
+    // A heading in the search panel's list.
+    component Heading: Item {
+        property alias text: headingText.text
+        Layout.fillWidth: true
+        implicitHeight: headingText.implicitHeight + 20
+        MapLabel {
+            id: headingText
+            anchors { left: parent.left; leftMargin: 6; bottom: parent.bottom; bottomMargin: 6 }
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.Bold
+        }
+    }
+
     // A row in the panel's lists: icon, name, what it is, how far.
     component ResultRow: Rectangle {
         id: row
@@ -970,6 +1069,34 @@ Item {
         color: pkTap.pressed ? page.cLine : pk.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
         Icon { anchors.centerIn: parent; name: pk.icon; size: 44; color: pk.lit ? page.cBlue : page.cText }
         TapHandler { id: pkTap; onTapped: pk.hit() }
+    }
+
+    // A save key under a picked place's name (Home, Work, Favourite): lit
+    // while the place is saved that way, tap to save or undo.
+    component SaveKey: Rectangle {
+        id: sk
+        property string icon
+        property string label
+        property bool lit: false
+        signal hit()
+        Layout.fillWidth: true
+        Layout.preferredWidth: 100
+        Layout.preferredHeight: 100
+        radius: 18
+        color: skTap.pressed ? page.cLine : sk.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
+        Column {
+            anchors.centerIn: parent
+            spacing: 2
+            Icon { anchors.horizontalCenter: parent.horizontalCenter; name: sk.icon; size: 40; color: sk.lit ? page.cBlue : page.cText }
+            MapLabel {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: sk.label
+                color: sk.lit ? page.cBlue : page.cText
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+            }
+        }
+        TapHandler { id: skTap; onTapped: sk.hit() }
     }
 
     // A key in the map's strip.

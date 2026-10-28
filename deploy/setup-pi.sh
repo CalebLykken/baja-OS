@@ -2,6 +2,9 @@
 # One-time Pi setup for Baja OS. Safe to re-run.
 #
 #   - Installs the packages Baja OS needs (Qt, audio, 3D, Bluetooth, boot screen)
+#   - Adds this user to the groups the hardware needs (screen, touch, knob,
+#     OBD adapter and GPS ports, DDC/CI brightness); they apply from the next
+#     login, so the reboot setup asks for covers it
 #   - Bluetooth: shows up to phones as "Baja OS" (car audio), pairing only
 #     while you press Pair phone in Settings, phone audio through PipeWire
 #   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off,
@@ -41,6 +44,26 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
 loginctl enable-linger "$USER_NAME"
 sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$(id -u "$USER_NAME")" \
     systemctl --user enable --now pipewire-pulse.socket 2>/dev/null || true
+
+echo "== Hardware access"
+# The screen and touch (video, render, input), the OBD adapter and the GPS on
+# USB serial ports (dialout), the knob through libgpiod (gpio) and DDC/CI
+# brightness (i2c). The first user Raspberry Pi Imager makes is already in
+# most of these; a second account isn't. usermod refuses the whole list if one
+# group is missing, so only the ones this system has go in (bluetooth is
+# added below).
+HW_GROUPS=""
+for g in video render input dialout gpio i2c; do
+    if getent group "$g" >/dev/null; then
+        HW_GROUPS="${HW_GROUPS:+$HW_GROUPS,}$g"
+    else
+        echo "   no $g group on this system, skipped"
+    fi
+done
+if [ -n "$HW_GROUPS" ]; then
+    usermod -aG "$HW_GROUPS" "$USER_NAME"
+    echo "   $USER_NAME: $HW_GROUPS"
+fi
 
 echo "== Bluetooth"
 usermod -aG bluetooth "$USER_NAME"          # control BlueZ over D-Bus

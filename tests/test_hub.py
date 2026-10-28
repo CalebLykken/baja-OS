@@ -6,6 +6,7 @@ the phone and Spotify.
 """
 
 import json
+import time
 import unittest
 from unittest import mock
 
@@ -124,6 +125,97 @@ class HubTest(unittest.TestCase):
         self.assertTrue(plays_on_start(read_state(saved("local", True))))
         for source, playing in (("local", False), ("spotify", True), ("phone", True)):
             self.assertFalse(plays_on_start(read_state(saved(source, playing))), source)
+
+
+class NoMusicTest(unittest.TestCase):
+    """Local music with no songs (an empty folder, the card not there yet):
+    the hub says nothing's playing, carries on when Spotify takes over, and
+    saves the place it was given rather than a blank one."""
+
+    def setUp(self):
+        self.kept = []                      # alive until the cleanups have run
+
+    def local_players(self):
+        yield MediaPlayer([])
+        try:
+            from backend.library import LibraryPlayer
+        except ImportError:
+            return
+        player = LibraryPlayer([])
+        self.addCleanup(player._engine._shutdown)
+        yield player
+
+    def make(self, local, wpctl=False, **values):
+        """wpctl: the hub finds wpctl, as on the Pi (it's faked: nothing runs)."""
+        self.settings = FakeSettings(**values)
+        self.spotify = FakeSource()
+        if wpctl:
+            run = mock.patch("backend.hub.subprocess.run")
+            self.wpctl = run.start()
+            self.addCleanup(run.stop)
+        with mock.patch("backend.hub.shutil.which", return_value="/usr/bin/wpctl" if wpctl else None):
+            hub = MediaHub(local, FakeSource(), self.spotify, settings=self.settings)
+        hub.start()
+        self.kept.append((local, hub))
+        self.addCleanup(hub._save_timer.stop)
+        return hub
+
+    def test_nothing_is_playing(self):
+        for local in self.local_players():
+            hub = self.make(local, music=saved("local", True))
+            self.assertEqual((hub.source, hub.title, hub.artist, hub.art, hub.duration), ("local", "", "", "", 0))
+            self.assertEqual((hub.index, hub.album, hub.queue, hub.albums, hub.albumTracks(0)), (-1, -1, [], [], []))
+            self.assertFalse(hub.playing)
+            for key in (hub.togglePlay, hub.next, hub.previous, hub.playAll):
+                key()
+            hub.playIndex(0)
+            hub.playAlbum(0, 0)
+            self.assertFalse(hub.playing, local)
+
+    def test_the_saved_place_is_kept(self):
+        for local in self.local_players():
+            hub = self.make(local, music=saved("local", True, index=3, position=50))
+            hub._save()
+            self.assertEqual(json.loads(self.settings.values["music"])["local"],
+                             {"album": None, "path": "", "index": 3, "position": 50}, local)
+
+    def test_the_playing_flag_is_kept_until_there_is_music(self):
+        for local in self.local_players():
+            for was, source, kept in ((True, "local", True), (False, "local", False),
+                                      (True, "spotify", False), (True, "phone", False)):
+                hub = self.make(local, music=saved(source, was))
+                hub._save()
+                state = json.loads(self.settings.values["music"])
+                self.assertEqual((state["source"], state["playing"]), ("local", kept), (was, source))
+                self.assertFalse(hub.playing)
+
+    def test_the_knob_does_not_mute_the_output(self):
+        # The knob presses togglePlay. With no songs it fades the output to 0
+        # and then nothing starts to bring it back (that takes a few seconds).
+        for local in self.local_players():
+            hub = self.make(local, wpctl=True, music=saved("local", True))
+            hub.togglePlay()
+            self.assertEqual((hub._fade, hub._resuming), (1.0, False))
+            self.assertFalse(hub._give_up.isActive())
+            time.sleep(0.1)                              # for the volume thread
+            self.assertNotIn("0.000", [c.args[0][-1] for c in self.wpctl.call_args_list], local)
+
+    def test_the_knob_still_fades_when_there_is_music(self):
+        local = MediaPlayer()
+        self.addCleanup(local._timer.stop)
+        hub = self.make(local, wpctl=True)
+        self.assertTrue(hub.playing)
+        hub.togglePlay()
+        self.assertTrue(hub._fade_timer.isActive())      # fading out to pause
+
+    def test_spotify_still_takes_over(self):
+        for local in self.local_players():
+            hub = self.make(local, music=saved("local", False, index=3, position=50))
+            self.spotify.play()
+            self.assertEqual(hub.source, "spotify")
+            state = json.loads(self.settings.values["music"])
+            self.assertEqual((state["source"], state["playing"]), ("spotify", True))
+            self.assertEqual(state["local"]["index"], 3, local)
 
 
 if __name__ == "__main__":

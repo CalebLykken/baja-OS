@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
@@ -104,6 +105,7 @@ class BluetoothAudio(QObject):
         self._pairing_until = 0.0
         self._volume_sent_at = 0.0
         self._busy = False
+        self._poll_error = ""      # the error the last poll died of, while it keeps happening
         self._polled.connect(self._apply)
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
@@ -126,23 +128,42 @@ class BluetoothAudio(QObject):
             threading.Thread(target=self._poll, daemon=True).start()
 
     def _poll(self):
+        state = None     # stays None if the poll crashes, and _apply keeps the old state
         try:
-            out = _busctl("--json=short", "call", "org.bluez", "/",
-                          "org.freedesktop.DBus.ObjectManager", "GetManagedObjects").stdout
-            data = json.loads(out)["data"][0] if out else {}
-            state = parse_objects(data)
-        except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
-            state = parse_objects({})
-        # Trust paired phones so they reconnect by themselves next time.
-        for path in state["to_trust"]:
             try:
-                _busctl("set-property", "org.bluez", path, "org.bluez.Device1", "Trusted", "b", "true")
-            except (OSError, subprocess.SubprocessError):
-                pass
-        safe_emit(self, "_polled", state)
+                out = _busctl("--json=short", "call", "org.bluez", "/",
+                              "org.freedesktop.DBus.ObjectManager", "GetManagedObjects").stdout
+                data = json.loads(out)["data"][0] if out else {}
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
+                data = {}                    # no BlueZ, or nothing usable from it
+            state = parse_objects(data)
+            # Trust paired phones so they reconnect by themselves next time.
+            for path in state["to_trust"]:
+                try:
+                    _busctl("set-property", "org.bluez", path, "org.bluez.Device1", "Trusted", "b", "true")
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            self._logged()
+        except Exception as e:
+            self._logged(e)
+        finally:
+            safe_emit(self, "_polled", state)     # always, or _busy would never clear
+
+    def _logged(self, error=None):
+        """Log a poll that crashed (once, while the same error repeats), or
+        that it's working again."""
+        err = "" if error is None else f"{type(error).__name__}: {error}"
+        if err and err != self._poll_error:
+            trace = "".join(traceback.format_exception(error)).rstrip()
+            print(f"Bluetooth: poll failed: {err}\n{trace}", flush=True)
+        elif not err and self._poll_error:
+            print("Bluetooth: working again", flush=True)
+        self._poll_error = err
 
     def _apply(self, state):
         self._busy = False
+        if state is None:
+            return
         old, old_player = self._state, self._player
         self._state, self._player = state, state["player"]
         p, o = self._player, old_player or {}

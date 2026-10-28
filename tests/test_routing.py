@@ -8,10 +8,13 @@ in settings and picked up again after a restart.
 import json
 import time
 import unittest
+from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.routing import OFF_ROUTE_FIXES, RESUME_S, Router, route_record, saved_route
+from backend.gps import STALE_S, Gps
+from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Router, route_record,
+                             saved_route)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -56,6 +59,7 @@ class Changed:
 class FakeGps:
     """What the router reads from backend.gps.Gps."""
     changed = Changed()
+    fixChanged = Changed()
 
     def __init__(self):
         self.hasFix, self.stale, self.source = True, False, "gps"
@@ -75,8 +79,21 @@ class FakeGps:
 
 class FollowingTest(unittest.TestCase):
     def setUp(self):
+        # A clock that moves only with each fix. By default they're slow
+        # (OFF_ROUTE_S apart), so the count of fixes is what these tests see.
+        self.now, self.fix_every = 1000.0, OFF_ROUTE_S
+        clock = mock.patch("backend.routing.time.monotonic", lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.gps = FakeGps()
         self.router = Router(self.gps)
+        self.router._clock = lambda: self.now
+        on_fix = self.router._on_fix
+
+        def fix():
+            self.now += self.fix_every
+            on_fix()
+        self.router._on_fix = fix
         self.said, self.asked = [], []
         self.router.speak.connect(self.said.append)
         self.router._request = lambda *a, **k: self.asked.append(k.get("reroute", False))
@@ -105,9 +122,49 @@ class FollowingTest(unittest.TestCase):
         for _ in range(OFF_ROUTE_FIXES - 1):
             self.router._on_fix()
         self.gps.at(-122.003, 47.005, stale=True)
-        self.router._on_fix()
+        self.router._on_gps_changed()                # going stale brings no new fix
         self.gps.at(-122.003, 47.005)
         for _ in range(OFF_ROUTE_FIXES - 1):
+            self.router._on_fix()
+        self.assertEqual(self.asked, [])
+        self.router._on_fix()
+        self.assertEqual(self.asked, [True])
+
+    def test_quick_fixes_off_the_line_are_not_a_new_route(self):
+        self.fix_every = 0.1                         # a receiver reporting 10 times a second
+        self.gps.at(-122.003, 47.005)                # 230 m off the line
+        for _ in range(int(OFF_ROUTE_S * 10)):       # OFF_ROUTE_S of fixes (just under it, first to last)
+            self.router._on_fix()
+        self.assertEqual(self.asked, [])
+        self.assertTrue(self.router.offRoute)
+
+    def test_a_receiver_at_one_hertz_reroutes_on_the_third_fix(self):
+        self.fix_every = 1.0                         # 3 fixes span 2 s: the time is no extra wait
+        self.gps.at(-122.003, 47.005)                # 230 m off the line
+        for _ in range(OFF_ROUTE_FIXES - 1):
+            self.router._on_fix()
+        self.assertEqual(self.asked, [])
+        self.router._on_fix()
+        self.assertEqual(self.asked, [True])
+
+    def test_off_the_line_for_the_time_and_the_fixes_is_a_new_route(self):
+        self.fix_every = 0.5
+        self.gps.at(-122.003, 47.005)
+        for _ in range(int(OFF_ROUTE_S / self.fix_every)):   # the last one 0.5 s short of it
+            self.router._on_fix()
+        self.assertEqual(self.asked, [])
+        self.router._on_fix()                        # OFF_ROUTE_S after the first
+        self.assertEqual(self.asked, [True])
+
+    def test_back_on_the_line_starts_the_time_again(self):
+        self.fix_every = 0.25
+        self.gps.at(-122.003, 47.005)                # off the line, not quite long enough ...
+        for _ in range(int(OFF_ROUTE_S / self.fix_every)):
+            self.router._on_fix()
+        self.gps.at(-122.0, 47.005)                  # ... back on it ...
+        self.router._on_fix()
+        self.gps.at(-122.003, 47.005)                # ... and off again: OFF_ROUTE_S from here
+        for _ in range(int(OFF_ROUTE_S / self.fix_every)):
             self.router._on_fix()
         self.assertEqual(self.asked, [])
         self.router._on_fix()
@@ -126,6 +183,66 @@ class FollowingTest(unittest.TestCase):
         self.router._on_route(ROUTE, "", "Shop", True)
         self.assertEqual(self.said, [])
         self.assertTrue(self.router.active)
+
+
+class GpsWiringTest(unittest.TestCase):
+    """The router on a real Gps (the fakes' signals do nothing): a new
+    position is a fix and nothing else is, so satellite counts and the
+    receiver coming and going don't count toward a new route."""
+
+    def setUp(self):
+        self.now = 1000.0
+        clock = mock.patch("backend.routing.time.monotonic", lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.gps = Gps()
+        self.router = Router(self.gps)
+        self.router._clock = lambda: self.now
+        self.asked = []
+        self.router._request = lambda *a, **k: self.asked.append(k.get("reroute", False))
+        self.router._last_reroute = float("-inf")
+        self.report(0.0003, 0.0)                     # 33 m up the route, on it
+        self.router.routeTo("Shop", *END)
+        self.router._on_route(ROUTE, "", "Shop", False)
+        self.router.go()
+        self.asked.clear()
+
+    def report(self, north, east, after=1.0):
+        """A position report `after` seconds on, `east` degrees of longitude
+        off the line (0.003 is 230 m) and `north` of the start."""
+        self.now += after
+        self.gps._apply({"lat": START[1] + north, "lon": START[0] + east, "speed": 10.0,
+                         "heading": 0.0, "source": "gps"})
+
+    def test_each_position_is_one_fix(self):
+        for n in range(1, 4):
+            self.report(0.0003 + n * 1e-5, 0.003)    # off the line, a metre further each time
+            self.assertEqual(self.router._off_count, n)
+        self.assertEqual(self.asked, [True])         # the third, 2 s after the first
+
+    def test_nothing_else_the_receiver_says_is_a_fix(self):
+        self.report(0.0004, 0.003)
+        self.assertEqual(self.router._off_count, 1)
+        for status in ({"sats": 7, "view": 11}, {"gpsd": True}, {"receiver": True},
+                       {"sats": 8, "view": 11}, {"gpsd": False}, {"sats": 0, "view": 0}):
+            self.now += 0.2
+            self.gps._apply(status)
+        self.assertEqual(self.router._off_count, 1)
+        self.assertEqual(self.asked, [])
+        self.report(0.0005, 0.003)
+        self.assertEqual(self.router._off_count, 2)
+
+    def test_going_stale_starts_the_count_again(self):
+        self.report(0.0004, 0.003)
+        self.report(0.0005, 0.003)
+        self.assertEqual(self.router._off_count, 2)
+        self.now += STALE_S + 1                      # a tunnel: no new fix, the position held
+        self.gps._tick()
+        self.assertTrue(self.gps.stale)
+        self.assertEqual(self.router._off_count, 0)
+        self.report(0.0006, 0.003)                   # back in the open, still off the line
+        self.assertEqual(self.router._off_count, 1)
+        self.assertEqual(self.asked, [])
 
 
 class FakeSettings:

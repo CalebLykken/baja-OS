@@ -103,6 +103,10 @@ python3 -m venv .venv
 .venv/bin/python main.py
 ```
 
+That installs PyQt6, Qt WebEngine (`PyQt6-WebEngine`, for the map) and
+mutagen (music tags). With no truck attached, the engine data and the drive
+are simulated.
+
 ## Run on the Pi
 
 ```bash
@@ -114,8 +118,10 @@ cd baja-OS
 After the reboot the dashboard starts by itself. To run it by hand instead,
 stop the service and run `./run.sh` from the console (not over a desktop
 session). Over SSH the app still draws on the HDMI screen; press Ctrl-C in the
-SSH session to quit. Your user needs to be in the `video`, `render` and `input`
-groups for the display and touch to work.
+SSH session to quit. Setup also puts your user in the groups the hardware
+needs: `video`, `render` and `input` (screen and touch), `dialout` (OBD adapter
+and GPS), `gpio` (knob), `i2c` (brightness) and `bluetooth`. They apply from
+the next login, so the reboot covers it.
 
 `run.sh` waits up to 30 s for a connected screen, then starts on the GPU
 (EGLFS). If there's no screen, it falls back to the plain framebuffer
@@ -133,7 +139,8 @@ headphones, and at 100% with the amp.
 Put albums in `~/Music` on the Pi (mp3, m4a, flac, ogg, wav). The Music page
 lists them under Albums, with title, artist and cover art from the tags.
 Songs play back to back with no gap, so albums whose songs run into each
-other sound as they should. With no files there, it plays a demo playlist.
+other sound as they should. With no files there, Home and Music say nothing's
+playing (a Mac, or `--demo`, plays a demo playlist instead).
 
 ## Wiring
 
@@ -283,8 +290,11 @@ against the outside air pressure read at key-on.
 
 It only reads: it never clears codes or sends anything that writes. With the
 key off it checks every few seconds, then every 20 s after a minute, so the
-adapter can sleep. While the car isn't answering, the gauges run a simulated
-drive and the status bar shows **DEMO DATA**.
+adapter can sleep. Until the car has answered once on an install (a Mac, a bench
+Pi), the gauges run a simulated drive and the status bar shows **DEMO DATA**.
+After that, the truck never makes numbers up: with the car silent the engine
+values are dashes, and the battery stays real (the adapter reads it itself).
+`--demo` and `--no-demo` force the choice.
 
 While the car's own readings are out of range (coolant over 230 °F, battery
 under 12 V or over 15 V, boost over 15 psi), a red chip at the foot of the
@@ -392,10 +402,11 @@ python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
 ./deploy/quiet-boot-undo.sh   # puts the original boot screen and console back
 ```
 
-`setup-pi.sh` installs the packages, turns on the sound board, makes Wi-Fi
-keep retrying at boot (power saving off), hides the rainbow screen, kernel
-text, logos and console login, installs the Baja OS boot screen, sets up the
-the polkit rule that lets the dashboard shut the Pi down, and installs
+`setup-pi.sh` installs the packages, adds your user to the groups the hardware
+needs, turns on the sound board, makes Wi-Fi keep retrying at boot (power
+saving off), hides the rainbow screen, kernel text, logos and console login,
+installs the Baja OS boot screen, sets up the polkit rule that lets the
+dashboard shut the Pi down, and installs
 `baja-os.service`, which takes the display straight from the boot screen so
 the truck stays up until the dashboard appears. It also lets your user
 restart that one service without a password:

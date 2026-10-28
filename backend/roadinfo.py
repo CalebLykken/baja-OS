@@ -19,6 +19,7 @@ ROUTER = "http://127.0.0.1:8002"
 CHECK_EVERY_MS = 3000
 MOVING_MS = 2.0           # below this the fixes are too close together to match
 KEEP_S = 20               # a limit older than this (no match since) is dropped
+TRACE_EVERY_S = 0.8       # the trace keeps about one fix a second, however often they come
 
 
 class RoadInfo(QObject):
@@ -28,20 +29,23 @@ class RoadInfo(QObject):
     def __init__(self, gps, parent=None):
         super().__init__(parent)
         self._gps = gps
-        self._fixes = collections.deque(maxlen=10)
+        self._fixes = collections.deque(maxlen=10)   # about the last 10 s of driving
+        self._fix_at = float("-inf")  # when the last one was kept
         self._limit = 0               # km/h, 0 = unknown
         self._name = ""
         self._at = 0.0
         self._busy = False
         self._matched.connect(self._on_matched)
-        gps.changed.connect(self._on_fix)
+        gps.fixChanged.connect(self._on_fix)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
         self._timer.start()
 
     def _on_fix(self):
-        if self._gps.hasFix and not self._gps.stale:
+        now = time.monotonic()
+        if self._gps.hasFix and not self._gps.stale and now - self._fix_at >= TRACE_EVERY_S:
+            self._fix_at = now
             self._fixes.append((self._gps.lat, self._gps.lon))
 
     def _check(self):

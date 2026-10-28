@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import traceback
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
@@ -34,7 +35,9 @@ def wifi_name():
     if not shutil.which("nmcli"):
         return ""
     try:
-        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+        # --rescan no: a bare `dev wifi` scans whenever its list is over 30 s old,
+        # which pulls the radio off the hotspot's channel every few seconds.
+        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi", "list", "--rescan", "no"],
                              capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -54,7 +57,7 @@ def is_online():
 
 class Network(QObject):
     changed = pyqtSignal()
-    _result = pyqtSignal(str, str, bool)
+    _result = pyqtSignal(object)    # (ip, ssid, online), or None if the check crashed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,6 +66,7 @@ class Network(QObject):
         self._online = False
         self._checked = False
         self._busy = False
+        self._check_error = ""     # the error the last check died of, while it keeps happening
         self._result.connect(self._apply)  # queued back onto the UI thread
         self._timer = QTimer(self)
         self._timer.setInterval(CHECK_EVERY_MS)
@@ -79,10 +83,31 @@ class Network(QObject):
         threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self):
-        safe_emit(self, "_result", local_ip(), wifi_name(), is_online())
+        result = None
+        try:
+            result = (local_ip(), wifi_name(), is_online())
+            self._logged()
+        except Exception as e:
+            self._logged(e)
+        finally:
+            safe_emit(self, "_result", result)    # always, or _busy would never clear
 
-    def _apply(self, ip, ssid, online):
+    def _logged(self, error=None):
+        """Log a check that crashed (once, while the same error repeats), or
+        that it's working again."""
+        err = "" if error is None else f"{type(error).__name__}: {error}"
+        if err and err != self._check_error:
+            trace = "".join(traceback.format_exception(error)).rstrip()
+            print(f"Network: check failed: {err}\n{trace}", flush=True)
+        elif not err and self._check_error:
+            print("Network: working again", flush=True)
+        self._check_error = err
+
+    def _apply(self, result):
         self._busy = False
+        if result is None:
+            return                        # the check crashed: keep what we had
+        ip, ssid, online = result
         if (ip, ssid, online, True) != (self._ip, self._ssid, self._online, self._checked):
             self._ip, self._ssid, self._online, self._checked = ip, ssid, online, True
             self.changed.emit()

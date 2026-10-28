@@ -1,2 +1,5 @@
-PyQt6>=6.4
+# The Mac setup (the Pi uses Debian's packages instead). PyQt6 and
+# PyQt6-WebEngine must be on the same Qt minor version: bump them together.
+PyQt6==6.11.*
+PyQt6-WebEngine==6.11.*
 mutagen>=1.45

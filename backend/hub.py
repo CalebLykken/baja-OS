@@ -30,22 +30,19 @@ music plays again only if it was what was playing; after Spotify or the
 phone it waits, paused, for them to come back.
 """
 
-import hashlib
 import json
+import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.request
-from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
-from backend import safe_emit
+from backend import artcache, safe_emit
 
-ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 PHONE_RECONNECT_GRACE_S = 10
 # Soft pause and play, like a car stereo: music cut off mid-wave clicks.
 # Pause fades the output out first; play starts silent and fades in once
@@ -86,10 +83,15 @@ def art_card(url):
     img = QImage(path) if path else QImage()
     if img.isNull():
         return ""
-    ART_CACHE.mkdir(exist_ok=True)
-    out = ART_CACHE / (hashlib.sha1(path.encode()).hexdigest() + "-card.png")
-    if not out.exists():
-        _rounded_card(img, out)
+    try:
+        st = os.stat(path)
+        key = f"{path}|{st.st_mtime_ns}|{st.st_size}"      # a cover.jpg that changed gets a new card
+    except OSError:
+        key = path
+    out, hit = artcache.lookup(artcache.digest(key) + "-card.png")
+    if not hit:
+        with artcache.writing(out) as tmp:
+            _rounded_card(img, tmp)
     return QUrl.fromLocalFile(str(out)).toString()
 
 
@@ -97,11 +99,12 @@ def cached_art(url):
     """A local file URL for `url`: file URLs as-is, http(s) downloaded once."""
     if not url or not url.startswith("http"):
         return url
-    ART_CACHE.mkdir(exist_ok=True)
-    out = ART_CACHE / (hashlib.sha1(url.encode()).hexdigest() + ".img")
-    if not out.exists():
+    out, hit = artcache.lookup(artcache.digest(url) + ".img")
+    if not hit:
         with urllib.request.urlopen(url, timeout=10) as r:
-            out.write_bytes(r.read())
+            data = r.read()
+        with artcache.writing(out) as tmp:
+            tmp.write_bytes(data)
     return QUrl.fromLocalFile(str(out)).toString()
 
 

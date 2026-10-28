@@ -5,10 +5,16 @@
 # key exists.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-# Units first, so the updater's restart finds the service.
+# Units first, so the updater's restart finds the service. The updater's
+# unit gets this checkout's path for @APP@, the way setup-pi.sh fills
+# baja-os.service; escaped for systemd (quoted word, % and \) and then sed.
+APP=$(cd "$HERE/../.." && pwd)
+UNIT_APP=$(printf '%s' "$APP" | sed -e 's/[%\\]/&&/g' -e 's/"/\\&/g')
+SED_APP=$(printf '%s' "$UNIT_APP" | sed -e 's/[\\&|]/\\&/g')
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/share/soloist" "$HOME/.cache/soloist"
-cp "$HERE"/baja-soloist.service "$HERE"/baja-soloist-update.service \
-   "$HERE"/baja-soloist-update.timer "$HOME/.config/systemd/user/"
+cp "$HERE"/baja-soloist.service "$HERE"/baja-soloist-update.timer "$HOME/.config/systemd/user/"
+sed "s|@APP@|$SED_APP|g" "$HERE/baja-soloist-update.service" \
+    > "$HOME/.config/systemd/user/baja-soloist-update.service"
 systemctl --user daemon-reload
 "$HERE/update-soloist.sh"
 systemctl --user enable --now baja-soloist-update.timer

@@ -3,4 +3,5 @@ Description=Fetch the latest Spotify Soloist build (builds expire after 90 days)
 
 [Service]
 Type=oneshot
-ExecStart=%h/baja-OS/deploy/spotify/update-soloist.sh
+# install-soloist.sh fills in @APP@ (the checkout), quoted for systemd.
+ExecStart="@APP@/deploy/spotify/update-soloist.sh"

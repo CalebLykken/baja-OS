@@ -109,8 +109,9 @@ Window {
     Connections {
         target: root.mapView
         ignoreUnknownSignals: true
-        function onReady(ms) { root.mapReady = true; console.log("Map: drawn in " + ms + " ms") }
+        function onReady(ms) { root.mapReady = true; root.mapProblem = ""; console.log("Map: drawn in " + ms + " ms") }
         function onFailed(message) { root.mapProblem = message }
+        function onCrashed() { root.mapReady = false }      // until it draws again
         function onBenchDone(result) { console.log("Map bench: " + JSON.stringify(result)) }
     }
 

@@ -66,6 +66,7 @@ WebEngineView {
                 // The look may have been set before the page could hear it.
                 web.call("setMode('" + web.mode + "')")
                 web.sendInsets(); web.ready(m.ms); web.sendPosition(); web.syncRoute(true)
+                stableTimer.restart()       // up for a minute: the crashes are over
             }
             else if (m.kind === "follow") web.following = m.on
             else if (m.kind === "road") web.road = m.name
@@ -81,13 +82,40 @@ WebEngineView {
     onLoadingChanged: (request) => {
         if (request.status === WebEngineView.LoadFailedStatus)
             web.failed(request.errorString)
+        else if (request.status === WebEngineView.LoadSucceededStatus)
+            reloadTimer.stop()      // already reloaded by something else (a map update)
     }
-    // If the page's process dies, start it again rather than leave a blank map.
+    // If the page's process dies, start it again rather than leave a blank
+    // map, waiting longer after each crash in a row: a page that dies on
+    // every load (a GPU or memory problem, a bad tile file) would otherwise
+    // get a new renderer every second, forever. After a few the Maps page is
+    // told. A crash stops counting as "in a row" once the map has drawn and
+    // stayed up for a minute.
+    property int crashes: 0
+    readonly property var reloadAfter: [1000, 5000, 30000, 180000]     // ms; the last repeats
+    readonly property int crashesToGiveUp: 3
+    // Every crash, so the page can stop showing a map that isn't there.
+    signal crashed()
+    function terminationName(status) {
+        return status === WebEngineView.NormalTerminationStatus ? "exited"
+             : status === WebEngineView.AbnormalTerminationStatus ? "exited abnormally"
+             : status === WebEngineView.CrashedTerminationStatus ? "crashed"
+             : status === WebEngineView.KilledTerminationStatus ? "was killed"
+             : "status " + status
+    }
     onRenderProcessTerminated: (status, code) => {
-        console.warn("map: page process ended (" + status + "), reloading")
-        reloadTimer.start()
+        crashes++
+        stableTimer.stop()
+        var wait = reloadAfter[Math.min(crashes, reloadAfter.length) - 1]
+        console.warn("map: page process " + terminationName(status) + " (exit code " + code + "), "
+                     + crashes + " in a row, reloading in " + wait / 1000 + " s")
+        crashed()
+        if (crashes >= crashesToGiveUp) failed("The map keeps crashing")
+        reloadTimer.interval = wait
+        reloadTimer.restart()
     }
-    Timer { id: reloadTimer; interval: 1000; onTriggered: web.reload() }
+    Timer { id: reloadTimer; onTriggered: web.reload() }
+    Timer { id: stableTimer; interval: 60000; onTriggered: web.crashes = 0 }
 
     // A route previewed, started or ended: draw it; follow once it starts.
     Connections {

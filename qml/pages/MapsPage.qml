@@ -29,6 +29,7 @@ Item {
     property var map: null              // the dashboard's one map engine (Main.qml)
     property bool mapReady: false
     property string problem: ""
+    readonly property bool crashing: problem === "The map keeps crashing"   // MapView says it
     readonly property alias mapSlot: slot   // where Main.qml puts the map while this page shows
     readonly property real mapInsetLeft: panelShown || navigating ? panelWidth + 16 : 0
     onVisibleChanged: {
@@ -245,6 +246,7 @@ Item {
                 font.weight: Font.DemiBold
                 text: !page.hasMaps || !maps.webEngine ? "The map needs Qt WebEngine"
                       : !maps.ready ? "No map installed yet"
+                      : page.crashing ? page.problem
                       : page.problem !== "" ? "The map didn't load"
                       : "Loading the map"
             }
@@ -256,6 +258,7 @@ Item {
                 font.pixelSize: Theme.fontBody
                 text: !page.hasMaps || !maps.webEngine ? "Run deploy/setup-pi.sh on the Pi to install it"
                       : !maps.ready ? "Run deploy/maps/install-map.sh on the Pi to download the Seattle area"
+                      : page.crashing ? "Trying again in a little while"
                       : page.problem !== "" ? page.problem
                       : maps.region
             }

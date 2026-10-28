@@ -252,7 +252,7 @@ class Router(QObject):
     progressChanged = pyqtSignal()  # where the truck is along the route
     speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
     resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
-    _got = pyqtSignal(object, str, str, bool)   # response, error, destination name, reroute
+    _got = pyqtSignal(object, str, str, bool, int)   # response, error, destination name, reroute, request number
     _status = pyqtSignal(bool)
 
     def __init__(self, gps, settings=None, parent=None):
@@ -265,6 +265,7 @@ class Router(QObject):
         self._route = None
         self._dest = None             # (name, lon, lat)
         self._computing = False
+        self._gen = 0                 # number of the latest request; older answers are dropped
         self._error = ""
         self._off_count = 0
         self._off_since = 0.0         # when the current run of off-route fixes began
@@ -335,7 +336,10 @@ class Router(QObject):
 
     # ---- asking for a route ---------------------------------------------------------
     def _request(self, name, lon, lat, reroute=False):
+        self._gen += 1              # any answer still on its way is out of date now
+        gen = self._gen
         if not self._gps.hasFix:
+            self._computing = False
             self._error = "Waiting for the truck's position"
             self.changed.emit()
             return
@@ -371,10 +375,12 @@ class Router(QObject):
             finally:
                 # Always, or _computing would never clear. Anything unexpected
                 # is logged by threading.excepthook (main.py) on the way out.
-                safe_emit(self, "_got", None if error else data, error, name, reroute)
+                safe_emit(self, "_got", None if error else data, error, name, reroute, gen)
         threading.Thread(target=work, name="route", daemon=True).start()
 
-    def _on_route(self, data, error, name, reroute):
+    def _on_route(self, data, error, name, reroute, gen):
+        if gen != self._gen:
+            return      # cancelled, or a newer place or reroute was asked for since
         self._computing = False
         resumed = None if reroute else self._resuming
         if not reroute:
@@ -487,6 +493,7 @@ class Router(QObject):
         self._dest = None
         self._error = ""
         self._computing = False
+        self._gen += 1              # an answer still on its way is for a route nobody wants
         self._forget()
         self.changed.emit()
         self.progressChanged.emit()

@@ -25,6 +25,11 @@ app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a t
 START, CORNER, END = (-122.0, 47.0), (-122.0, 47.02), (-121.99, 47.02)
 
 
+def answer(router, data, error, name, reroute, gen=None):
+    """The router's reply to the latest request (or to request number `gen`)."""
+    router._on_route(data, error, name, reroute, router._gen if gen is None else gen)
+
+
 def polyline6(points):
     """[(lon, lat)] -> Valhalla's encoded shape (the reverse of decode_polyline6)."""
     out, prev = [], (0, 0)
@@ -102,7 +107,7 @@ class FollowingTest(unittest.TestCase):
         self.router._request = lambda *a, **k: self.asked.append(k.get("reroute", False))
         self.router._last_reroute = float("-inf")   # the clock may have just started
         self.router.routeTo("Shop", *END)
-        self.router._on_route(ROUTE, "", "Shop", False)
+        answer(self.router, ROUTE, "", "Shop", False)
         self.router.go()
         self.assertEqual(self.said, ["Drive north."])
         self.said.clear()
@@ -183,7 +188,7 @@ class FollowingTest(unittest.TestCase):
 
     def test_a_new_route_arriving_while_stale_is_not_said(self):
         self.gps.at(-122.0, 47.005, stale=True)
-        self.router._on_route(ROUTE, "", "Shop", True)
+        answer(self.router, ROUTE, "", "Shop", True)
         self.assertEqual(self.said, [])
         self.assertTrue(self.router.active)
 
@@ -206,7 +211,7 @@ class GpsWiringTest(unittest.TestCase):
         self.router._last_reroute = float("-inf")
         self.report(0.0003, 0.0)                     # 33 m up the route, on it
         self.router.routeTo("Shop", *END)
-        self.router._on_route(ROUTE, "", "Shop", False)
+        answer(self.router, ROUTE, "", "Shop", False)
         self.router.go()
         self.asked.clear()
 
@@ -305,7 +310,7 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(self.asked, [])             # no service yet
         router._on_status(True)
         self.assertEqual(self.asked, [("Shop", *END)])
-        router._on_route(ROUTE, "", "Shop", False)
+        answer(router, ROUTE, "", "Shop", False)
         self.assertTrue(router.active)
         self.assertEqual(self.said, ["Continuing to Shop. Drive north."])
         self.assertEqual(self.resumed, [])
@@ -326,7 +331,7 @@ class ResumeTest(unittest.TestCase):
     def test_a_preview_comes_back_as_a_preview(self):
         router = self.make(started=False, at=time.time() - 600)
         router._on_status(True)
-        router._on_route(ROUTE, "", "Shop", False)
+        answer(router, ROUTE, "", "Shop", False)
         self.assertTrue(router.previewing)
         self.assertEqual(self.said, [])
         self.assertEqual(self.resumed, [("Shop", *END)])
@@ -358,7 +363,7 @@ class ResumeTest(unittest.TestCase):
     def test_no_route_now_forgets_it(self):
         router = self.make()
         router._on_status(True)
-        router._on_route(None, "No path could be found", "Shop", False)
+        answer(router, None, "No path could be found", "Shop", False)
         self.assertFalse(router.active)
         self.assertEqual(router.destinationName, "")
         self.assertEqual(self.settings.values["route"], "")
@@ -379,7 +384,7 @@ class SavingTest(unittest.TestCase):
     def test_preview_then_go_then_end(self):
         self.router.routeTo("Shop", *END)
         self.assertEqual(self.saved(), {"name": "Shop", "lon": END[0], "lat": END[1], "started": False})
-        self.router._on_route(ROUTE, "", "Shop", False)
+        answer(self.router, ROUTE, "", "Shop", False)
         self.router.go()
         self.assertTrue(self.saved()["started"])
         self.router.stop()
@@ -387,7 +392,7 @@ class SavingTest(unittest.TestCase):
 
     def test_arriving_forgets_it(self):
         self.router.routeTo("Shop", *END)
-        self.router._on_route(ROUTE, "", "Shop", False)
+        answer(self.router, ROUTE, "", "Shop", False)
         self.router.go()
         self.gps.at(END[0] - 0.0001, END[1])
         self.router._on_fix()
@@ -396,7 +401,7 @@ class SavingTest(unittest.TestCase):
 
     def test_kept_fresh_while_driving(self):
         self.router.routeTo("Shop", *END)
-        self.router._on_route(ROUTE, "", "Shop", False)
+        answer(self.router, ROUTE, "", "Shop", False)
         self.router.go()
         self.settings.values["route"] = route_record("Shop", *END, True, time.time() - 3000)
         self.router._saved_at -= 61                  # a minute since the last save
@@ -475,6 +480,58 @@ class RequestTest(unittest.TestCase):
             self.ask(ZeroDivisionError("bug"))
         self.assertFalse(self.router.computing)
         self.assertEqual(self.router.error, "Couldn't get a route")
+
+
+class StaleAnswerTest(unittest.TestCase):
+    """An answer that isn't for the latest request is dropped: a cancelled
+    route stays cancelled and the last place picked wins."""
+
+    def setUp(self):
+        self.router = Router(FakeGps())
+        self.threads = mock.patch("backend.routing.threading", SimpleNamespace(
+            Thread=lambda **k: SimpleNamespace(start=lambda: None)))
+        self.threads.start()
+        self.addCleanup(self.threads.stop)
+
+    def test_cancel_while_computing(self):
+        self.router.routeTo("Shop", *END)
+        old = self.router._gen
+        self.assertTrue(self.router.computing)
+        self.router.stop()
+        self.assertFalse(self.router.computing)
+        answer(self.router, ROUTE, "", "Shop", False, gen=old)
+        self.assertFalse(self.router.previewing)
+        self.assertFalse(self.router.computing)
+        self.assertEqual(self.router.destinationName, "")
+
+    def test_a_new_place_while_computing(self):
+        self.router.routeTo("Shop", *END)
+        old = self.router._gen
+        self.router.routeTo("Cafe", *START)
+        answer(self.router, ROUTE, "", "Cafe", False)
+        self.assertEqual(self.router.destinationName, "Cafe")
+        # The first answer lands last: it changes nothing.
+        answer(self.router, ROUTE, "", "Shop", False, gen=old)
+        self.assertEqual(self.router.destinationName, "Cafe")
+
+    def test_a_stale_answer_leaves_a_newer_request_computing(self):
+        self.router.routeTo("Shop", *END)
+        old = self.router._gen
+        self.router.routeTo("Cafe", *START)
+        answer(self.router, None, "No route found", "Shop", False, gen=old)
+        self.assertTrue(self.router.computing)
+        self.assertEqual(self.router.error, "")
+
+    def test_a_stale_reroute_answer(self):
+        self.router.routeTo("Shop", *END)
+        answer(self.router, ROUTE, "", "Shop", False)
+        self.router.go()
+        self.router._request("Shop", *END, reroute=True)
+        old = self.router._gen
+        self.router.stop()
+        answer(self.router, ROUTE, "", "Shop", True, gen=old)
+        self.assertFalse(self.router.active)
+        self.assertFalse(self.router.previewing)
 
 
 if __name__ == "__main__":

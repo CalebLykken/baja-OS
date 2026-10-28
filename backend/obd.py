@@ -50,7 +50,8 @@ LOG_EVERY_S = 15.0                   # a one-line summary in the journal while l
 BARO_PID = 0x33                      # barometric pressure, kPa (not every engine computer has it)
 BARO_DEFAULT = 101.3                 # kPa at sea level, until measured
 BARO_RANGE = (50.0, 110.0)           # kPa: from 18,000 ft up to a stormy sea level
-BARO_SAVE_KPA = 1.0                  # keep a new baro only if it moved further than this
+BARO_STEADY = (3, 1.0)               # rounds at RPM 0, and kPa: how long and how still the manifold
+                                     # must hold before it's taken as the outside air
 
 
 def retry_wait(since):
@@ -270,21 +271,23 @@ class ObdReader(QObject):
               + ("; barometric pressure: yes" if found else "; barometric pressure: no"), flush=True)
         return found
 
-    def _note_baro(self, kpa):
-        """A measured outside air pressure: boost zeroes from it, and it's
-        kept for the next start once it has moved enough to matter (every
-        keeping is a write to the SD card)."""
+    def _note_baro(self, kpa, keep=True):
+        """A measured outside air pressure: boost zeroes from it, and if
+        `keep` it's kept for the next start when it changed (every keeping
+        is a write to the SD card). False if it can't be air pressure."""
         if not plausible_baro(kpa):
-            return
+            return False
         self._baro = float(kpa)
-        if self._saved is None or abs(kpa - self._saved) > BARO_SAVE_KPA:
-            self._saved = float(kpa)
-            safe_emit(self, "baro", float(kpa))
+        if keep and self._baro != self._saved:
+            self._saved = self._baro
+            safe_emit(self, "baro", self._baro)
+        return True
 
     def _poll(self, elm):
         """Reads the car until it stops answering."""
         self._start_baro(elm)
         misses, turn, logged, last = 0, 0, 0.0, {}
+        still, kept = [], False         # manifold readings in this stop; one kept yet?
         while misses < GIVE_UP_AFTER:
             started = time.monotonic()
             values = {}
@@ -305,10 +308,18 @@ class ObdReader(QObject):
                     continue
                 if key:
                     values[key] = value
-            # With the engine stopped (key on), the manifold sits at the
-            # outside air pressure: the zero for boost from here on.
+            # With the engine stopped (key on), the manifold settles to the
+            # outside air pressure: the zero for boost from here on. Only once
+            # it has held still, not on its way back up after a stall, and
+            # kept once a stop, so a reading that flickers by a kPa isn't a
+            # write every round.
+            rounds, kpa = BARO_STEADY
             if values.get("rpm") == 0 and "map" in values:
-                self._note_baro(values["map"])
+                still = (still + [values["map"]])[-rounds:]
+                if len(still) == rounds and max(still) - min(still) <= kpa:
+                    kept = self._note_baro(values["map"], keep=not kept) or kept
+            else:
+                still, kept = [], False
             if "map" in values:
                 values["boost"] = (values.pop("map") - self._baro) * 0.145038
             if values:

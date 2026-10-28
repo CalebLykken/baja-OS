@@ -144,17 +144,16 @@ class SavedBaroTest(unittest.TestCase):
         reader._note_baro(95)
         self.assertEqual((reader._baro, kept), (95.0, [95.0]))
 
-    def test_small_moves_arent_written_again(self):
+    def test_the_same_pressure_isnt_written_again(self):
         reader = ObdReader(baro="95")
         kept = []
         reader.baro.connect(kept.append)
         reader._note_baro(95)                 # the same as before
-        reader._note_baro(96)                 # a jitter
-        self.assertEqual((reader._baro, kept), (96.0, []))      # used, not kept
-        reader._note_baro(93)                 # it moved: a different elevation
-        self.assertEqual(kept, [93.0])
-        reader._note_baro(92)
-        self.assertEqual(kept, [93.0])
+        self.assertEqual(kept, [])
+        reader._note_baro(96)                 # a kPa matters: 0.15 psi of boost
+        self.assertEqual(kept, [96.0])
+        reader._note_baro(93, keep=False)     # used, not kept
+        self.assertEqual((reader._baro, kept), (93.0, [96.0]))
 
     def test_a_reading_that_isnt_air_pressure_changes_nothing(self):
         reader = ObdReader(baro="95")
@@ -220,11 +219,13 @@ class StartingBaroTest(unittest.TestCase):
 class BoostTest(unittest.TestCase):
     """The same idle reading however the dashboard started."""
 
-    KEY_ON_THEN_IDLE = {**IDLING, "010C": ["41 0C 00 00", "41 0C 0C 80"], "010B": ["41 0B 5A", "41 0B 28"]}
+    # Three rounds with the key on and the manifold at 90 kPa, then idling.
+    KEY_ON_THEN_IDLE = {**IDLING, "010C": ["41 0C 00 00"] * 3 + ["41 0C 0C 80"],
+                        "010B": ["41 0B 5A"] * 3 + ["41 0B 28"]}
     WANT = (40 - 90) * PSI                                # 40 kPa in the manifold, 90 outside
 
     def test_after_a_key_on_start(self):
-        readings, kept = poll(ObdReader(), CannedElm(self.KEY_ON_THEN_IDLE, rounds=3))
+        readings, kept = poll(ObdReader(), CannedElm(self.KEY_ON_THEN_IDLE, rounds=5))
         self.assertAlmostEqual(last_boost(readings), self.WANT, places=3)
         self.assertEqual(kept, [90.0])                    # the key-on measurement is kept
 
@@ -247,15 +248,44 @@ class BoostTest(unittest.TestCase):
 
     def test_a_key_on_later_corrects_a_saved_pressure_that_was_off(self):
         replies = {**self.KEY_ON_THEN_IDLE, **support(high=HIGH_WITHOUT)}
-        readings, kept = poll(ObdReader(baro="101"), CannedElm(replies, rounds=3))
+        readings, kept = poll(ObdReader(baro="101"), CannedElm(replies, rounds=5))
         self.assertAlmostEqual(last_boost(readings), self.WANT, places=3)
         self.assertEqual(kept, [90.0])
 
     def test_the_pressure_outlasts_a_key_off(self):
         reader = ObdReader()
-        poll(reader, CannedElm(self.KEY_ON_THEN_IDLE, rounds=3))
+        poll(reader, CannedElm(self.KEY_ON_THEN_IDLE, rounds=5))
         readings, _ = poll(reader, CannedElm({**IDLING, **support(high=HIGH_WITHOUT)}, rounds=3))
         self.assertAlmostEqual(last_boost(readings), self.WANT, places=3)
+
+
+class StoppedEngineTest(unittest.TestCase):
+    """The manifold is the outside air only once it has settled."""
+
+    def stopped(self, kpas, baro="95"):
+        """Rounds with the engine stopped and the manifold reading `kpas`,
+        then idling; returns the reader and what it kept."""
+        rpm = ["41 0C 00 00"] * len(kpas) + ["41 0C 0C 80"]
+        manifold = [f"41 0B {k:02X}" for k in kpas] + ["41 0B 28"]
+        replies = {**IDLING, **support(high=HIGH_WITHOUT), "010C": rpm, "010B": manifold}
+        reader = ObdReader(baro=baro)
+        _, kept = poll(reader, CannedElm(replies, rounds=len(kpas) + 2))
+        return reader, kept
+
+    def test_after_a_stall_it_waits_for_the_manifold_to_settle(self):
+        reader, kept = self.stopped([35, 60, 75, 88])     # filling back up, then the engine restarts
+        self.assertEqual((reader._baro, kept), (95.0, []))
+        reader, kept = self.stopped([35, 60, 75, 88, 92, 92, 92])
+        self.assertEqual((reader._baro, kept), (92.0, [92.0]))
+
+    def test_a_flickering_reading_is_kept_once_a_stop(self):
+        reader, kept = self.stopped([92, 93, 92, 93, 92, 93])
+        self.assertEqual(kept, [92.0])
+        self.assertEqual(reader._baro, 93.0)              # still used, round by round
+
+    def test_a_reading_that_isnt_steady_never_counts(self):
+        reader, kept = self.stopped([90, 92, 94, 96, 98])
+        self.assertEqual((reader._baro, kept), (95.0, []))
 
 
 if __name__ == "__main__":

@@ -71,11 +71,18 @@ Item {
 
 
     // ---- Home, Work, favourites and recent places, saved between runs --------------
+    function isPlace(p) {
+        return !!p && typeof p === "object" && typeof p.lon === "number" && typeof p.lat === "number"
+               && isFinite(p.lon) && isFinite(p.lat)
+    }
+    // A saved place, or a list of them (anything else in the file is dropped,
+    // so a hand-edited or damaged setting can't put a blank row on the page).
     function loadJson(key, fallback) {
         if (typeof settings === "undefined") return fallback
         try {
             var v = JSON.parse(String(settings.get(key, JSON.stringify(fallback))))
-            return Array.isArray(fallback) && !Array.isArray(v) ? fallback : v    // a list stays a list
+            if (Array.isArray(fallback)) return Array.isArray(v) ? v.filter(isPlace) : fallback    // a list stays a list
+            return isPlace(v) ? v : fallback
         } catch (e) { return fallback }
     }
     property var home: loadJson("homePlace", null)

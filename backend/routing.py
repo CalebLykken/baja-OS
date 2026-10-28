@@ -32,7 +32,8 @@ from backend import safe_emit
 ROUTER = "http://127.0.0.1:8002"
 OFF_ROUTE_M = 60          # this far from the line ...
 OFF_ROUTE_FIXES = 3       # ... for this many fixes in a row means a new route
-OFF_ROUTE_S = 3           # ... at least this long after the first of them (fixes can come fast)
+OFF_ROUTE_S = 1.5         # ... at least this long after the first: 1 Hz fixes still take 3, even a little
+                          # early; a faster receiver waits
 REROUTE_EVERY_S = 10
 HEADING_MS = 2            # faster than this the GPS heading counts, and a part of the route
 WRONG_WAY_DEG = 60        # ... running further off it than this counts as

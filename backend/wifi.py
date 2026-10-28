@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
@@ -79,7 +80,11 @@ def scan(rescan):
         f = split_terse(line)
         if len(f) < 4 or not f[1]:
             continue                                   # hidden networks
-        net = {"ssid": f[1], "signal": int(f[2] or 0), "secure": f[3] not in ("", "--"),
+        try:
+            signal = int(f[2] or 0)
+        except ValueError:
+            signal = 0       # a garbled number shouldn't lose the scan, or hide the active network
+        net = {"ssid": f[1], "signal": signal, "secure": f[3] not in ("", "--"),
                "active": f[0] == "*"}
         old = best.get(net["ssid"])
         if not old or net["active"] or (not old["active"] and net["signal"] > old["signal"]):
@@ -107,6 +112,7 @@ class Wifi(QObject):
         self._wifi_since = None
         self._last_tether_try = 0
         self._hotspot_done = set()   # hotspot connections already given the fixed address
+        self._errors = {}            # what each worker last died of, while it keeps happening
         self._scanned.connect(self._on_scanned)
         self._finished.connect(self._on_finished)
         self._scan_timer = QTimer(self, interval=SCAN_EVERY_MS, timeout=self.refresh)
@@ -126,28 +132,52 @@ class Wifi(QObject):
         self._scanning = True
 
         def work():
-            control = can_control()
-            nets = scan(rescan=control)
-            safe_emit(self, "_scanned", nets, saved_connections(), control)
+            result = (None, None, False)     # stays this if the scan crashes: _on_scanned keeps its list
+            try:
+                control = can_control()
+                nets = scan(rescan=control)
+                result = (nets, saved_connections(), control)
+                self._logged("scan")
+            except Exception as e:
+                self._logged("scan", e)
+            finally:
+                safe_emit(self, "_scanned", *result)    # always, or _scanning would never clear
         threading.Thread(target=work, daemon=True).start()
+
+    def _logged(self, what, error=None):
+        """Log a worker that crashed (once, while the same error repeats), or
+        that it's working again."""
+        err = "" if error is None else f"{type(error).__name__}: {error}"
+        if err and err != self._errors.get(what):
+            trace = "".join(traceback.format_exception(error)).rstrip()
+            print(f"Wi-Fi: {what} failed: {err}\n{trace}", flush=True)
+        elif not err and self._errors.get(what):
+            print(f"Wi-Fi: {what} working again", flush=True)
+        self._errors[what] = err
 
     def _ensure_hotspot_address(self):
         """On an iPhone hotspot, give the connection a fixed second address
         (172.20.10.14) so the phone's Shortcut always knows where the Pi is.
         DHCP still runs alongside it for the route and DNS."""
-        _, out, _ = nmcli("-t", "-f", "IP4.GATEWAY,GENERAL.CONNECTION", "device", "show", "wlan0", timeout=4)
-        fields = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
-        conn = fields.get("GENERAL.CONNECTION", "")
-        if fields.get("IP4.GATEWAY") != IPHONE_GATEWAY or not conn or conn in self._hotspot_done:
-            return
-        self._hotspot_done.add(conn)
-        _, addrs, _ = nmcli("-g", "ipv4.addresses", "connection", "show", "id", conn, timeout=4)
-        if HOTSPOT_ADDRESS not in addrs:
-            nmcli("connection", "modify", "id", conn, "+ipv4.addresses", HOTSPOT_ADDRESS)
-            nmcli("device", "reapply", "wlan0", timeout=15)
+        try:
+            _, out, _ = nmcli("-t", "-f", "IP4.GATEWAY,GENERAL.CONNECTION", "device", "show", "wlan0", timeout=4)
+            fields = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
+            conn = fields.get("GENERAL.CONNECTION", "")
+            if fields.get("IP4.GATEWAY") != IPHONE_GATEWAY or not conn or conn in self._hotspot_done:
+                return
+            self._hotspot_done.add(conn)
+            _, addrs, _ = nmcli("-g", "ipv4.addresses", "connection", "show", "id", conn, timeout=4)
+            if HOTSPOT_ADDRESS not in addrs:
+                nmcli("connection", "modify", "id", conn, "+ipv4.addresses", HOTSPOT_ADDRESS)
+                nmcli("device", "reapply", "wlan0", timeout=15)
+            self._logged("hotspot address")
+        except Exception as e:
+            self._logged("hotspot address", e)
 
     def _on_scanned(self, nets, saved, control):
         self._scanning = False
+        if nets is None:
+            return                   # the scan crashed: keep the last list
         if control and any(n["active"] for n in nets):
             threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
         saved_ssids = {c["ssid"] for c in saved if c["ssid"]}
@@ -166,15 +196,21 @@ class Wifi(QObject):
             self._scan_timer.stop()
 
     # ---- joining and forgetting ----------------------------------------------
-    def _run(self, ssid, fn):
+    def _run(self, ssid, fn, failed):
         if self._busy:
             return
         self._busy, self._message = ssid, ""
         self.changed.emit()
 
         def work():
-            msg, ok = fn()
-            safe_emit(self, "_finished", msg, ok)
+            msg, ok = failed, False          # what the page says if fn() crashes
+            try:
+                msg, ok = fn()
+                self._logged("join or forget")
+            except Exception as e:
+                self._logged("join or forget", e)
+            finally:
+                safe_emit(self, "_finished", msg, ok)    # always, or busy would never clear
         threading.Thread(target=work, daemon=True).start()
 
     def _on_finished(self, message, ok):
@@ -202,7 +238,7 @@ class Wifi(QObject):
             nmcli("connection", "modify", "id", ssid,
                   "connection.autoconnect-retries", "0", "802-11-wireless.powersave", "2")
             return f"Connected to {ssid}", True
-        self._run(ssid, work)
+        self._run(ssid, work, f"Couldn't join {ssid}")
 
     @pyqtSlot(str)
     def forget(self, ssid):
@@ -212,7 +248,7 @@ class Wifi(QObject):
             for c in conns:
                 nmcli("connection", "delete", "uuid", c["uuid"])
             return f"Forgot {ssid}", True
-        self._run(ssid, work)
+        self._run(ssid, work, f"Couldn't forget {ssid}")
 
     @staticmethod
     def _why(err, ssid):

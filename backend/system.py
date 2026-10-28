@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import threading
+import traceback
 from glob import glob
 from pathlib import Path
 
@@ -133,6 +134,7 @@ class SystemInfo(QObject):
                    "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False}
         self._version = version_text()
         self._busy = False
+        self._read_error = ""      # the error the last reading died of, while it keeps happening
         self._power_error = ""
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
@@ -148,19 +150,37 @@ class SystemInfo(QObject):
         self._busy = True
 
         def work():
-            used, total = memory_mb()
-            disk = shutil.disk_usage("/")
-            safe_emit(self, "_read_done", {
-                "temp": cpu_temp(), "fan": fan_rpm(), "power": power_state(),
-                "memUsed": used, "memTotal": total,
-                "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,
-                "uptime": uptime_text(), "canPower": can_power(),
-            })
+            v = {}       # stays empty if a reading crashes, and _apply keeps the old values
+            try:
+                used, total = memory_mb()
+                disk = shutil.disk_usage("/")
+                v = {
+                    "temp": cpu_temp(), "fan": fan_rpm(), "power": power_state(),
+                    "memUsed": used, "memTotal": total,
+                    "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,
+                    "uptime": uptime_text(), "canPower": can_power(),
+                }
+                self._logged()
+            except Exception as e:
+                self._logged(e)
+            finally:
+                safe_emit(self, "_read_done", v)      # always, or _busy would never clear
         threading.Thread(target=work, daemon=True).start()
+
+    def _logged(self, error=None):
+        """Log a reading that crashed (once, while the same error repeats), or
+        that it's working again."""
+        err = "" if error is None else f"{type(error).__name__}: {error}"
+        if err and err != self._read_error:
+            trace = "".join(traceback.format_exception(error)).rstrip()
+            print(f"System: status check failed: {err}\n{trace}", flush=True)
+        elif not err and self._read_error:
+            print("System: status check working again", flush=True)
+        self._read_error = err
 
     def _apply(self, v):
         self._busy = False
-        if v != self._v:
+        if v and v != self._v:
             self._v = v
             self.changed.emit()
 

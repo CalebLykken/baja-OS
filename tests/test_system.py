@@ -1,14 +1,20 @@
-"""Off-Pi tests for asking systemd to reboot or shut down (backend/system.py),
-with systemctl faked.
+"""Off-Pi tests for backend/system.py: asking systemd to reboot or shut down
+(systemctl faked), and that a crashing status check is logged once, frees the
+busy flag, keeps the old readings, and lets the next check run.
 
     python3 -m unittest tests.test_system
 """
 
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
-from backend.system import power
+from PyQt6.QtCore import QCoreApplication
+
+from backend.system import SystemInfo, power
+
+app = QCoreApplication.instance() or QCoreApplication([])
 
 
 def ran(code, out="", err=""):
@@ -37,6 +43,69 @@ class PowerTest(unittest.TestCase):
     def test_no_answer(self):
         with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("systemctl", 10)):
             self.assertIn("didn't answer", power("reboot"))
+
+
+class InlineThread:
+    """Stands in for threading.Thread: start() runs the work on the spot."""
+
+    def __init__(self, target=None, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+def logged(printed):
+    return [c.args[0] for c in printed.call_args_list if c.args and "System" in str(c.args[0])]
+
+
+class StatusCheckTest(unittest.TestCase):
+    def setUp(self):
+        with mock.patch("backend.system.version_text", return_value=""):
+            self.system = SystemInfo()
+        mock.patch("backend.system.threading", SimpleNamespace(Thread=InlineThread)).start()
+        self.printed = mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def check(self, used=1000, error=None):
+        """One check, with the memory reading faked to give `used` or raise."""
+        memory = mock.patch("backend.system.memory_mb", side_effect=error) if error else \
+            mock.patch("backend.system.memory_mb", return_value=(used, 4000))
+        with memory, mock.patch("backend.system.cpu_temp", return_value=50.0), \
+                mock.patch("backend.system.fan_rpm", return_value=None), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.uptime_text", return_value="5 min"), \
+                mock.patch("backend.system.can_power", return_value=False):
+            self.system._check()
+
+    def test_two_crashing_checks_log_once_and_keep_the_readings(self):
+        self.check(used=1000)
+        self.assertEqual((self.system.memUsed, self.system.temp), (1000, 50.0))
+        for _ in range(2):
+            self.check(error=TypeError("surprise"))
+            self.assertFalse(self.system._busy)           # the next check can run
+            self.assertEqual((self.system.memUsed, self.system.temp), (1000, 50.0))
+        lines = logged(self.printed)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("TypeError: surprise", lines[0])
+        self.assertIn("Traceback", lines[0])
+
+    def test_the_next_check_after_a_crash_applies_good_data(self):
+        self.check(used=1000)
+        self.check(error=TypeError("surprise"))
+        self.check(used=1200)
+        self.assertEqual(self.system.memUsed, 1200)
+        self.assertFalse(self.system._busy)
+        lines = logged(self.printed)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("working again", lines[1])
+
+    def test_a_failing_disk_reading_is_caught_too(self):
+        with mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.shutil.disk_usage", side_effect=OSError("gone")):
+            self.system._check()
+        self.assertFalse(self.system._busy)
+        self.assertEqual(len(logged(self.printed)), 1)
 
 
 if __name__ == "__main__":

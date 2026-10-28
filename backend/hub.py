@@ -74,7 +74,8 @@ def _rounded_card(img, out, size=600, radius_frac=0.014):
     p.setClipPath(clip)
     p.drawImage(0, 0, sq)
     p.end()
-    card.save(str(out))
+    if not card.save(str(out)):
+        raise OSError(f"couldn't save the card to {out}")     # not a blank file cached for ever
 
 
 def art_card(url):
@@ -83,11 +84,14 @@ def art_card(url):
     img = QImage(path) if path else QImage()
     if img.isNull():
         return ""
-    try:
-        st = os.stat(path)
-        key = f"{path}|{st.st_mtime_ns}|{st.st_size}"      # a cover.jpg that changed gets a new card
-    except OSError:
-        key = path
+    if os.path.dirname(path) == str(artcache.cache_dir()):
+        key = os.path.basename(path)       # already a content/URL hash; its mtime changes on every use
+    else:
+        try:
+            st = os.stat(path)
+            key = f"{path}|{st.st_mtime_ns}|{st.st_size}"      # a cover.jpg that changed gets a new card
+        except OSError:
+            key = path
     out, hit = artcache.lookup(artcache.digest(key) + "-card.png")
     if not hit:
         with artcache.writing(out) as tmp:

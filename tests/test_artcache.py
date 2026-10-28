@@ -152,6 +152,23 @@ class ArtCacheTest(unittest.TestCase):
         self.assertEqual(len(self.names()), 1)
         self.assertEqual(hub.art_card("file:///no/such.png"), "")
 
+    def test_a_cached_cover_gets_one_card_however_often_it_is_shown(self):
+        src = artcache.store("abc.img", Path(png(self.tmp / "c.png")).read_bytes())
+        url = QUrl.fromLocalFile(str(src)).toString()
+        first = hub.art_card(url)
+        os.utime(src, (5000, 5000))                          # the cache touches it on every use
+        self.assertEqual(hub.art_card(url), first)
+        self.assertEqual(len(self.names()), 2)               # the cover and its one card
+
+    def test_a_card_that_cannot_be_saved_is_not_cached(self):
+        src = png(self.tmp / "cover.png")
+        url = QUrl.fromLocalFile(str(src)).toString()
+        with mock.patch.object(QImage, "save", return_value=False):
+            with self.assertRaises(OSError):
+                hub.art_card(url)
+        self.assertEqual(self.names(), [])                   # no empty card left to be reused
+        self.assertTrue(hub.art_card(url))
+
     def test_a_changed_cover_file_gets_a_new_card(self):
         src = png(self.tmp / "cover.png", "red")
         url = QUrl.fromLocalFile(str(src)).toString()

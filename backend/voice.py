@@ -5,7 +5,9 @@ Piper runs in its own process (voice_worker.py, under the Piper install's
 Python from deploy/audio/install-voice.sh), started on first use and kept
 loaded. Playback is `pw-play`; the other audio streams are turned down
 with `wpctl` for the length of the line and put back afterwards, so
-Spotify's own volume (and the phone's slider) never moves.
+Spotify's own volume (and the phone's slider) never moves. The volumes to
+go back to are written to a file first, so a dashboard that dies mid-line
+puts them back on its next start instead of leaving the music at 30%.
 
 A Piper that stops answering, or exits, is killed and started again for the
 next line (the line it was stuck on is dropped), so spoken directions can't
@@ -37,6 +39,7 @@ DUCK_TO = 0.3           # other audio drops to this share of its volume while sp
 STALE_S = 8             # a line not spoken within this long is dropped
 READY_S = 30            # Piper has this long to load the voice (~2 s on the Pi)
 REPLY_S = 15            # and this long to turn a line into speech (~0.5 s)
+DUCK_TOL = 0.02         # wpctl prints two decimals; a stream within this of the duck level is still ducked
 
 
 def _output_streams():
@@ -70,6 +73,94 @@ def _set_volumes(volumes):
                            capture_output=True, timeout=2)
         except (OSError, subprocess.SubprocessError):
             pass
+
+
+def _volume(node):
+    """The stream's volume now, None if it's gone (or wpctl won't say)."""
+    try:
+        r = subprocess.run(["wpctl", "get-volume", str(node)], capture_output=True,
+                           text=True, timeout=2)
+        m = re.search(r"Volume: ([\d.]+)", r.stdout or "")
+        return float(m[1]) if r.returncode == 0 and m else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _state_file():
+    base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
+    return Path(base).expanduser() / "baja-os" / "duck.json"
+
+
+class Ducker:
+    """Turns the other streams down and puts back exactly what it took.
+
+    The volume each stream had before is saved (in memory and in a file)
+    before anything is turned down. A stream is put back only if it is still
+    at the level we set: one that vanished is skipped, and one somebody moved
+    meanwhile (the phone's slider, say) keeps its new volume. Ducks nest: a
+    second line while ducked saves only the streams that weren't ducked yet,
+    never the ducked level as a "before", and the restore waits for the last."""
+
+    def __init__(self, path=None):
+        self._path = path or _state_file()
+        self._lock = threading.Lock()
+        self._saved = {}            # node -> (volume before, volume we set)
+        self._depth = 0
+
+    def _write(self):
+        try:
+            if not self._saved:
+                self._path.unlink(missing_ok=True)
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_name(self._path.name + ".tmp")
+            tmp.write_text(json.dumps({str(n): list(v) for n, v in self._saved.items()}))
+            os.replace(tmp, self._path)
+        except OSError as e:
+            print(f"Voice: couldn't update {self._path} ({e!r})", flush=True)
+
+    def duck(self):
+        """Turn down every stream not already ducked."""
+        with self._lock:
+            self._depth += 1
+            new = {n: v for n, v in _output_streams().items() if n not in self._saved}
+            for n, v in new.items():
+                self._saved[n] = (v, v * DUCK_TO)
+            self._write()               # before any volume moves
+            _set_volumes({n: v * DUCK_TO for n, v in new.items()})
+
+    def release(self):
+        with self._lock:
+            self._depth = max(0, self._depth - 1)
+            if self._depth == 0:
+                self._put_back(self._saved)
+                self._saved = {}
+                self._write()
+
+    def recover(self):
+        """On start: put back what a dashboard that died while ducked left.
+        Only streams still sitting at the level we set are touched, so nothing
+        the user changed since is overwritten. Streams that came up after the
+        crash aren't in the file and are left alone: guessing "everything at
+        30%" would also move streams someone set to 30% on purpose."""
+        try:
+            data = json.loads(self._path.read_text())
+            left = {int(n): (float(v[0]), float(v[1])) for n, v in data.items()}
+        except (OSError, ValueError, TypeError, IndexError, AttributeError):
+            left = {}
+        with self._lock:
+            if left and not self._saved:
+                self._put_back(left)
+            self._write()
+
+    @staticmethod
+    def _put_back(saved):
+        back = {}
+        for n, (before, ducked) in saved.items():
+            now = _volume(n)
+            if now is not None and abs(now - ducked) <= DUCK_TOL:
+                back[n] = before
+        _set_volumes(back)
 
 
 class _Piper:
@@ -141,6 +232,7 @@ class Voice(QObject):
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
         self._piper = None
+        self._ducker = Ducker()
         self._tmp = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
         if self._available:
             threading.Thread(target=self._run, name="voice", daemon=True).start()
@@ -185,6 +277,10 @@ class Voice(QObject):
 
     def _run(self):
         n = 0
+        try:
+            self._ducker.recover()
+        except Exception as e:
+            print(f"Voice: couldn't put back volumes from a last run ({e!r})", flush=True)
         while True:
             text, queued_at = self._jobs.get()
             if time.monotonic() - queued_at > STALE_S:
@@ -194,14 +290,13 @@ class Voice(QObject):
                 out = str(self._tmp / f"baja-voice-{n % 4}.wav")
                 if not self._synthesize(text, out):
                     continue
-                others = _output_streams()
                 try:
-                    _set_volumes({k: v * DUCK_TO for k, v in others.items()})
+                    self._ducker.duck()
                     subprocess.run(["pw-play", "--media-role", "Navigation",
                                     "--properties", '{ node.name = "%s" }' % NODE_NAME, out],
                                    capture_output=True, timeout=30)
                 finally:
-                    _set_volumes(others)
+                    self._ducker.release()
             except Exception as e:                  # never end this thread
                 print(f"Voice: couldn't speak a line ({e!r}); on to the next", flush=True)
 

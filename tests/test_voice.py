@@ -88,10 +88,18 @@ class VoiceTest(unittest.TestCase):
         (self.dir / "model.onnx").write_text("")
         self.spoken = queue.Queue()         # "<pid>:<text>" of each WAV pw-play was handed
         self.log = io.StringIO()
+        self.mixer = {}                     # node -> volume, what wpctl reports and sets
 
         def fake_run(argv, **kwargs):
             out = ""
-            if argv[0] == "pw-play":
+            if argv[:2] == ["wpctl", "get-volume"]:
+                node = int(argv[2])
+                if node not in self.mixer:
+                    return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no such node")
+                out = f"Volume: {self.mixer[node]:.2f}\n"
+            elif argv[:2] == ["wpctl", "set-volume"]:
+                self.mixer[int(argv[2])] = float(argv[3])
+            elif argv[0] == "pw-play":
                 self.spoken.put(Path(argv[-1]).read_text())
             elif argv[0] == "pw-dump":
                 out = "[]"
@@ -105,7 +113,8 @@ class VoiceTest(unittest.TestCase):
                   mock.patch.object(voice.shutil, "which", return_value="/usr/bin/pw-play"),
                   mock.patch.object(voice.subprocess, "run", side_effect=fake_run),
                   mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.dir),
-                                               "FAKE_DIR": str(self.dir)}),
+                                               "FAKE_DIR": str(self.dir),
+                                               "XDG_STATE_HOME": str(self.dir / "state")}),
                   contextlib.redirect_stdout(self.log)):
             p.__enter__()
             self.addCleanup(p.__exit__, None, None, None)
@@ -318,10 +327,11 @@ class VoiceTest(unittest.TestCase):
         # Ducked, and put back even though pw-play raised.
         self.assertEqual(volumes[:2], [["7", "0.300"], ["7", "1.000"]])
 
-    def duck_and_play(self, fail_on):
+    def duck_and_play(self, fail_on, expect=4):
         """Speak "turn left" over streams 7 and 8. The wpctl set-volume calls
-        are numbered from 0 (duck 7, duck 8, put back 7, put back 8); those in
-        `fail_on` time out. Returns what the ones that went through set."""
+        are numbered from 0 (duck 7, duck 8, put back 7, put back 8; a stream whose duck failed
+        is not put back); those in `fail_on` time out. Returns what the ones that went through set."""
+        self.mixer.update({7: 1.0, 8: 0.8})
         v = self.start("ok")
         real = voice.subprocess.run
         calls = []                                       # (node, volume) in order, failures too
@@ -340,24 +350,138 @@ class VoiceTest(unittest.TestCase):
             v.say("turn left")
             self.assertEqual(self.next_spoken()[1], "turn left")
             deadline = time.monotonic() + 5
-            while len(calls) < 4 and time.monotonic() < deadline:
+            while len(calls) < expect and time.monotonic() < deadline:
                 time.sleep(0.01)
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), expect)
         return done
 
     def test_one_stream_that_will_not_duck_does_not_leave_the_others(self):
         # Stream 8's duck times out: 7 is still ducked, and both are put back.
-        done = self.duck_and_play({1})
-        self.assertEqual(done, [("7", "0.300"), ("7", "1.000"), ("8", "0.800")])
+        done = self.duck_and_play({1}, 3)
+        self.assertEqual(done, [("7", "0.300"), ("7", "1.000")])
         self.assertEqual(self.log.getvalue(), "")
 
     def test_the_first_stream_failing_does_not_skip_the_rest(self):
-        done = self.duck_and_play({0, 2})
+        done = self.duck_and_play({0}, 3)
         self.assertEqual(done, [("8", "0.240"), ("8", "0.800")])
 
     def test_one_stream_that_will_not_be_put_back_does_not_leave_the_others(self):
         done = self.duck_and_play({2})
         self.assertEqual(done, [("7", "0.300"), ("8", "0.240"), ("8", "0.800")])
+
+
+class FakeMixer:
+    """pw-dump and wpctl over a dict of node -> volume, for the Ducker."""
+
+    def __init__(self, volumes):
+        self.volumes = dict(volumes)
+        self.sets = []
+
+    def streams(self):
+        return dict(self.volumes)
+
+    def run(self, argv, **kwargs):
+        if argv[:2] == ["wpctl", "get-volume"]:
+            node = int(argv[2])
+            if node not in self.volumes:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=f"Volume: {self.volumes[node]:.2f}\n", stderr="")
+        if argv[:2] == ["wpctl", "set-volume"]:
+            node = int(argv[2])
+            self.sets.append((node, float(argv[3])))
+            if node in self.volumes:
+                self.volumes[node] = float(argv[3])
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+class DuckerTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "state" / "duck.json"
+        self.mixer = FakeMixer({7: 1.0, 8: 0.8})
+        for p in (mock.patch.object(voice.subprocess, "run", side_effect=self.mixer.run),
+                  mock.patch.object(voice, "_output_streams", side_effect=self.mixer.streams)):
+            p.__enter__()
+            self.addCleanup(p.__exit__, None, None, None)
+
+    def ducker(self):
+        return voice.Ducker(self.path)
+
+    def test_streams_go_back_to_exactly_what_they_were(self):
+        d = self.ducker()
+        d.duck()
+        self.assertEqual(self.mixer.volumes, {7: 0.3, 8: 0.24})
+        self.assertTrue(self.path.exists())             # saved before the volumes moved
+        d.release()
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.8})
+        self.assertFalse(self.path.exists())
+
+    def test_a_second_line_while_ducked_does_not_save_the_ducked_level(self):
+        d = self.ducker()
+        d.duck()
+        d.duck()
+        d.release()
+        self.assertEqual(self.mixer.volumes, {7: 0.3, 8: 0.24})     # still ducked: one line to go
+        d.release()
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.8})
+
+    def test_a_stream_that_appears_while_ducked_is_ducked_and_restored(self):
+        d = self.ducker()
+        d.duck()
+        self.mixer.volumes[9] = 0.5
+        d.duck()
+        self.assertEqual(self.mixer.volumes[9], 0.15)
+        self.assertEqual(self.mixer.volumes[7], 0.3)                 # not ducked twice
+        d.release()
+        d.release()
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.8, 9: 0.5})
+
+    def test_a_stream_that_vanishes_while_ducked_is_skipped(self):
+        d = self.ducker()
+        d.duck()
+        del self.mixer.volumes[7]
+        d.release()
+        self.assertEqual(self.mixer.volumes, {8: 0.8})
+        self.assertNotIn(7, [n for n, _ in self.mixer.sets[2:]])     # nothing set on the dead node
+
+    def test_a_stream_moved_during_the_line_keeps_its_new_volume(self):
+        d = self.ducker()
+        d.duck()
+        self.mixer.volumes[7] = 0.6                                  # the phone's slider
+        d.release()
+        self.assertEqual(self.mixer.volumes, {7: 0.6, 8: 0.8})
+
+    def test_a_restart_while_ducked_puts_the_streams_back(self):
+        self.ducker().duck()                                        # ...and the dashboard dies here
+        self.assertEqual(self.mixer.volumes, {7: 0.3, 8: 0.24})
+        self.ducker().recover()                                     # the next start
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.8})
+        self.assertFalse(self.path.exists())
+
+    def test_recovery_leaves_streams_that_were_changed_or_are_gone(self):
+        self.ducker().duck()
+        self.mixer.volumes[7] = 0.9                                 # moved since
+        del self.mixer.volumes[8]                                   # closed since
+        self.mixer.volumes[10] = 0.3                                # someone's own 30%, not in the file
+        self.ducker().recover()
+        self.assertEqual(self.mixer.volumes, {7: 0.9, 10: 0.3})
+
+    def test_recovery_with_no_file_or_a_broken_one_does_nothing(self):
+        self.ducker().recover()
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text("{not json")
+        self.ducker().recover()
+        self.assertEqual(self.mixer.sets, [])
+        self.assertFalse(self.path.exists())
+
+    def test_a_file_that_cannot_be_written_does_not_stop_the_duck(self):
+        self.path.parent.write_text("a file where the folder should be")
+        d = self.ducker()
+        with contextlib.redirect_stdout(io.StringIO()):
+            d.duck()
+            d.release()
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.8})
 
 
 if __name__ == "__main__":

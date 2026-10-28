@@ -118,8 +118,10 @@ cd baja-OS
 After the reboot the dashboard starts by itself. To run it by hand instead,
 stop the service and run `./run.sh` from the console (not over a desktop
 session). Over SSH the app still draws on the HDMI screen; press Ctrl-C in the
-SSH session to quit. Your user needs to be in the `video`, `render` and `input`
-groups for the display and touch to work.
+SSH session to quit. Setup also puts your user in the groups the hardware
+needs: `video`, `render` and `input` (screen and touch), `dialout` (OBD adapter
+and GPS), `gpio` (knob), `i2c` (brightness) and `bluetooth`. They apply from
+the next login, so the reboot covers it.
 
 `run.sh` waits up to 30 s for a connected screen, then starts on the GPU
 (EGLFS). If there's no screen, it falls back to the plain framebuffer
@@ -400,10 +402,11 @@ python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
 ./deploy/quiet-boot-undo.sh   # puts the original boot screen and console back
 ```
 
-`setup-pi.sh` installs the packages, turns on the sound board, makes Wi-Fi
-keep retrying at boot (power saving off), hides the rainbow screen, kernel
-text, logos and console login, installs the Baja OS boot screen, sets up the
-the polkit rule that lets the dashboard shut the Pi down, and installs
+`setup-pi.sh` installs the packages, adds your user to the groups the hardware
+needs, turns on the sound board, makes Wi-Fi keep retrying at boot (power
+saving off), hides the rainbow screen, kernel text, logos and console login,
+installs the Baja OS boot screen, sets up the polkit rule that lets the
+dashboard shut the Pi down, and installs
 `baja-os.service`, which takes the display straight from the boot screen so
 the truck stays up until the dashboard appears. It also lets your user
 restart that one service without a password:

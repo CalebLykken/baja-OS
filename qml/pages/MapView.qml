@@ -100,11 +100,16 @@ WebEngineView {
         }
     }
 
-    // The truck's position, about once a second.
+    // The truck's position, once per new fix (not on satellite or receiver
+    // status updates, which would reset the map's fix age and glide).
     Connections {
         target: typeof gps !== "undefined" ? gps : null
-        function onChanged() { web.sendPosition() }
+        function onFixChanged() { web.sendPosition() }
     }
+    // A fix going stale brings no new fix, so send the position once more:
+    // its speed is 0 now, which stops the map's glide.
+    readonly property bool gpsStale: typeof gps !== "undefined" && gps !== null && gps.stale
+    onGpsStaleChanged: if (gpsStale) sendPosition()
 
     // New map data (Settings > Map > Update): load it.
     Connections {

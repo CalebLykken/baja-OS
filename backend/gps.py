@@ -194,7 +194,13 @@ class Position:
 
 
 class Gps(QObject):
+    """`changed` fires on any update (every property notifies on it): a new
+    position, satellite counts, the receiver connecting or going, the demo
+    drive giving way, the fix going stale. `fixChanged` fires once per new
+    position only (a real report, or a step of the demo drive, just after
+    `changed`), for listeners that count or record fixes."""
     changed = pyqtSignal()
+    fixChanged = pyqtSignal()
     _report = pyqtSignal(dict)
 
     def __init__(self, vehicle=None, demo=False, parent=None):
@@ -354,6 +360,7 @@ class Gps(QObject):
             lon, lat, heading = self._route.at(self._travelled)
         self._pos.simulated({"lat": lat, "lon": lon, "speed": speed, "heading": heading, "source": "demo"})
         self.changed.emit()
+        self.fixChanged.emit()
 
     def _apply(self, report):
         if "gpsd" in report:
@@ -376,6 +383,7 @@ class Gps(QObject):
             return
         self._pos.real(report, time.monotonic())
         self.changed.emit()
+        self.fixChanged.emit()
 
     def followPath(self, points):
         """In demo mode, drive this route (from its start) instead of the loop."""

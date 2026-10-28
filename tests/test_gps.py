@@ -1,11 +1,12 @@
 """Off-Pi tests for which position the map shows (backend/gps.py): the
 receiver's, its last one held when it loses the sky, or the demo drive,
-with a clock that's just a number.
+with a clock that's just a number; and which updates count as a new fix.
 
     python3 -m unittest tests.test_gps
 """
 
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 from PyQt6.QtCore import QCoreApplication
@@ -100,6 +101,102 @@ class PositionTest(unittest.TestCase):
         self.assertEqual(p.fix["heading"], 270.0)
         p.real(real(heading=180.0), 3)
         self.assertEqual(p.fix["heading"], 180.0)
+
+
+class FakeVehicle:
+    def __init__(self, live=False, speed=30.0):
+        self.live, self.speed = live, speed
+
+    @property
+    def simulated(self):            # as VehicleData on a Mac: simulated while the car is quiet
+        return not self.live
+
+
+class FixSignalTest(unittest.TestCase):
+    """`fixChanged` is a new position and nothing else; `changed` is anything."""
+
+    def setUp(self):
+        self.now = 100.0
+        clock = mock.patch("backend.gps.time.monotonic", lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.events = []
+
+    def gps(self, demo=False, vehicle=None):
+        g = Gps(vehicle, demo=demo)
+        g.changed.connect(lambda: self.events.append("changed"))
+        g.fixChanged.connect(lambda: self.events.append("fix"))
+        return g
+
+    def test_each_real_report_is_one_fix(self):
+        g = self.gps()
+        g._apply(real())
+        self.assertEqual(self.events, ["changed", "fix"])     # changed first
+        self.events.clear()
+        g._apply(real(lat=47.001))
+        g._apply(real(lat=47.002))
+        self.assertEqual(self.events.count("fix"), 2)
+        self.assertEqual(self.events.count("changed"), 2)
+
+    def test_the_same_position_again_is_still_a_new_fix(self):
+        g = self.gps()
+        g._apply(real())
+        g._apply(real())                                      # stopped at a light
+        self.assertEqual(self.events.count("fix"), 2)
+
+    def test_satellite_updates_are_not_fixes(self):
+        g = self.gps()
+        g._apply(real())
+        self.events.clear()
+        g._apply({"sats": 7, "view": 11})
+        self.assertEqual(self.events, ["changed"])
+        g._apply({"sats": 7, "view": 11})                     # nothing new at all
+        g._apply({"sats": 8, "view": 11})
+        self.assertEqual(self.events, ["changed", "changed"])
+
+    def test_the_receiver_coming_and_going_is_not_a_fix(self):
+        g = self.gps()
+        g._apply({"gpsd": True})
+        g._apply({"receiver": True})                          # talking, no position yet
+        g._apply({"gpsd": False})
+        self.assertEqual(self.events, ["changed", "changed"])
+
+    def test_going_stale_is_not_a_fix(self):
+        g = self.gps()
+        g._apply(real())
+        self.events.clear()
+        self.now += STALE_S + 1                               # into a tunnel
+        g._tick()
+        self.assertTrue(g.stale)
+        self.assertEqual(self.events, ["changed"])
+
+    def test_each_demo_step_is_one_fix(self):
+        g = self.gps(demo=True)
+        g._route = DemoRoute()
+        g._demo_step()
+        self.assertEqual(self.events, ["changed", "fix"])
+        self.assertEqual(g.source, "demo")
+        g._demo_step()
+        self.assertEqual(self.events.count("fix"), 2)
+
+    def test_the_demo_giving_way_is_not_a_fix(self):
+        g = self.gps(demo=True)
+        g._route = DemoRoute()
+        g._demo_step()
+        self.events.clear()
+        g._apply({"receiver": True})                          # a receiver showed up
+        self.assertFalse(g.hasFix)
+        self.assertEqual(self.events, ["changed"])
+        g._tick()                                             # and no more demo steps
+        self.assertEqual(self.events, ["changed"])
+
+    def test_the_car_answering_stops_the_demo_without_a_fix(self):
+        g = self.gps(demo=True, vehicle=FakeVehicle(live=True))
+        g._route = DemoRoute()
+        g._pos.simulated({"lat": 47.6, "lon": -122.3, "speed": 13.0, "heading": 0.0, "source": "demo"})
+        g._tick()
+        self.assertFalse(g.hasFix)
+        self.assertEqual(self.events, ["changed"])
 
 
 if __name__ == "__main__":

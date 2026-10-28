@@ -35,7 +35,9 @@ def wifi_name():
     if not shutil.which("nmcli"):
         return ""
     try:
-        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+        # --rescan no: a bare `dev wifi` scans whenever its list is over 30 s old,
+        # which pulls the radio off the hotspot's channel every few seconds.
+        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi", "list", "--rescan", "no"],
                              capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return ""

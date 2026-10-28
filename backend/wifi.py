@@ -8,6 +8,11 @@ Backup: when there's been no Wi-Fi for a while, it brings up Bluetooth
 tethering to the paired phone (NetworkManager's "bluetooth" connection for
 it), and drops it again once Wi-Fi is back, to spare the phone's battery.
 
+The radio only scans while the Wi-Fi settings are open (and right after a
+join or forget there): a scan takes the one radio off the hotspot's channel,
+which hurts a stream running over the phone. The backup's watchdog just reads
+NetworkManager's connection list, which never scans.
+
 Changing networks from a service needs a polkit rule, which setup-pi.sh
 installs; until then `canControl` is False and the page says so. Passwords
 go to nmcli on stdin, never on its command line.
@@ -55,19 +60,30 @@ def can_control():
     return perms.get("org.freedesktop.NetworkManager.network-control") == "yes"
 
 
-def saved_connections():
-    """[{uuid, name, type, device, ssid}] for Wi-Fi and Bluetooth connections."""
-    _, out, _ = nmcli("-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show", timeout=5)
+def connections():
+    """[{uuid, name, type, device, ssid}] for Wi-Fi and Bluetooth connections
+    in one cheap call (no scan), or None if nmcli failed. `device` is empty
+    unless the connection is up; `ssid` is left empty here."""
+    rc, out, _ = nmcli("-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show", timeout=5)
+    if rc != 0:
+        return None
     conns = []
     for line in out.splitlines():
         f = split_terse(line)
         if len(f) < 4 or f[2] not in ("802-11-wireless", "bluetooth"):
             continue
-        c = {"uuid": f[0], "name": f[1], "type": f[2], "device": f[3], "ssid": ""}
+        conns.append({"uuid": f[0], "name": f[1], "type": f[2], "device": f[3], "ssid": ""})
+    return conns
+
+
+def saved_connections():
+    """connections(), with each Wi-Fi one's network name filled in (one more
+    nmcli call apiece, so only for the Settings scan). [] if nmcli failed."""
+    conns = connections() or []
+    for c in conns:
         if c["type"] == "802-11-wireless":
             _, ssid, _ = nmcli("-g", "802-11-wireless.ssid", "connection", "show", "uuid", c["uuid"], timeout=4)
             c["ssid"] = ssid.strip()
-        conns.append(c)
     return conns
 
 
@@ -95,6 +111,7 @@ def scan(rescan):
 class Wifi(QObject):
     changed = pyqtSignal()
     _scanned = pyqtSignal(object, object, bool)      # networks, saved, canControl
+    _polled = pyqtSignal(object)                      # (saved, canControl), or None if nmcli failed
     _finished = pyqtSignal(str, bool)                 # message, ok
 
     def __init__(self, settings, parent=None):
@@ -107,13 +124,15 @@ class Wifi(QObject):
         self._busy = ""            # SSID being joined
         self._message = ""
         self._scanning = False
+        self._polling = False
         self._tether = str(settings.get("tethering", "true")) == "true"
         self._no_wifi_since = None
         self._wifi_since = None
         self._last_tether_try = 0
-        self._hotspot_done = set()   # hotspot connections already given the fixed address
+        self._hotspot_done = set()   # connections already looked at (a hotspot gets the fixed address)
         self._errors = {}            # what each worker last died of, while it keeps happening
         self._scanned.connect(self._on_scanned)
+        self._polled.connect(self._on_polled)
         self._finished.connect(self._on_finished)
         self._scan_timer = QTimer(self, interval=SCAN_EVERY_MS, timeout=self.refresh)
         self._watch_timer = QTimer(self, interval=WATCH_EVERY_MS, timeout=self._watch)
@@ -121,12 +140,14 @@ class Wifi(QObject):
     def start(self):
         if not self._available:
             return
-        self.refresh()
+        self._watch()                # no scan: the list waits for Settings to open
         self._watch_timer.start()
 
     # ---- scanning -----------------------------------------------------------
     @pyqtSlot()
     def refresh(self):
+        """Scan for networks (this takes the radio off its channel), then
+        read the saved connections. Only while the Wi-Fi settings are open."""
         if not self._available or self._scanning:
             return
         self._scanning = True
@@ -163,9 +184,12 @@ class Wifi(QObject):
             _, out, _ = nmcli("-t", "-f", "IP4.GATEWAY,GENERAL.CONNECTION", "device", "show", "wlan0", timeout=4)
             fields = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
             conn = fields.get("GENERAL.CONNECTION", "")
-            if fields.get("IP4.GATEWAY") != IPHONE_GATEWAY or not conn or conn in self._hotspot_done:
-                return
+            gateway = fields.get("IP4.GATEWAY")
+            if not conn or not gateway or conn in self._hotspot_done:
+                return                      # nothing up yet, or already looked at
             self._hotspot_done.add(conn)
+            if gateway != IPHONE_GATEWAY:
+                return
             _, addrs, _ = nmcli("-g", "ipv4.addresses", "connection", "show", "id", conn, timeout=4)
             if HOTSPOT_ADDRESS not in addrs:
                 nmcli("connection", "modify", "id", conn, "+ipv4.addresses", HOTSPOT_ADDRESS)
@@ -216,7 +240,10 @@ class Wifi(QObject):
     def _on_finished(self, message, ok):
         self._busy, self._message = "", message
         self.changed.emit()
-        self.refresh()
+        if self._scan_timer.isActive():
+            self.refresh()           # the Wi-Fi settings are still open: show the new state
+        else:
+            self._watch()            # they were closed meanwhile: no need to scan
 
     @pyqtSlot(str, str)
     def join(self, ssid, password):
@@ -266,8 +293,44 @@ class Wifi(QObject):
         return next((c for c in self._saved if c["type"] == "bluetooth"), None)
 
     def _watch(self):
+        """Every few seconds: one cheap read of the connection list (never a
+        scan), then decide about the backup in _on_polled."""
+        if not self._available or self._polling:
+            return
+        self._polling = True
+
+        def work():
+            result = None            # stays this if nmcli fails or crashes: _on_polled changes nothing
+            try:
+                control = self._control or can_control()
+                conns = connections()
+                if conns is not None:
+                    result = (conns, control)
+                self._logged("watchdog")
+            except Exception as e:
+                self._logged("watchdog", e)
+            finally:
+                safe_emit(self, "_polled", result)    # always, or _polling would never clear
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_polled(self, result):
+        self._polling = False
+        if result is None:
+            return
+        conns, control = result
+        ssids = {c["uuid"]: c["ssid"] for c in self._saved}     # the poll doesn't look these up
+        for c in conns:
+            c["ssid"] = ssids.get(c["uuid"], "")
+        if (conns, control) != (self._saved, self._control):
+            self._saved, self._control = conns, control
+            self.changed.emit()
+        wifi = next((c for c in conns if c["type"] == "802-11-wireless" and c["device"]), None)
+        if control and wifi and wifi["name"] not in self._hotspot_done:
+            threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
+        self._tether_step(wifi is not None)
+
+    def _tether_step(self, on_wifi):
         now = time.monotonic()
-        on_wifi = any(n["active"] for n in self._networks)
         if on_wifi:
             self._no_wifi_since = None
             self._wifi_since = self._wifi_since or now
@@ -287,8 +350,6 @@ class Wifi(QObject):
         elif tethered and (not self._tether or (on_wifi and now - self._wifi_since > UNTETHER_AFTER_S)):
             threading.Thread(target=lambda: nmcli("connection", "down", "uuid", conn["uuid"]),
                              daemon=True).start()
-        if not self._scan_timer.isActive():
-            self.refresh()            # keep the active-network state fresh
 
     @pyqtSlot(bool)
     def setTethering(self, on):

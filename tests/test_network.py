@@ -12,7 +12,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.network import Network
+from backend.network import Network, wifi_name
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -78,6 +78,16 @@ class CheckFailureTest(unittest.TestCase):
             self.net._check()
         self.assertFalse(self.net._busy)
         self.assertEqual(len(logged(self.printed)), 1)
+
+
+class WifiNameTest(unittest.TestCase):
+    def test_reads_the_cached_list_so_the_radio_is_not_scanned(self):
+        listing = SimpleNamespace(stdout="no:Cafe\nyes:Phone\n")
+        with mock.patch("backend.network.shutil.which", return_value="/usr/bin/nmcli"), \
+                mock.patch("backend.network.subprocess.run", return_value=listing) as run:
+            self.assertEqual(wifi_name(), "Phone")
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--rescan") + 1], "no")
 
 
 if __name__ == "__main__":

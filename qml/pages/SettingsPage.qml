@@ -397,11 +397,12 @@ Item {
                                 size: 22
                                 color: Theme.textDim
                             }
-                            TextButton {
+                            ConfirmButton {
                                 visible: modelData.saved && wifi.canControl
                                 implicitHeight: 48
                                 text: "Forget"
-                                onClicked: wifi.forget(modelData.ssid)
+                                confirmText: "Tap again to forget"
+                                onConfirmed: wifi.forget(modelData.ssid)
                             }
                         }
                         TapHandler {

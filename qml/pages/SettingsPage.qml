@@ -579,19 +579,23 @@ Item {
                 }
             }
             Section {
+                id: sendCard
                 Layout.fillWidth: true
                 heading: "Send from your phone"
+                readonly property bool has: typeof phone !== "undefined"
                 // On an iPhone hotspot the Pi also answers on a fixed address.
                 readonly property string ip: typeof network === "undefined" || !network.ip ? ""
                                              : network.ip.indexOf("172.20.10.") === 0 ? "172.20.10.14" : network.ip
+                readonly property var last: has ? phone.lastSent : ({})
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 24
                     Image {
-                        visible: parent.parent.ip !== "" && typeof phone !== "undefined"
+                        visible: sendCard.ip !== "" && sendCard.has
                         Layout.preferredWidth: 220
                         Layout.preferredHeight: 220
-                        source: visible ? phone.qrImage(parent.parent.ip) : ""
+                        // phone.revision goes up with Reset link: a new code to draw.
+                        source: visible ? phone.qrImage(sendCard.ip, phone.revision) : ""
                         smooth: false
                         fillMode: Image.PreserveAspectFit
                     }
@@ -602,12 +606,34 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             font.pixelSize: Theme.fontBody
-                            text: parent.parent.parent.ip === "" ? "Connect to Wi-Fi or your phone's hotspot first."
+                            text: sendCard.ip === "" ? "Connect to Wi-Fi or your phone's hotspot first."
                                   : "Scan this with the iPhone camera."
                         }
                         Note {
                             text: "It opens a page where you can paste a link from Apple Maps or Google Maps, an address or a place, and send it here. The page also shows how to add a Send to Baja shortcut to the Share button, so you can send a place straight from Maps. It arrives on the Maps page, ready for Go."
                         }
+                        Note {
+                            visible: sendCard.last.name !== undefined
+                            textFormat: Text.PlainText      // the name is whatever the phone sent
+                            text: sendCard.last.name === undefined ? ""
+                                  : "Last place: " + sendCard.last.name + ", from " + sendCard.last.ip
+                                    + " at " + Units.timeText(new Date(sendCard.last.at))
+                        }
+                    }
+                }
+                RowLayout {
+                    visible: sendCard.has
+                    Layout.fillWidth: true
+                    spacing: 16
+                    ConfirmButton {
+                        icon: "refresh"
+                        text: "Reset link"
+                        confirmText: "Tap again to reset"
+                        danger: true
+                        onConfirmed: phone.resetToken()
+                    }
+                    Note {
+                        text: "Makes a new code. Phones that scanned the old one, and the Shortcut, stop working: scan the new code, and copy the new token from its page into the Shortcut."
                     }
                 }
             }

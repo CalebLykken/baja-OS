@@ -426,7 +426,11 @@ class DuckerTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "state" / "duck.json"
         self.mixer = FakeMixer({7: 1.0, 8: 0.8})
-        for p in (mock.patch.object(voice.subprocess, "run", side_effect=self.mixer.run),
+        self.now = [1000.0]                 # the clock the Ducker's deadlines use
+        self.log = io.StringIO()
+        for p in (mock.patch.object(voice.time, "monotonic", side_effect=lambda: self.now[0]),
+                  contextlib.redirect_stdout(self.log),
+                  mock.patch.object(voice.subprocess, "run", side_effect=self.mixer.run),
                   mock.patch.object(voice, "_output_streams", side_effect=self.mixer.streams),
                   mock.patch.object(voice, "_stream_names", side_effect=self.mixer.stream_names)):
             p.__enter__()
@@ -544,9 +548,8 @@ class DuckerTest(unittest.TestCase):
         d.recover()
         self.assertEqual(self.mixer.volumes, {7: 0.9, 10: 0.3})
         self.assertTrue(d.pending)                                  # 8 may still come up...
-        with mock.patch.object(voice, "RECOVER_S", 0):
-            d._saved[0]["until"] = 0
-            d.retry()
+        self.now[0] += voice.RECOVER_S + 1
+        d.retry()
         self.assertFalse(d.pending)                                 # ...but not for ever
         self.assertFalse(self.path.exists())
 
@@ -572,6 +575,78 @@ class DuckerTest(unittest.TestCase):
         self.mixer.add(41, 0.3, "app7/App 7")
         d.retry()
         self.assertEqual(self.mixer.volumes[41], 1.0)
+
+    def test_the_wait_for_a_stream_starts_when_pipewire_first_answers(self):
+        self.ducker().duck()
+        self.mixer.remove(7)
+        self.mixer.remove(8)
+        self.mixer.dump_fails = True                                # boot: PipeWire not up yet
+        d = self.ducker()
+        d.recover()
+        self.now[0] += 500                                          # within PIPEWIRE_WAIT_S
+        d.retry()
+        self.mixer.dump_fails = False                               # now it answers: no streams yet
+        d.retry()
+        self.assertTrue(d.pending)
+        self.now[0] += voice.RECOVER_S - 60                         # Soloist starts playing, much later
+        self.mixer.add(51, 0.3, "app7/App 7")                       # and WirePlumber brings it back at 30%
+        d.retry()
+        self.assertEqual(self.mixer.volumes, {51: 1.0})
+        self.assertTrue(d.pending)                                  # 8 never came; still waiting
+        self.now[0] += 120
+        d.retry()
+        self.assertFalse(d.pending)
+        self.assertFalse(self.path.exists())
+
+    def test_pipewire_that_never_answers_is_given_up_on_once(self):
+        self.ducker().duck()
+        self.mixer.dump_fails = True
+        d = self.ducker()
+        d.recover()
+        self.now[0] += voice.PIPEWIRE_WAIT_S + 1
+        d.retry()
+        self.assertFalse(d.pending)
+        self.assertFalse(self.path.exists())
+        d.retry()
+        self.assertEqual(self.log.getvalue().count("gave up"), 2)   # one line per entry, 7 and 8
+
+    def test_a_volume_that_cannot_be_read_is_given_up_on(self):
+        d = self.ducker()
+        d.duck()
+        self.mixer.get_fails = {7}
+        d.release()
+        self.now[0] += 60
+        d.retry()
+        self.assertTrue(d.pending)
+        self.now[0] += voice.GIVE_UP_S
+        d.retry()
+        d.retry()
+        self.assertFalse(d.pending)
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self.log.getvalue().count("gave up"), 1)
+
+    def test_a_volume_that_cannot_be_set_is_given_up_on(self):
+        d = self.ducker()
+        d.duck()
+        self.mixer.set_fails = {8}
+        d.release()
+        self.assertTrue(d.pending)
+        self.now[0] += voice.GIVE_UP_S + 1
+        d.retry()
+        self.assertFalse(d.pending)
+        self.assertEqual(self.mixer.volumes, {7: 1.0, 8: 0.24})
+        self.assertEqual(self.log.getvalue().count("gave up"), 1)
+
+    def test_a_line_spoken_while_a_last_run_entry_waits_keeps_its_real_before(self):
+        self.ducker().duck()
+        self.mixer.remove(7)
+        d = self.ducker()
+        d.recover()
+        self.mixer.add(41, 0.3, "app7/App 7")                       # back at 30%, not yet retried
+        d.duck()                                                    # a new line starts
+        self.assertEqual(self.mixer.volumes[41], 0.3)               # not ducked to 9%
+        d.release()
+        self.assertEqual(self.mixer.volumes[41], 1.0)               # the file's "before", not 0.3
 
     def test_recovery_with_no_file_or_a_broken_one_does_nothing(self):
         self.ducker().recover()

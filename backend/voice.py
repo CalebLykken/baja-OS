@@ -39,7 +39,10 @@ DUCK_TO = 0.3           # other audio drops to this share of its volume while sp
 STALE_S = 8             # a line not spoken within this long is dropped
 READY_S = 30            # Piper has this long to load the voice (~2 s on the Pi)
 REPLY_S = 15            # and this long to turn a line into speech (~0.5 s)
-RECOVER_S = 30          # after a restart, streams from the last run have this long to be found
+PIPEWIRE_WAIT_S = 600   # after a restart, PipeWire has this long to start answering
+RECOVER_S = 1800        # then a stream from the last run has this long to appear (Soloist's
+                        # only does once playback starts); the level check keeps waiting safe
+GIVE_UP_S = 120         # a put-back that keeps failing is dropped after this long
 RETRY_S = 2             # between tries at putting back what wpctl would not
 DUCK_TOL = 0.02         # wpctl prints two decimals; a stream within this of the duck level is still ducked
 
@@ -150,10 +153,15 @@ class Ducker:
             self._depth += 1
             names = _stream_names() or {}
             held = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
-            new = {n: v for n, v in _output_streams().items() if n not in held}
+            # A stream the last run left ducked, now back at that level, already has
+            # its real "before" on file: don't save the ducked level as a new one.
+            waiting = {e["name"] for e in self._saved if e["recovered"] and e["name"]}
+            new = {n: v for n, v in _output_streams().items()
+                   if n not in held and names.get(n) not in waiting}
             for n, v in new.items():
                 self._saved.append({"id": n, "name": names.get(n, ""), "before": v,
-                                    "ducked": v * DUCK_TO, "until": None})
+                                    "ducked": v * DUCK_TO, "give_up": None, "started": True,
+                                    "failing": False, "recovered": False})
             self._write()               # before any volume moves
             _set_volumes({n: v * DUCK_TO for n, v in new.items()})
 
@@ -172,8 +180,10 @@ class Ducker:
     def recover(self):
         """On start: take on what a dashboard that died while ducked left, and
         put it back. Nodes have new ids after a reboot, so streams are matched
-        by name, and a stream that hasn't come up yet gets RECOVER_S to appear
-        (WirePlumber may bring it up at the ducked level). Only streams still
+        by name. A stream that hasn't come up yet is waited for, RECOVER_S from
+        the first time PipeWire answers (WirePlumber may bring it up at the
+        ducked level, and Soloist's only exists once playback starts); if
+        PipeWire never answers it's given up on after PIPEWIRE_WAIT_S. Only streams still
         at the level we set are touched, so nothing the user changed since is
         overwritten, and streams not in the file are left alone: guessing
         "everything at 30%" would also move ones set to 30% on purpose. If
@@ -181,7 +191,8 @@ class Ducker:
         try:
             data = json.loads(self._path.read_text())
             left = [{"id": int(e["id"]), "name": str(e["name"]), "before": float(e["before"]),
-                     "ducked": float(e["ducked"]), "until": time.monotonic() + RECOVER_S}
+                     "ducked": float(e["ducked"]), "give_up": time.monotonic() + PIPEWIRE_WAIT_S,
+                     "started": False, "failing": False, "recovered": True}
                     for e in data]
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             left = []
@@ -192,12 +203,35 @@ class Ducker:
             else:
                 self._write()
 
+    @staticmethod
+    def _fail(e, now):
+        """This entry couldn't be put back this time; it gets GIVE_UP_S of tries."""
+        if not e["failing"]:
+            e["failing"] = True
+            e["give_up"] = min(e["give_up"] or now + GIVE_UP_S, now + GIVE_UP_S)
+
     def _put_back(self):
+        now = time.monotonic()
         names = _stream_names()
-        if names is None:                   # pw-dump isn't answering: keep everything
+        if names is not None:
+            for e in self._saved:
+                if e["recovered"] and not e["started"]:
+                    e["started"] = True     # PipeWire answers: the wait for the stream starts now
+                    e["give_up"] = now + RECOVER_S
+        else:                               # pw-dump isn't answering
+            for e in self._saved:
+                if not e["recovered"]:
+                    self._fail(e, now)
+        live = []
+        for e in self._saved:
+            if e["give_up"] is not None and now > e["give_up"]:
+                print(f"Voice: gave up putting back {e['name'] or e['id']} to {e['before']:.2f}", flush=True)
+            else:
+                live.append(e)
+        self._saved = live
+        if names is None:                   # keep the rest for later
             self._write()
             return
-        now = time.monotonic()
         by_id = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
         keep, todo = [], {}
         for e in self._saved:
@@ -207,16 +241,20 @@ class Ducker:
                 same = [n for n, nm in names.items() if nm == e["name"] and n not in by_id]
                 node = same[0] if e["name"] and len(same) == 1 else None
             if node is None:
-                if e["until"] is not None and now < e["until"]:
+                if e["recovered"]:
                     keep.append(e)          # recovering: it may yet appear
                 continue                    # gone
             now_vol = _volume(node)
             if now_vol is None:
+                self._fail(e, now)
                 keep.append(e)              # wpctl didn't answer: not the same as gone
             elif abs(now_vol - e["ducked"]) <= DUCK_TOL:
                 todo[node] = e              # else: moved since; leave it
         done = _set_volumes({n: e["before"] for n, e in todo.items()})
-        keep += [e for n, e in todo.items() if n not in done]
+        for n, e in todo.items():
+            if n not in done:
+                self._fail(e, now)
+                keep.append(e)
         self._saved = keep
         self._write()
 

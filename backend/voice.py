@@ -6,6 +6,10 @@ Python from deploy/audio/install-voice.sh), started on first use and kept
 loaded. Playback is `pw-play`; the other audio streams are turned down
 with `wpctl` for the length of the line and put back afterwards, so
 Spotify's own volume (and the phone's slider) never moves.
+
+A Piper that stops answering, or exits, is killed and started again for the
+next line (the line it was stuck on is dropped), so spoken directions can't
+end for good.
 """
 
 import json
@@ -25,11 +29,14 @@ ROOT = Path(__file__).resolve().parent.parent
 VOICE_DIR = Path(os.environ.get("BAJA_VOICE_DIR", "~/.local/share/baja-os/voice")).expanduser()
 MODEL = VOICE_DIR / "en_US-kristin-medium.onnx"
 PYTHON = VOICE_DIR / "venv" / "bin" / "python"
+WORKER = ROOT / "backend" / "voice_worker.py"
 NODE_NAME = "baja-voice"
 # The equalizer's own output carries everything, the voice included; leave it.
 NOT_DUCKED = {NODE_NAME, "baja_eq.output"}
 DUCK_TO = 0.3           # other audio drops to this share of its volume while speaking
 STALE_S = 8             # a line not spoken within this long is dropped
+READY_S = 30            # Piper has this long to load the voice (~2 s on the Pi)
+REPLY_S = 15            # and this long to turn a line into speech (~0.5 s)
 
 
 def _output_streams():
@@ -56,9 +63,71 @@ def _output_streams():
 
 
 def _set_volumes(volumes):
+    """One stream failing (wpctl timing out) doesn't leave the rest as they were."""
     for node, vol in volumes.items():
-        subprocess.run(["wpctl", "set-volume", str(node), f"{vol:.3f}"],
-                       capture_output=True, timeout=2)
+        try:
+            subprocess.run(["wpctl", "set-volume", str(node), f"{vol:.3f}"],
+                           capture_output=True, timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+class _Piper:
+    """One voice_worker.py process. A thread reads its stdout into a queue so
+    that waiting for an answer can time out: readline() on the pipe itself
+    can't, and select() on a buffered text pipe can say "nothing" while Python
+    is already holding the line."""
+
+    def __init__(self):
+        self._proc = subprocess.Popen(
+            # -I: nothing in backend/ can shadow what Piper imports.
+            [str(PYTHON), "-I", str(WORKER), str(MODEL)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1)
+        self._lines = queue.Queue()
+        threading.Thread(target=self._read, name="voice-reader", daemon=True).start()
+
+    def _read(self):
+        try:
+            for line in self._proc.stdout:
+                self._lines.put(line)
+        except (OSError, ValueError):
+            pass                                    # the pipe went away under us
+        self._lines.put(None)                       # the end: it exited or was killed
+        try:
+            self._proc.stdout.close()
+        except OSError:
+            pass
+
+    def exited(self):
+        return self._proc.poll() is not None
+
+    def send(self, line):
+        self._proc.stdin.write(line)                # line-buffered: out at the newline
+
+    def readline(self, timeout):
+        """The next line Piper wrote. TimeoutError if it takes longer than
+        `timeout` seconds, EOFError if it has exited."""
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError(f"no answer in {timeout:g} s") from None
+        if line is None:
+            self._lines.put(None)                   # it stays at the end
+            raise EOFError("it exited")
+        return line
+
+    def kill(self):
+        """Stop it, whatever it's doing, and reap it."""
+        self._proc.kill()
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            self._proc.stdin.close()
+        except OSError:
+            pass
 
 
 class Voice(QObject):
@@ -71,21 +140,48 @@ class Voice(QObject):
         self._enabled = str(settings.get("voice", "false")) == "true"
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
-        self._proc = None
+        self._piper = None
         self._tmp = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
         if self._available:
             threading.Thread(target=self._run, name="voice", daemon=True).start()
 
     # ---- the worker ------------------------------------------------------------------
     def _worker(self):
-        if self._proc is None or self._proc.poll() is not None:
-            self._proc = subprocess.Popen(
-                # -I: nothing in backend/ can shadow what Piper imports.
-                [str(PYTHON), "-I", str(ROOT / "backend" / "voice_worker.py"), str(MODEL)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1)
-            self._proc.stdout.readline()            # {"ready": true} once the voice is loaded
-        return self._proc
+        if self._piper is not None and self._piper.exited():
+            self._drop_worker()                     # it died between lines
+        if self._piper is None:
+            self._piper = _Piper()
+            ready = json.loads(self._piper.readline(READY_S))   # {"ready": true} once the voice is loaded
+            if not (isinstance(ready, dict) and ready.get("ready") is True):
+                raise ValueError(f"unexpected first line {ready!r}")
+        return self._piper
+
+    def _drop_worker(self):
+        piper, self._piper = self._piper, None
+        if piper is not None:
+            piper.kill()
+
+    def _synthesize(self, text, out):
+        """Have Piper write the WAV `out`; True if it did. A Piper that
+        doesn't answer in time, exits or says something unreadable is killed
+        and a fresh one starts with the next line; this line is dropped. One
+        that answers {"error": ...} is fine, only that line is dropped."""
+        try:
+            piper = self._worker()
+            piper.send(json.dumps({"text": text, "out": out}) + "\n")
+            reply = json.loads(piper.readline(REPLY_S))
+            # Its own {"out": this line's WAV} or {"error": ...}; anything else
+            # (another line's WAV, say) means it's out of step.
+            if not isinstance(reply, dict) or (reply.get("out") != out and "error" not in reply):
+                raise ValueError(f"unexpected reply {reply!r}")
+        except Exception as e:
+            print(f"Voice: Piper failed ({e!r}); starting it again for the next line", flush=True)
+            self._drop_worker()
+            return False
+        if "out" not in reply:
+            print(f"Voice: Piper couldn't say that line ({reply.get('error')})", flush=True)
+            return False
+        return True
 
     def _run(self):
         n = 0
@@ -94,23 +190,20 @@ class Voice(QObject):
             if time.monotonic() - queued_at > STALE_S:
                 continue                            # the moment has passed
             try:
-                proc = self._worker()
                 n += 1
                 out = str(self._tmp / f"baja-voice-{n % 4}.wav")
-                proc.stdin.write(json.dumps({"text": text, "out": out}) + "\n")
-                reply = json.loads(proc.stdout.readline() or "{}")
-                if "out" not in reply:
+                if not self._synthesize(text, out):
                     continue
                 others = _output_streams()
-                _set_volumes({k: v * DUCK_TO for k, v in others.items()})
                 try:
+                    _set_volumes({k: v * DUCK_TO for k, v in others.items()})
                     subprocess.run(["pw-play", "--media-role", "Navigation",
                                     "--properties", '{ node.name = "%s" }' % NODE_NAME, out],
                                    capture_output=True, timeout=30)
                 finally:
                     _set_volumes(others)
-            except (OSError, subprocess.SubprocessError, ValueError, BrokenPipeError):
-                self._proc = None                    # start it again next time
+            except Exception as e:                  # never end this thread
+                print(f"Voice: couldn't speak a line ({e!r}); on to the next", flush=True)
 
     # ---- what QML and the router use -----------------------------------------------
     @pyqtSlot(str)

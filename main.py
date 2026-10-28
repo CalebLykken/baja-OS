@@ -151,7 +151,8 @@ def main():
     settings = Settings()
     vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
-    obd = ObdReader()
+    obd = ObdReader(baro=settings.get("baro"))
+    obd.baro.connect(lambda kpa: settings.set("baro", kpa))   # kept for a restart with the engine running
     obd.reading.connect(vehicle.apply_obd)
     obd.lost.connect(vehicle.lost_obd)
     obd.voltage.connect(vehicle.apply_voltage)

@@ -7,6 +7,11 @@ coolant, intake air and the battery a little less often. The car answers
 about ten questions a second over its K-line (ISO 14230), so the gauges
 update a few times a second.
 
+Boost is manifold pressure minus the outside air pressure (baro). Baro comes
+from the engine computer (PID 0x33) when it has one, else from the manifold
+with the engine stopped (key on), and the last one measured is kept (the
+`baro` signal) so a restart with the engine running starts from it.
+
 Read only: it never sends mode 04 (clear codes) or anything that writes.
 With no adapter, or the key off, it just keeps looking, and VehicleData
 shows the engine values as unknown (backend/vehicle.py). While it waits for the car it still
@@ -42,10 +47,26 @@ WAKE_TIMEOUT_S = 15.0
 # the car goes quiet (past the power relay's hold time), then with each try.
 VOLTS_EVERY_S, VOLTS_FOR_S = 1.0, 120.0
 LOG_EVERY_S = 15.0                   # a one-line summary in the journal while live
+BARO_PID = 0x33                      # barometric pressure, kPa (not every engine computer has it)
+BARO_DEFAULT = 101.3                 # kPa at sea level, until measured
+BARO_RANGE = (50.0, 110.0)           # kPa: from 18,000 ft up to a stormy sea level
+BARO_SAVE_KPA = 1.0                  # keep a new baro only if it moved further than this
 
 
 def retry_wait(since):
     return RETRY_S if time.monotonic() - since < SLOW_AFTER_S else RETRY_SLOW_S
+
+
+def pid_supported(bitmap, base, pid):
+    """Whether `bitmap` (the 4 data bytes answering PID `base`: 0x00, 0x20,
+    ...) says the car answers `pid`: one bit per PID after `base`, from the
+    top bit of the first byte."""
+    i = pid - base - 1
+    return bool(bitmap) and len(bitmap) >= 4 and 0 <= i < 32 and bool(bitmap[i // 8] & (0x80 >> i % 8))
+
+
+def plausible_baro(kpa):
+    return kpa is not None and BARO_RANGE[0] <= kpa <= BARO_RANGE[1]
 
 
 def find_port():
@@ -113,7 +134,7 @@ class Elm:
         return out or None
 
 
-def convert(pid, d, baro):
+def convert(pid, d):
     """A PID's bytes as the dashboard's units (mph, psi, °F)."""
     if pid == 0x0C:
         return "rpm", (d[0] * 256 + d[1]) / 4
@@ -133,11 +154,27 @@ class ObdReader(QObject):
     says the readings stopped (key off, unplugged). `quiet` says the car
     itself stopped answering with the adapter still there: the key going
     off (backend/ignition.py). `voltage` carries the battery whenever it's
-    read, with the car answering or not."""
+    read, with the car answering or not. `baro` carries a new outside air
+    pressure (kPa) to keep for the next start."""
     reading = pyqtSignal(dict)
     lost = pyqtSignal()
     quiet = pyqtSignal()
     voltage = pyqtSignal(float)
+    baro = pyqtSignal(float)
+
+    def __init__(self, baro=None, parent=None):
+        """`baro`: the outside air pressure kept from the last drive (kPa,
+        from the settings), what boost zeroes from until a new one is read."""
+        super().__init__(parent)
+        self._baro = BARO_DEFAULT
+        self._saved = None                    # the baro that was last kept
+        try:
+            kept = float(baro)
+        except (TypeError, ValueError):
+            kept = None
+        if plausible_baro(kept):
+            self._baro = self._saved = kept
+        self._baro_pid = None                 # does the car answer PID 0x33? None: not asked yet
 
     def start(self):
         threading.Thread(target=self._run, name="obd", daemon=True).start()
@@ -203,9 +240,50 @@ class ObdReader(QObject):
             safe_emit(self, "voltage", volts)
         return volts
 
+    def _start_baro(self, elm):
+        """Before the first round, the outside air pressure from the car
+        itself if it has it. If not, boost starts from the last one kept,
+        which is right unless the truck has climbed or dropped since (a
+        key-on corrects it)."""
+        if self._baro_pid is None:
+            self._baro_pid = self._ask_baro_pid(elm)
+        if self._baro_pid:
+            d = elm.pid(BARO_PID)
+            if d:
+                self._note_baro(d[0])
+
+    def _ask_baro_pid(self, elm):
+        """Whether the car answers PID 0x33, from its support bitmaps (PID
+        0x00 for 0x01-0x20, PID 0x20 for 0x21-0x40); None if it didn't
+        say. Prints them once, to see what this engine computer has."""
+        low = elm.pid(0x00)
+        if not low:
+            return None
+        high = None
+        if pid_supported(low, 0x00, 0x20):    # it has a second bitmap
+            high = elm.pid(0x20)
+            if not high:
+                return None
+        found = pid_supported(high, 0x20, BARO_PID)
+        print("OBD: PIDs 01-20 " + bytes(low).hex(" ") + ", 21-40 "
+              + (bytes(high).hex(" ") if high else "none")
+              + ("; barometric pressure: yes" if found else "; barometric pressure: no"), flush=True)
+        return found
+
+    def _note_baro(self, kpa):
+        """A measured outside air pressure: boost zeroes from it, and it's
+        kept for the next start once it has moved enough to matter (every
+        keeping is a write to the SD card)."""
+        if not plausible_baro(kpa):
+            return
+        self._baro = float(kpa)
+        if self._saved is None or abs(kpa - self._saved) > BARO_SAVE_KPA:
+            self._saved = float(kpa)
+            safe_emit(self, "baro", float(kpa))
+
     def _poll(self, elm):
         """Reads the car until it stops answering."""
-        baro = 101.3                          # kPa, until the car tells us
+        self._start_baro(elm)
         misses, turn, logged, last = 0, 0, 0.0, {}
         while misses < GIVE_UP_AFTER:
             started = time.monotonic()
@@ -222,7 +300,7 @@ class ObdReader(QObject):
                     continue
                 misses = 0
                 try:
-                    key, value = convert(item, d, baro)
+                    key, value = convert(item, d)
                 except IndexError:
                     continue
                 if key:
@@ -230,9 +308,9 @@ class ObdReader(QObject):
             # With the engine stopped (key on), the manifold sits at the
             # outside air pressure: the zero for boost from here on.
             if values.get("rpm") == 0 and "map" in values:
-                baro = values["map"]
+                self._note_baro(values["map"])
             if "map" in values:
-                values["boost"] = (values.pop("map") - baro) * 0.145038
+                values["boost"] = (values.pop("map") - self._baro) * 0.145038
             if values:
                 safe_emit(self, "reading", values)
                 last.update(values)

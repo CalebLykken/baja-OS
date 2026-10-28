@@ -286,7 +286,11 @@ running.
 ISO 14230-4 (KWP, over the K-line). Every round it reads RPM, manifold
 pressure (for boost) and speed, plus one of coolant temperature, intake air
 temperature and battery voltage, up to 10 updates a second. Boost is measured
-against the outside air pressure read at key-on.
+against the outside air pressure: the car's own reading (PID 0x33) if its engine
+computer has one, else the manifold pressure at key-on with the engine stopped.
+The last one is kept in the settings (`baro`), so boost is right after a restart
+with the engine already running. The journal lists the PIDs the car supports
+(`journalctl -u baja-os | grep "OBD: PIDs"`).
 
 It only reads: it never clears codes or sends anything that writes. With the
 key off it checks every few seconds, then every 20 s after a minute, so the

@@ -143,6 +143,7 @@ class FakeNM:
         self.control = "yes"
         self.list_rc = 0               # what `connection show` returns
         self.wifi_up = True
+        self.wifi_retrying = False     # NetworkManager trying a hotspot that's gone
         self.gateway = "192.168.1.1"
         self.tether = False            # is there a saved Bluetooth connection?
         self.tether_up = False
@@ -151,13 +152,15 @@ class FakeNM:
         self.calls.append(args)
         if "PERMISSION,VALUE" in args:
             return 0, f"org.freedesktop.NetworkManager.network-control:{self.control}\n", ""
-        if "UUID,NAME,TYPE,DEVICE" in args:
+        if "UUID,NAME,TYPE,DEVICE,STATE" in args:
             if self.list_rc:
                 return self.list_rc, "", "timed out"
-            lines = ["u-phone:Phone:802-11-wireless:" + ("wlan0" if self.wifi_up else ""),
-                     "u-lo:lo:loopback:lo"]
+            wifi = ("wlan0:activated" if self.wifi_up
+                    else "wlan0:activating" if self.wifi_retrying else ":")
+            lines = ["u-phone:Phone:802-11-wireless:" + wifi,
+                     "u-lo:lo:loopback:lo:activated"]
             if self.tether:
-                lines.append("u-bt:Pixel Network:bluetooth:" + ("AA\\:BB" if self.tether_up else ""))
+                lines.append("u-bt:Pixel Network:bluetooth:" + ("AA\\:BB:activated" if self.tether_up else ":"))
             return 0, "\n".join(lines) + "\n", ""
         if "802-11-wireless.ssid" in args:
             return 0, "Phone\n", ""
@@ -231,7 +234,7 @@ class RadioTest(unittest.TestCase):
         self.nm.calls.clear()
         for _ in range(3):
             self.tick()
-        self.assertEqual(self.nm.calls, [("-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show")] * 3)
+        self.assertEqual(self.nm.calls, [("-t", "-f", "UUID,NAME,TYPE,DEVICE,STATE", "connection", "show")] * 3)
 
     def test_joining_rescans_only_if_the_settings_are_still_open(self):
         self.wifi.setScanning(True)
@@ -261,6 +264,15 @@ class RadioTest(unittest.TestCase):
         self.assertEqual(len(self.nm.ran("IP4.GATEWAY,GENERAL.CONNECTION")), 1)
 
     # ---- the phone as a backup ------------------------------------------------
+    def test_a_hotspot_still_being_retried_is_not_wifi(self):
+        # NetworkManager keeps trying a saved hotspot that's gone, so the
+        # connection has a device on every tick without ever being up.
+        self.nm.tether, self.nm.wifi_up, self.nm.wifi_retrying = True, False, True
+        self.wifi.start()
+        for _ in range(5):
+            self.tick()                                    # 50 s
+        self.assertEqual(self.nm.ran("connection", "up"), [("connection", "up", "uuid", "u-bt")])
+
     def test_no_wifi_for_a_minute_brings_the_phone_up_and_wifi_back_lets_it_go(self):
         self.nm.tether, self.nm.wifi_up = True, False
         self.wifi.start()                                  # t=1000: no Wi-Fi from here

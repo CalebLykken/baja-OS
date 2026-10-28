@@ -61,18 +61,21 @@ def can_control():
 
 
 def connections():
-    """[{uuid, name, type, device, ssid}] for Wi-Fi and Bluetooth connections
-    in one cheap call (no scan), or None if nmcli failed. `device` is empty
-    unless the connection is up; `ssid` is left empty here."""
-    rc, out, _ = nmcli("-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show", timeout=5)
+    """[{uuid, name, type, device, up, ssid}] for Wi-Fi and Bluetooth
+    connections in one cheap call (no scan), or None if nmcli failed.
+    `device` is set as soon as NetworkManager is trying the connection; `up`
+    only once it's activated (a hotspot that's gone keeps being retried, so a
+    device alone doesn't mean there's Wi-Fi). `ssid` is left empty here."""
+    rc, out, _ = nmcli("-t", "-f", "UUID,NAME,TYPE,DEVICE,STATE", "connection", "show", timeout=5)
     if rc != 0:
         return None
     conns = []
     for line in out.splitlines():
         f = split_terse(line)
-        if len(f) < 4 or f[2] not in ("802-11-wireless", "bluetooth"):
+        if len(f) < 5 or f[2] not in ("802-11-wireless", "bluetooth"):
             continue
-        conns.append({"uuid": f[0], "name": f[1], "type": f[2], "device": f[3], "ssid": ""})
+        conns.append({"uuid": f[0], "name": f[1], "type": f[2], "device": f[3],
+                      "up": f[4] == "activated", "ssid": ""})
     return conns
 
 
@@ -324,7 +327,7 @@ class Wifi(QObject):
         if (conns, control) != (self._saved, self._control):
             self._saved, self._control = conns, control
             self.changed.emit()
-        wifi = next((c for c in conns if c["type"] == "802-11-wireless" and c["device"]), None)
+        wifi = next((c for c in conns if c["type"] == "802-11-wireless" and c["up"]), None)
         if control and wifi and wifi["name"] not in self._hotspot_done:
             threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
         self._tether_step(wifi is not None)

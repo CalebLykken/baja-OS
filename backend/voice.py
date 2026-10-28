@@ -39,44 +39,46 @@ DUCK_TO = 0.3           # other audio drops to this share of its volume while sp
 STALE_S = 8             # a line not spoken within this long is dropped
 READY_S = 30            # Piper has this long to load the voice (~2 s on the Pi)
 REPLY_S = 15            # and this long to turn a line into speech (~0.5 s)
+RECOVER_S = 30          # after a restart, streams from the last run have this long to be found
+RETRY_S = 2             # between tries at putting back what wpctl would not
 DUCK_TOL = 0.02         # wpctl prints two decimals; a stream within this of the duck level is still ducked
 
 
-def _output_streams():
-    """{node id: volume} of the other audio streams playing right now."""
+def _dump_streams():
+    """[(node id, name)] of the other audio streams, None if pw-dump failed.
+    The name is what survives a restart (node ids are new after a reboot)."""
     try:
         out = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=3).stdout
         objects = json.loads(out)
     except (OSError, subprocess.SubprocessError, ValueError):
-        return {}
-    streams = {}
+        return None
+    streams = []
     for o in objects:
         props = ((o.get("info") or {}).get("props") or {})
         if props.get("media.class") != "Stream/Output/Audio" or props.get("node.name") in NOT_DUCKED:
             continue
-        try:
-            vol = subprocess.run(["wpctl", "get-volume", str(o["id"])], capture_output=True,
-                                 text=True, timeout=2).stdout
-            m = re.search(r"Volume: ([\d.]+)", vol)
-            if m:
-                streams[o["id"]] = float(m[1])
-        except (OSError, subprocess.SubprocessError):
-            pass
+        streams.append((o["id"], f"{props.get('node.name', '')}/{props.get('application.name', '')}"))
     return streams
 
 
-def _set_volumes(volumes):
-    """One stream failing (wpctl timing out) doesn't leave the rest as they were."""
-    for node, vol in volumes.items():
-        try:
-            subprocess.run(["wpctl", "set-volume", str(node), f"{vol:.3f}"],
-                           capture_output=True, timeout=2)
-        except (OSError, subprocess.SubprocessError):
-            pass
+def _stream_names():
+    """{node id: name} of the other streams, None if pw-dump failed."""
+    streams = _dump_streams()
+    return None if streams is None else dict(streams)
+
+
+def _output_streams():
+    """{node id: volume} of the other audio streams playing right now."""
+    streams = {}
+    for node, _ in _dump_streams() or []:
+        vol = _volume(node)
+        if vol is not None:
+            streams[node] = vol
+    return streams
 
 
 def _volume(node):
-    """The stream's volume now, None if it's gone (or wpctl won't say)."""
+    """The stream's volume now, None if wpctl won't say."""
     try:
         r = subprocess.run(["wpctl", "get-volume", str(node)], capture_output=True,
                            text=True, timeout=2)
@@ -84,6 +86,21 @@ def _volume(node):
         return float(m[1]) if r.returncode == 0 and m else None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _set_volumes(volumes):
+    """One stream failing (wpctl timing out) doesn't leave the rest as they
+    were. Returns the nodes that were set."""
+    done = set()
+    for node, vol in volumes.items():
+        try:
+            r = subprocess.run(["wpctl", "set-volume", str(node), f"{vol:.3f}"],
+                               capture_output=True, timeout=2)
+            if r.returncode == 0:
+                done.add(node)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return done
 
 
 def _state_file():
@@ -94,18 +111,25 @@ def _state_file():
 class Ducker:
     """Turns the other streams down and puts back exactly what it took.
 
-    The volume each stream had before is saved (in memory and in a file)
-    before anything is turned down. A stream is put back only if it is still
-    at the level we set: one that vanished is skipped, and one somebody moved
-    meanwhile (the phone's slider, say) keeps its new volume. Ducks nest: a
-    second line while ducked saves only the streams that weren't ducked yet,
-    never the ducked level as a "before", and the restore waits for the last."""
+    The volume each stream had before is saved (in memory and in a file, with
+    the stream's name) before anything is turned down. A stream is put back
+    only if it is still at the level we set: one that is gone is dropped, and
+    one somebody moved meanwhile (the phone's slider, say) keeps its new
+    volume. If PipeWire or wpctl just doesn't answer, that is not "gone": the
+    entry stays (and in the file) and is tried again. Ducks nest: a second
+    line while ducked saves only the streams that weren't ducked yet, never
+    the ducked level as a "before", and the restore waits for the last."""
 
     def __init__(self, path=None):
         self._path = path or _state_file()
         self._lock = threading.Lock()
-        self._saved = {}            # node -> (volume before, volume we set)
+        self._saved = []            # {"id", "name", "before", "ducked", "until"}
         self._depth = 0
+
+    @property
+    def pending(self):
+        """Something still to put back, and nobody speaking: call retry()."""
+        return bool(self._saved) and self._depth == 0
 
     def _write(self):
         try:
@@ -114,7 +138,8 @@ class Ducker:
                 return
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_name(self._path.name + ".tmp")
-            tmp.write_text(json.dumps({str(n): list(v) for n, v in self._saved.items()}))
+            tmp.write_text(json.dumps([{k: e[k] for k in ("id", "name", "before", "ducked")}
+                                       for e in self._saved]))
             os.replace(tmp, self._path)
         except OSError as e:
             print(f"Voice: couldn't update {self._path} ({e!r})", flush=True)
@@ -123,9 +148,12 @@ class Ducker:
         """Turn down every stream not already ducked."""
         with self._lock:
             self._depth += 1
-            new = {n: v for n, v in _output_streams().items() if n not in self._saved}
+            names = _stream_names() or {}
+            held = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
+            new = {n: v for n, v in _output_streams().items() if n not in held}
             for n, v in new.items():
-                self._saved[n] = (v, v * DUCK_TO)
+                self._saved.append({"id": n, "name": names.get(n, ""), "before": v,
+                                    "ducked": v * DUCK_TO, "until": None})
             self._write()               # before any volume moves
             _set_volumes({n: v * DUCK_TO for n, v in new.items()})
 
@@ -133,34 +161,64 @@ class Ducker:
         with self._lock:
             self._depth = max(0, self._depth - 1)
             if self._depth == 0:
-                self._put_back(self._saved)
-                self._saved = {}
-                self._write()
+                self._put_back()
+
+    def retry(self):
+        """Another go at what couldn't be put back."""
+        with self._lock:
+            if self._depth == 0 and self._saved:
+                self._put_back()
 
     def recover(self):
-        """On start: put back what a dashboard that died while ducked left.
-        Only streams still sitting at the level we set are touched, so nothing
-        the user changed since is overwritten. Streams that came up after the
-        crash aren't in the file and are left alone: guessing "everything at
-        30%" would also move streams someone set to 30% on purpose."""
+        """On start: take on what a dashboard that died while ducked left, and
+        put it back. Nodes have new ids after a reboot, so streams are matched
+        by name, and a stream that hasn't come up yet gets RECOVER_S to appear
+        (WirePlumber may bring it up at the ducked level). Only streams still
+        at the level we set are touched, so nothing the user changed since is
+        overwritten, and streams not in the file are left alone: guessing
+        "everything at 30%" would also move ones set to 30% on purpose. If
+        PipeWire isn't answering the file is kept for the retries."""
         try:
             data = json.loads(self._path.read_text())
-            left = {int(n): (float(v[0]), float(v[1])) for n, v in data.items()}
-        except (OSError, ValueError, TypeError, IndexError, AttributeError):
-            left = {}
+            left = [{"id": int(e["id"]), "name": str(e["name"]), "before": float(e["before"]),
+                     "ducked": float(e["ducked"]), "until": time.monotonic() + RECOVER_S}
+                    for e in data]
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            left = []
         with self._lock:
-            if left and not self._saved:
-                self._put_back(left)
-            self._write()
+            self._saved.extend(left)
+            if self._saved and self._depth == 0:
+                self._put_back()
+            else:
+                self._write()
 
-    @staticmethod
-    def _put_back(saved):
-        back = {}
-        for n, (before, ducked) in saved.items():
-            now = _volume(n)
-            if now is not None and abs(now - ducked) <= DUCK_TOL:
-                back[n] = before
-        _set_volumes(back)
+    def _put_back(self):
+        names = _stream_names()
+        if names is None:                   # pw-dump isn't answering: keep everything
+            self._write()
+            return
+        now = time.monotonic()
+        by_id = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
+        keep, todo = [], {}
+        for e in self._saved:
+            if e["id"] in by_id and names.get(e["id"]) == e["name"]:
+                node = e["id"]
+            else:
+                same = [n for n, nm in names.items() if nm == e["name"] and n not in by_id]
+                node = same[0] if e["name"] and len(same) == 1 else None
+            if node is None:
+                if e["until"] is not None and now < e["until"]:
+                    keep.append(e)          # recovering: it may yet appear
+                continue                    # gone
+            now_vol = _volume(node)
+            if now_vol is None:
+                keep.append(e)              # wpctl didn't answer: not the same as gone
+            elif abs(now_vol - e["ducked"]) <= DUCK_TOL:
+                todo[node] = e              # else: moved since; leave it
+        done = _set_volumes({n: e["before"] for n, e in todo.items()})
+        keep += [e for n, e in todo.items() if n not in done]
+        self._saved = keep
+        self._write()
 
 
 class _Piper:
@@ -282,7 +340,14 @@ class Voice(QObject):
         except Exception as e:
             print(f"Voice: couldn't put back volumes from a last run ({e!r})", flush=True)
         while True:
-            text, queued_at = self._jobs.get()
+            try:
+                text, queued_at = self._jobs.get(timeout=RETRY_S if self._ducker.pending else None)
+            except queue.Empty:
+                try:
+                    self._ducker.retry()
+                except Exception as e:
+                    print(f"Voice: couldn't put volumes back ({e!r})", flush=True)
+                continue
             if time.monotonic() - queued_at > STALE_S:
                 continue                            # the moment has passed
             try:

@@ -283,8 +283,11 @@ against the outside air pressure read at key-on.
 
 It only reads: it never clears codes or sends anything that writes. With the
 key off it checks every few seconds, then every 20 s after a minute, so the
-adapter can sleep. While the car isn't answering, the gauges run a simulated
-drive and the status bar shows **DEMO DATA**.
+adapter can sleep. Until the car has answered once on an install (a Mac, a bench
+Pi), the gauges run a simulated drive and the status bar shows **DEMO DATA**.
+After that, the truck never makes numbers up: with the car silent the engine
+values are dashes, and the battery stays real (the adapter reads it itself).
+`--demo` and `--no-demo` force the choice.
 
 While the car's own readings are out of range (coolant over 230 °F, battery
 under 12 V or over 15 V, boost over 15 psi), a red chip at the foot of the

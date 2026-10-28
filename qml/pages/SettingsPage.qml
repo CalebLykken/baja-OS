@@ -804,12 +804,12 @@ Item {
                 Label { text: "Baja OS"; font.pixelSize: Theme.fontHero; font.weight: Font.DemiBold }
                 Label { text: "The dashboard for a 2005 Subaru Baja Turbo"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
                 Label {
-                    visible: typeof vehicle !== "undefined" && !vehicle.live
+                    visible: typeof vehicle !== "undefined" && vehicle.simulated
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     color: Theme.accent
                     font.pixelSize: Theme.fontBody
-                    text: "Gauges show simulated data until the car answers over the OBD-II adapter (key on)."
+                    text: "Gauges show simulated data until the car first answers over the OBD-II adapter (key on)."
                 }
             }
             Section {

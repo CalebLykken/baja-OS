@@ -11,6 +11,7 @@ Card {
     property string label
     property string unit
     property real value: 0
+    property bool known: true       // false: no reading, so a dash and the needle at rest
     property real minValue: 0
     property real maxValue: 100
     property real warnAbove: Number.POSITIVE_INFINITY
@@ -18,10 +19,10 @@ Card {
     property int decimals: 0
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
 
-    readonly property bool warning: value > warnAbove || value < warnBelow
+    readonly property bool warning: known && (value > warnAbove || value < warnBelow)
     // What's drawn eases toward the latest reading, so every look sweeps
     // smoothly between the ~5 Hz updates instead of jumping.
-    property real shown: value
+    property real shown: known ? value : minValue
     Behavior on shown { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     readonly property real frac: clamp((shown - minValue) / (maxValue - minValue))
     readonly property real warnFrac: isFinite(warnAbove)
@@ -247,8 +248,8 @@ Card {
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
             numeric: true
-            text: g.value.toFixed(g.decimals)
-            color: g.warning ? Theme.warn : Theme.text
+            text: g.known ? g.value.toFixed(g.decimals) : "—"
+            color: g.warning ? Theme.warn : g.known ? Theme.text : Theme.textDim
             font.pixelSize: g.look === "needle" ? Math.max(20, dial.width * 0.12)
                                                 : Math.max(28, dial.width * 0.22)
             font.weight: Theme.numWeight

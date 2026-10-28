@@ -137,12 +137,13 @@ def main():
 
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
-    vehicle = VehicleData()
+    settings = Settings()
+    vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
     obd = ObdReader()
     obd.reading.connect(vehicle.apply_obd)
     obd.lost.connect(vehicle.lost_obd)
-    settings = Settings()
+    obd.voltage.connect(vehicle.apply_voltage)
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio()
     spotify = SpotifyPlayer()

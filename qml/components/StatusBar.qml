@@ -74,7 +74,7 @@ Item {
         spacing: 24
 
         Rectangle {
-            visible: typeof vehicle !== "undefined" && !vehicle.live
+            visible: typeof vehicle !== "undefined" && vehicle.simulated
             anchors.verticalCenter: parent.verticalCenter
             width: demoText.width + 20; height: 30; radius: Theme.radius
             color: Theme.accentDim
@@ -88,13 +88,13 @@ Item {
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
-            text: Math.round(Units.temp(vehicle.coolant)) + Units.tempUnit
+            text: (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") + Units.tempUnit
             color: vehicle.warnings.indexOf("coolant") >= 0 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
-            text: vehicle.voltage.toFixed(1) + " V"
+            text: (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") + " V"
             color: vehicle.warnings.indexOf("voltage") >= 0 ? Theme.warn : Theme.textDim
             font.pixelSize: Theme.fontBody
         }

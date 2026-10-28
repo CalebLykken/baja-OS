@@ -149,18 +149,18 @@ Item {
 
         RowLayout {
             anchors { fill: parent; margins: 20 }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: Math.round(Units.speed(vehicle.speed)); unit: Units.speedUnit }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.gear || "N"; unit: "" }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: vehicle.engineKnown ? Math.round(Units.speed(vehicle.speed)) : "—"; unit: Units.speedUnit }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.engineKnown ? vehicle.gear || "N" : "—"; unit: "" }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                label: "Boost"; value: Units.boost(vehicle.boost).toFixed(Units.boostDecimals); unit: Units.boostUnit
+                label: "Boost"; value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"; unit: Units.boostUnit
                 warning: vehicle.warnings.indexOf("boost") >= 0
             }
             Readout {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
-                label: "Coolant"; value: Math.round(Units.temp(vehicle.coolant)); unit: Units.tempUnit
+                label: "Coolant"; value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"; unit: Units.tempUnit
                 warning: vehicle.warnings.indexOf("coolant") >= 0
             }
         }

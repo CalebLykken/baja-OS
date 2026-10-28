@@ -178,7 +178,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Boost"
-                    value: Units.boost(vehicle.boost).toFixed(Units.boostDecimals)
+                    value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
                     unit: Units.boostUnit
                     warning: vehicle.warnings.indexOf("boost") >= 0
                 }
@@ -186,7 +186,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Coolant"
-                    value: Math.round(Units.temp(vehicle.coolant))
+                    value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
                     unit: Units.tempUnit
                     warning: vehicle.warnings.indexOf("coolant") >= 0
                 }
@@ -194,7 +194,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Battery"
-                    value: vehicle.voltage.toFixed(1)
+                    value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
                     unit: "V"
                     warning: vehicle.warnings.indexOf("voltage") >= 0
                 }
@@ -202,7 +202,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     label: "Speed"
-                    value: Math.round(Units.speed(vehicle.speed))
+                    value: vehicle.engineKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
                     unit: Units.speedUnit
                 }
             }

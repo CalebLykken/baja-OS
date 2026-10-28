@@ -41,21 +41,29 @@ def truck():
 
 class FakeGps(QObject):
     """The bits of backend/gps.py that VehicleData reads: a fresh real fix
-    (`realFix`, `speed` in m/s) and `changed`."""
+    (`realFix`, `speed` in m/s), where the position is from (`source`) and
+    `changed`."""
     changed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
         self.realFix = False
         self.speed = 0.0
+        self.source = ""
 
     def fix(self, ms):
-        self.realFix, self.speed = True, ms
+        self.realFix, self.speed, self.source = True, ms, "gps"
         self.changed.emit()
 
     def lose(self):
-        """The receiver went quiet: stale, so no real fix and a speed of 0."""
+        """The receiver went quiet: stale, so no real fix and a speed of 0;
+        the last position is held, so it's still the receiver's."""
         self.realFix, self.speed = False, 0.0
+        self.changed.emit()
+
+    def demo(self, ms):
+        """The demo drive's position (no receiver)."""
+        self.realFix, self.speed, self.source = False, ms, "demo"
         self.changed.emit()
 
 
@@ -286,10 +294,20 @@ class SpeedTest(unittest.TestCase):
         v._speed = 25.0
         self.assertTrue(v.simulated)
         self.assertEqual((v.speed, v.speedKnown), (25.0, True))
+        gps.demo(30 * MPH)                      # the demo drive doesn't change that
+        self.assertEqual((v.speed, v.speedKnown), (25.0, True))
         gps.fix(50 * MPH)                       # a real fix beats it
         self.assertEqual(round(v.speed), 50)
+
+    def test_no_made_up_speed_once_the_receiver_has_had_a_position(self):
+        # A fresh install on the truck: the gauges simulate until the car
+        # first answers, but a tunnel mustn't turn a real 50 into a fake 25.
+        v, gps = self.vehicle(answered=False, fix=50 * MPH)
+        v._speed = 25.0
+        fired = count(v.speedKnownChanged)
         gps.lose()
-        self.assertEqual(v.speed, 25.0)
+        self.assertEqual((v.speed, v.speedKnown, len(fired)), (0.0, False, 1))
+        self.assertTrue(v.engineKnown)          # the rest of the simulation carries on
 
     def test_no_simulation_when_the_car_has_answered(self):
         v, gps = self.vehicle(answered=True)

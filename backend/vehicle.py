@@ -11,9 +11,9 @@ for VOLTS_MS and beats the simulation's. Gear isn't reported over OBD, so
 it's worked out from speed and RPM.
 
 `speed` is the one speed every page reads (mph): the car's while it answers,
-else a fresh GPS fix's, else the simulation (where that's wanted), else
-unknown (`speedKnown` False, a dash in the UI). The gear only ever comes
-from the car's own speed.
+else a fresh GPS fix's, else the simulation (where that's wanted, and only
+until the receiver has given a real position), else unknown (`speedKnown`
+False, a dash in the UI). The gear only ever comes from the car's own speed.
 
 LIMITS are the one place for the warning thresholds: the gauges draw their
 red zones from them, and `warnings` (from the car only, never the
@@ -98,6 +98,7 @@ class VehicleData(QObject):
         self._volts_real = False  # `_voltage` is the adapter's reading, current
         self._gps = None
         self._gps_mph = None      # the GPS's speed while its fix is real and fresh
+        self._gps_real = False    # the receiver has given a real position (fresh or held)
         self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._volts_stale = QTimer(self, singleShot=True, interval=VOLTS_MS, timeout=self._volts_aged)
         self._timer = QTimer(self)
@@ -120,6 +121,7 @@ class VehicleData(QObject):
         before, was = self._flags(), self.speed
         gps = self._gps
         self._gps_mph = gps.speed / MPH_TO_MS if gps.realFix else None
+        self._gps_real = gps.source == "gps"
         if self.speed != was or self._flags() != before:
             self._settle(before)
 
@@ -279,12 +281,14 @@ class VehicleData(QObject):
 
     def _speed_now(self):
         """The speed to show in mph, or None: the car's, else a real fresh
-        GPS fix's, else the simulation's (only where that's wanted)."""
+        GPS fix's, else the simulation's (only where that's wanted). Not the
+        simulation's once the receiver has had a real position: a real truck
+        on a fresh install would jump from 30 to a made-up 47 in a tunnel."""
         if self._live:
             return self._speed
         if self._gps_mph is not None:
             return self._gps_mph
-        return self._speed if self.simulated else None
+        return self._speed if self.simulated and not self._gps_real else None
 
     @pyqtProperty(float, notify=changed)
     def speed(self):

@@ -31,11 +31,20 @@ def _v(variant):
     return variant.get("data") if isinstance(variant, dict) and "type" in variant else variant
 
 
-def parse_objects(objects):
-    """Reduce BlueZ's GetManagedObjects data to what the UI needs."""
+def _pick_player(players, prefer):
+    """With two phones connected there are two players: the one that is
+    playing wins; if both (or neither) are, keep the one used last."""
+    playing = [p for p in players if p["status"] == "playing"]
+    pool = playing or players
+    return next((p for p in pool if p["path"] == prefer), pool[-1]) if pool else None
+
+
+def parse_objects(objects, prefer=None):
+    """Reduce BlueZ's GetManagedObjects data to what the UI needs. `prefer` is
+    the path of the player used last, to stay on it when nothing says otherwise."""
     state = {"adapter": None, "discoverable": False, "device": None, "player": None,
              "to_trust": [], "transport": None, "volume": None, "paired": []}
-    devices = {}
+    devices, players, transports = {}, [], {}
     for path, ifaces in objects.items():
         if "org.bluez.Adapter1" in ifaces and state["adapter"] is None:
             a = ifaces["org.bluez.Adapter1"]
@@ -52,12 +61,11 @@ def parse_objects(objects):
             t = ifaces["org.bluez.MediaTransport1"]
             vol = _v(t.get("Volume"))
             if vol is not None:
-                state["transport"] = path
-                state["volume"] = int(vol)
+                transports[_v(t.get("Device"))] = (path, int(vol))
         if "org.bluez.MediaPlayer1" in ifaces:
             p = ifaces["org.bluez.MediaPlayer1"]
             track = _v(p.get("Track")) or {}
-            state["player"] = {
+            players.append({
                 "path": path,
                 "device": _v(p.get("Device")),
                 "status": _v(p.get("Status")) or "stopped",
@@ -66,7 +74,16 @@ def parse_objects(objects):
                 "artist": _v(track.get("Artist")) or "",
                 "album": _v(track.get("Album")) or "",
                 "duration_ms": int(_v(track.get("Duration")) or 0),
-            }
+            })
+    state["player"] = _pick_player(players, prefer)
+    # The volume is the chosen phone's own, or none: another phone's would
+    # move the passenger's volume. With no player at all, any transport.
+    if state["player"]:
+        chosen = transports.get(state["player"]["device"])
+    else:
+        chosen = list(transports.values())[-1] if transports else None
+    if chosen:
+        state["transport"], state["volume"] = chosen
     connected = [(p, d) for p, d in devices.items() if _v(d.get("Connected"))]
     state["paired"] = sorted(
         ({"path": p, "name": _v(d.get("Alias")) or _v(d.get("Name")) or _v(d.get("Address")) or "Device",
@@ -136,7 +153,7 @@ class BluetoothAudio(QObject):
                 data = json.loads(out)["data"][0] if out else {}
             except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
                 data = {}                    # no BlueZ, or nothing usable from it
-            state = parse_objects(data)
+            state = parse_objects(data, (self._player or {}).get("path"))
             # Trust paired phones so they reconnect by themselves next time.
             for path in state["to_trust"]:
                 try:

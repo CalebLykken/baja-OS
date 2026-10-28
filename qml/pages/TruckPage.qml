@@ -149,7 +149,7 @@ Item {
 
         RowLayout {
             anchors { fill: parent; margins: 20 }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: vehicle.engineKnown ? Math.round(Units.speed(vehicle.speed)) : "—"; unit: Units.speedUnit }
+            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"; unit: Units.speedUnit }
             Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.engineKnown ? vehicle.gear || "N" : "—"; unit: "" }
             Readout {
                 Layout.fillWidth: true

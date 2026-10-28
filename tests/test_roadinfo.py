@@ -5,7 +5,10 @@ receiver reports, with a clock that's just a number.
     python3 -m unittest tests.test_roadinfo
 """
 
+import io
+import json
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
@@ -76,6 +79,60 @@ class TraceTest(unittest.TestCase):
         self.assertTrue(self.gps.stale)
         self.info._on_fix()
         self.assertEqual(self.trace(), [0])
+
+
+class InlineThread:
+    """Stands in for threading.Thread: start() runs the work on the spot."""
+
+    def __init__(self, target=None, name=None, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+class MatchTest(unittest.TestCase):
+    """Whatever the router answers, the match comes back, so the next one
+    can be asked for (a stuck _busy meant no speed limit until a restart)."""
+
+    def setUp(self):
+        inline = mock.patch("backend.roadinfo.threading", SimpleNamespace(Thread=InlineThread))
+        inline.start()
+        self.addCleanup(inline.stop)
+        self.now = 100.0
+        clock = mock.patch("backend.roadinfo.time.monotonic", lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.gps = Gps()
+        self.info = RoadInfo(self.gps)
+        for n in range(4):
+            self.now += 1.0
+            self.gps._apply(real(n))
+
+    def match(self, body):
+        def urlopen(req, timeout):
+            if isinstance(body, Exception):
+                raise body
+            return io.BytesIO(body)
+        with mock.patch("backend.roadinfo.urllib.request.urlopen", urlopen):
+            self.info._check()
+        self.assertFalse(self.info._busy)
+        return self.info.speedLimit, self.info.roadName
+
+    def test_a_match(self):
+        edges = {"edges": [{"speed_limit": 50, "names": ["Main St"]}]}
+        self.assertEqual(self.match(json.dumps(edges).encode()), (50, "Main St"))
+
+    def test_answers_that_arent_the_usual_shape_keep_the_last_match(self):
+        self.match(json.dumps({"edges": [{"speed_limit": 50, "names": ["Main St"]}]}).encode())
+        for body in (b"[1]", b'"x"', b"null", b'{"edges": [5]}', b'{"edges": {"a": 1}}',
+                     b'{"edges": [{"speed_limit": "fast"}]}', b'{"edges": [{"names": {"a": 1}}]}',
+                     b"<html>", OSError("refused")):
+            with self.subTest(body=body):
+                self.assertEqual(self.match(body), (50, "Main St"))
+
+    def test_a_name_that_isnt_text(self):
+        self.assertEqual(self.match(b'{"edges": [{"speed_limit": 30, "names": [null]}]}'), (30, "None"))
 
 
 if __name__ == "__main__":

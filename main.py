@@ -151,7 +151,8 @@ def main():
     settings = Settings()
     vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
-    obd = ObdReader()
+    obd = ObdReader(baro=settings.get("baro"))
+    obd.baro.connect(lambda kpa: settings.set("baro", kpa))   # kept for a restart with the engine running
     obd.reading.connect(vehicle.apply_obd)
     obd.lost.connect(vehicle.lost_obd)
     obd.voltage.connect(vehicle.apply_voltage)
@@ -187,6 +188,7 @@ def main():
     # A simulated drive around Seattle while there's no GPS receiver and no
     # engine data (a Mac, or a Pi on the bench).
     gps = Gps(vehicle, demo=True)
+    vehicle.set_gps(gps)          # its speed shows when the car isn't answering
     routing = Router(gps, settings)
     road = RoadInfo(gps)
     voice = Voice(settings)

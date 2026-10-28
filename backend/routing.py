@@ -252,7 +252,7 @@ class Router(QObject):
     progressChanged = pyqtSignal()  # where the truck is along the route
     speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
     resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
-    _got = pyqtSignal(object, str, str, bool)   # response, error, destination name, reroute
+    _got = pyqtSignal(object, str, str, bool, int)   # response, error, destination name, reroute, request number
     _status = pyqtSignal(bool)
 
     def __init__(self, gps, settings=None, parent=None):
@@ -265,6 +265,7 @@ class Router(QObject):
         self._route = None
         self._dest = None             # (name, lon, lat)
         self._computing = False
+        self._gen = 0                 # number of the latest request; older answers are dropped
         self._error = ""
         self._off_count = 0
         self._off_since = 0.0         # when the current run of off-route fixes began
@@ -335,7 +336,10 @@ class Router(QObject):
 
     # ---- asking for a route ---------------------------------------------------------
     def _request(self, name, lon, lat, reroute=False):
+        self._gen += 1              # any answer still on its way is out of date now
+        gen = self._gen
         if not self._gps.hasFix:
+            self._computing = False
             self._error = "Waiting for the truck's position"
             self.changed.emit()
             return
@@ -353,28 +357,45 @@ class Router(QObject):
         self.changed.emit()
 
         def work():
+            data, error = None, "Couldn't get a route"
             try:
                 req = urllib.request.Request(ROUTER + "/route", data=body,
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=20) as r:
-                    data = json.loads(r.read())
-                safe_emit(self, "_got", data, "", name, reroute)
+                    data, error = json.loads(r.read()), ""
             except urllib.error.HTTPError as e:
                 try:
-                    msg = json.loads(e.read()).get("error", "")
-                except ValueError:
-                    msg = ""
-                safe_emit(self, "_got", None, msg or "No route found", name, reroute)
+                    reply = json.loads(e.read())
+                except (OSError, ValueError):
+                    reply = None
+                msg = reply.get("error") if isinstance(reply, dict) else None
+                error = msg if isinstance(msg, str) and msg else "No route found"
             except (OSError, urllib.error.URLError, ValueError):
-                safe_emit(self, "_got", None, "Routing isn't running", name, reroute)
+                error = "Routing isn't running"
+            finally:
+                # Always, or _computing would never clear. Anything unexpected
+                # is logged by threading.excepthook (main.py) on the way out.
+                safe_emit(self, "_got", None if error else data, error, name, reroute, gen)
         threading.Thread(target=work, name="route", daemon=True).start()
 
-    def _on_route(self, data, error, name, reroute):
+    def _on_route(self, data, error, name, reroute, gen):
+        if gen != self._gen:
+            return      # cancelled, or a newer place or reroute was asked for since
         self._computing = False
         resumed = None if reroute else self._resuming
         if not reroute:
             self._resuming = None
-        if data is None:
+        route = None
+        if not error:
+            try:
+                route = Route(data, name)
+                if not isinstance(route.maneuvers, list) or not route.maneuvers:
+                    raise ValueError("no maneuvers")
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                # Not a route this code can follow (a changed or broken router).
+                print(f"Maps: couldn't read the route to {name}")
+                route, error = None, "Couldn't read the route"
+        if route is None:
             self._error = ("No road route to there" if "No path" in error or "No suitable" in error
                            else error)
             if resumed:
@@ -386,7 +407,7 @@ class Router(QObject):
                 self._route = None
             self.changed.emit()
             return
-        self._route = Route(data, name)
+        self._route = route
         self._arrived = False
         self._off_count = 0
         self._spoken = set()
@@ -472,6 +493,7 @@ class Router(QObject):
         self._dest = None
         self._error = ""
         self._computing = False
+        self._gen += 1              # an answer still on its way is for a route nobody wants
         self._forget()
         self.changed.emit()
         self.progressChanged.emit()

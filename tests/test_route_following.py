@@ -13,7 +13,7 @@ import unittest
 from PyQt6.QtCore import QCoreApplication
 
 from backend.routing import JUMP_FIXES, Route, Router
-from tests.test_routing import FakeGps, polyline6
+from tests.test_routing import FakeGps, answer, polyline6
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -192,7 +192,7 @@ class FollowingTest(unittest.TestCase):
         self.router.speak.connect(self.said.append)
         self.router._request = lambda *a, **k: None
         self.router.routeTo("Shop", *ll(*at))
-        self.router._on_route(data, "", "Shop", False)
+        answer(self.router, data, "", "Shop", False)
         self.router.go()
 
     def fix(self, e, n, heading, speed=10.0):

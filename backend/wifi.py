@@ -116,6 +116,7 @@ class Wifi(QObject):
     _scanned = pyqtSignal(object, object, bool)      # networks, saved, canControl
     _polled = pyqtSignal(object)                      # (saved, canControl), or None if nmcli failed
     _finished = pyqtSignal(str, bool)                 # message, ok
+    passwordNeeded = pyqtSignal(str)                  # a saved network's password is no longer right: ask for it
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -126,6 +127,7 @@ class Wifi(QObject):
         self._control = False
         self._busy = ""            # SSID being joined
         self._message = ""
+        self._ask_password = ""      # set by a join worker that hit a wrong saved password
         self._scanning = False
         self._polling = False
         self._tether = str(settings.get("tethering", "true")) == "true"
@@ -242,7 +244,10 @@ class Wifi(QObject):
 
     def _on_finished(self, message, ok):
         self._busy, self._message = "", message
+        ask, self._ask_password = self._ask_password, ""
         self.changed.emit()
+        if ask and not ok:
+            self.passwordNeeded.emit(ask)
         if self._scan_timer.isActive():
             self.refresh()           # the Wi-Fi settings are still open: show the new state
         else:
@@ -256,7 +261,11 @@ class Wifi(QObject):
         def work():
             if saved and not password:
                 rc, _, err = nmcli("connection", "up", "uuid", saved["uuid"], timeout=40)
-                return (f"Connected to {ssid}", True) if rc == 0 else (self._why(err, ssid), False)
+                if rc == 0:
+                    return f"Connected to {ssid}", True
+                if self._wrong_password(err):
+                    self._ask_password = ssid     # the hotspot's password changed: let the page ask
+                return self._why(err, ssid), False
             if saved:                       # new password for a saved network
                 nmcli("connection", "delete", "uuid", saved["uuid"])
             # --ask reads the password from stdin rather than the command line.
@@ -281,9 +290,14 @@ class Wifi(QObject):
         self._run(ssid, work, f"Couldn't forget {ssid}")
 
     @staticmethod
-    def _why(err, ssid):
+    def _wrong_password(err):
         e = err.lower()
-        if "secrets were required" in e or "password" in e or "802-1x" in e:
+        return "secrets were required" in e or "password" in e or "802-1x" in e
+
+    @classmethod
+    def _why(cls, err, ssid):
+        e = err.lower()
+        if cls._wrong_password(err):
             return f"Wrong password for {ssid}"
         if "no network with ssid" in e or "not found" in e:
             return f"Can't see {ssid}; is the hotspot on?"

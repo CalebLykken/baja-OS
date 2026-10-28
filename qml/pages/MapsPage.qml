@@ -29,6 +29,7 @@ Item {
     property var map: null              // the dashboard's one map engine (Main.qml)
     property bool mapReady: false
     property string problem: ""
+    readonly property bool crashing: problem === "The map keeps crashing"   // MapView says it
     readonly property alias mapSlot: slot   // where Main.qml puts the map while this page shows
     readonly property real mapInsetLeft: panelShown || navigating ? panelWidth + 16 : 0
     onVisibleChanged: {
@@ -36,7 +37,7 @@ Item {
         else typing = false
     }
     onMapReadyChanged: {
-        if (mapReady && pending) { choose(pending); pending = null }
+        if (mapReady && pending) { var p = pending; pending = null; receive(p) }
         else if (mapReady && panel === "place" && place) map.call("showPlace(" + place.lon + "," + place.lat + ")")
     }
 
@@ -164,11 +165,29 @@ Item {
         if (hasRouting && routing.available && hasFix) routing.routeTo(p.name, p.lon, p.lat)
     }
     // A destination sent from the phone (Settings > Map > Send from phone).
+    // While guiding it's offered, not taken: choose() would end the route.
     function receive(p) {
-        if (mapReady) choose(p)
+        if (navigating) offered = p
+        else if (mapReady) choose(p)
         else pending = p
     }
     property var pending: null
+    property var offered: null          // a phone place waiting for "Go there instead" or dismiss
+    function takeOffer() {
+        var p = offered
+        offered = null
+        // Guidance ends here, not in routeTo: choose() doesn't ask for a
+        // route without the router or a fix, and the old one would carry on.
+        routing.stop()
+        if (mapReady) choose(p)
+        else pending = p
+    }
+    onNavigatingChanged: if (!navigating && offered) {
+        // The route ended meanwhile: the place is previewed as it would have been.
+        var p = offered
+        offered = null
+        receive(p)
+    }
     // After a restart the router works out the route that was on again
     // (backend/routing.py). Guidance that had started just carries on; a
     // place that was only being looked at comes back here, ready for Go.
@@ -192,6 +211,7 @@ Item {
         panel = ""
     }
     function endRoute() {
+        offered = null                  // ended on purpose: not a cue to preview the offer
         routing.stop()
         place = null
         map.call("clearPlace()")
@@ -245,6 +265,7 @@ Item {
                 font.weight: Font.DemiBold
                 text: !page.hasMaps || !maps.webEngine ? "The map needs Qt WebEngine"
                       : !maps.ready ? "No map installed yet"
+                      : page.crashing ? page.problem
                       : page.problem !== "" ? "The map didn't load"
                       : "Loading the map"
             }
@@ -256,6 +277,7 @@ Item {
                 font.pixelSize: Theme.fontBody
                 text: !page.hasMaps || !maps.webEngine ? "Run deploy/setup-pi.sh on the Pi to install it"
                       : !maps.ready ? "Run deploy/maps/install-map.sh on the Pi to download the Seattle area"
+                      : page.crashing ? "Trying again in a little while"
                       : page.problem !== "" ? page.problem
                       : maps.region
             }
@@ -774,7 +796,7 @@ Item {
             readonly property int limitKph: typeof road !== "undefined" ? road.speedLimit : 0
             // Shown in the local style: US sign in mph, round sign in km/h.
             readonly property int limit: Units.metric ? limitKph : Math.round(limitKph / 1.609344 / 5) * 5
-            readonly property real speedNow: Units.speed(gps.speed / 0.44704)
+            readonly property real speedNow: Units.speed(vehicle.speed)   // the same speed as Home
             readonly property bool over: limit > 0 && speedNow > limit + (Units.metric ? 8 : 5)
 
             Rectangle {                                   // US: SPEED LIMIT
@@ -801,7 +823,6 @@ Item {
                 Text { anchors.centerIn: parent; text: parent.parent.limit; font.pixelSize: 52; font.bold: true; color: "black" }
             }
             Sheet {                                       // speed now
-                visible: !gps.stale                       // not known while the signal is lost
                 width: 112
                 height: 108
                 color: parent.over ? page.cRed : page.cPanel
@@ -810,7 +831,7 @@ Item {
                     MapLabel {
                         anchors.horizontalCenter: parent.horizontalCenter
                         numeric: true
-                        text: Math.round(parent.parent.parent.speedNow)
+                        text: vehicle.speedKnown ? Math.round(parent.parent.parent.speedNow) : "—"
                         color: parent.parent.parent.over ? "white" : page.cText
                         font.pixelSize: Theme.fontReadout
                     }
@@ -849,6 +870,58 @@ Item {
                     lit: page.following
                     divider: false
                     onHit: page.map.call("recenter()")
+                }
+            }
+        }
+
+        // A place sent from the phone while guiding: switch to it, or keep going.
+        Sheet {
+            visible: page.offered !== null && page.navigating
+            anchors { left: parent.left; leftMargin: page.panelWidth + 32      // between the turn card and the keys
+                      bottom: parent.bottom; bottomMargin: 130 }
+            width: parent.width - page.panelWidth - 32 - 140
+            height: 190
+            Column {
+                anchors { fill: parent; margins: 20 }
+                spacing: 12
+                MapLabel {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: page.offered ? page.offered.name : ""
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                RowLayout {
+                    width: parent.width
+                    height: 90
+                    spacing: 12
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: thereTap.pressed ? Qt.darker(page.cBlue, 1.2) : page.cBlue
+                        MapLabel {
+                            anchors.centerIn: parent
+                            text: "Go there instead"
+                            color: "white"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.Bold
+                        }
+                        TapHandler { id: thereTap; onTapped: page.takeOffer() }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 200
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: keepTap.pressed ? page.cLine : page.cPanelHi
+                        MapLabel {
+                            anchors.centerIn: parent
+                            text: "Keep going"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        TapHandler { id: keepTap; onTapped: page.offered = null }
+                    }
                 }
             }
         }

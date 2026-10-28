@@ -97,37 +97,49 @@ class _Handler(BaseHTTPRequestHandler):
         if target is None:
             self.send_error(404)
             return
-        size = target.stat().st_size
-        start, end, status = 0, size - 1, 200
-
-        header = self.headers.get("Range")
-        if header:
-            m = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip())
-            if m and (m[1] or m[2]):
-                if m[1]:
-                    start = int(m[1])
-                    end = min(int(m[2]), size - 1) if m[2] else size - 1
-                else:                       # "bytes=-N": the last N bytes
-                    start = max(0, size - int(m[2]))
-                status = 206
-            if not m or start > end:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{size}")
-                self.end_headers()
-                return
-
-        self.send_response(status)
-        self.send_header("Content-Type", TYPES.get(target.suffix, "application/octet-stream"))
-        self.send_header("Content-Length", str(end - start + 1))
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Cache-Control", "no-cache")   # deploys and map updates replace files
-        if status == 206:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.end_headers()
-        if not send_body:
-            return
         try:
-            with open(target, "rb") as f:
+            f = open(target, "rb")
+        except OSError:
+            self.send_error(404)
+            return
+        with f:
+            # Size and tag from the open file, not the path: a map update can
+            # rename a new file over it between the two.
+            info = os.fstat(f.fileno())
+            size = info.st_size
+            start, end, status = 0, size - 1, 200
+
+            header = self.headers.get("Range")
+            if header:
+                m = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip())
+                if m and (m[1] or m[2]):
+                    if m[1]:
+                        start = int(m[1])
+                        end = min(int(m[2]), size - 1) if m[2] else size - 1
+                    else:                       # "bytes=-N": the last N bytes
+                        start = max(0, size - int(m[2]))
+                    status = 206
+                if not m or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+
+            self.send_response(status)
+            self.send_header("Content-Type", TYPES.get(target.suffix, "application/octet-stream"))
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-cache")   # deploys and map updates replace files
+            # A map update renames a new file over this one. The tag changes
+            # with it, so the page's pmtiles reader starts over instead of
+            # reading the new file at the old file's offsets.
+            self.send_header("ETag", f'"{info.st_ino:x}-{info.st_size:x}-{info.st_mtime_ns:x}"')
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if not send_body:
+                return
+            try:
                 f.seek(start)
                 left = end - start + 1
                 while left > 0:
@@ -136,8 +148,8 @@ class _Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
                     left -= len(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass                            # the page moved on; nothing to do
+            except (BrokenPipeError, ConnectionResetError):
+                pass                            # the page moved on; nothing to do
 
 
 def make_server(data_dir, port=0):

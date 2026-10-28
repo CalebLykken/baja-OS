@@ -70,11 +70,13 @@ class RoadInfo(QObject):
                     edges = json.loads(r.read()).get("edges") or []
                 if edges:
                     last = edges[-1]                 # the road the truck is on now
-                    limit = int(last.get("speed_limit") or 0)
-                    name = (last.get("names") or [""])[0]
+                    limit, name = int(last.get("speed_limit") or 0), str((last.get("names") or [""])[0])
             except (OSError, urllib.error.URLError, ValueError):
                 pass                                  # no match this time: keep the last one
-            safe_emit(self, "_matched", limit, name)
+            except (AttributeError, TypeError, KeyError, IndexError):
+                pass                                  # an answer that isn't the usual shape: the same
+            finally:
+                safe_emit(self, "_matched", limit, name)    # always, or _busy would never clear
         threading.Thread(target=work, name="road-match", daemon=True).start()
 
     def _on_matched(self, limit, name):

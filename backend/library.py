@@ -14,20 +14,18 @@ it was given is kept for the next run that has music.
 """
 
 import functools
-import hashlib
 import re
-import tempfile
 from pathlib import Path
 
 import mutagen
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtMultimedia import QMediaDevices
 
+from backend import artcache
 from backend.gapless import GaplessEngine
 
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
-ART_CACHE = Path(tempfile.gettempdir()) / "baja-art"
 NO_SONG = {"title": "", "artist": "", "art": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
@@ -88,10 +86,7 @@ def _extract_art(path, audio):
         data = audio.pictures[0].data
     if not data:
         return ""
-    ART_CACHE.mkdir(exist_ok=True)
-    out = ART_CACHE / (hashlib.sha1(str(path).encode()).hexdigest() + ".img")
-    if not out.exists():
-        out.write_bytes(data)
+    out = artcache.store(artcache.digest(data) + ".img", data)    # the album's tracks share one
     return QUrl.fromLocalFile(str(out)).toString()
 
 

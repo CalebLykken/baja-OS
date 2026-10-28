@@ -176,8 +176,11 @@ Item {
     function takeOffer() {
         var p = offered
         offered = null
-        if (mapReady) choose(p)         // routeTo ends the current guidance
-        else { routing.stop(); pending = p }
+        // Guidance ends here, not in routeTo: choose() doesn't ask for a
+        // route without the router or a fix, and the old one would carry on.
+        routing.stop()
+        if (mapReady) choose(p)
+        else pending = p
     }
     onNavigatingChanged: if (!navigating && offered) {
         // The route ended meanwhile: the place is previewed as it would have been.
@@ -208,6 +211,7 @@ Item {
         panel = ""
     }
     function endRoute() {
+        offered = null                  // ended on purpose: not a cue to preview the offer
         routing.stop()
         place = null
         map.call("clearPlace()")

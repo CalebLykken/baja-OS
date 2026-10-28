@@ -37,7 +37,7 @@ Item {
         else typing = false
     }
     onMapReadyChanged: {
-        if (mapReady && pending) { choose(pending); pending = null }
+        if (mapReady && pending) { var p = pending; pending = null; receive(p) }
         else if (mapReady && panel === "place" && place) map.call("showPlace(" + place.lon + "," + place.lat + ")")
     }
 
@@ -165,11 +165,26 @@ Item {
         if (hasRouting && routing.available && hasFix) routing.routeTo(p.name, p.lon, p.lat)
     }
     // A destination sent from the phone (Settings > Map > Send from phone).
+    // While guiding it's offered, not taken: choose() would end the route.
     function receive(p) {
-        if (mapReady) choose(p)
+        if (navigating) offered = p
+        else if (mapReady) choose(p)
         else pending = p
     }
     property var pending: null
+    property var offered: null          // a phone place waiting for "Go there instead" or dismiss
+    function takeOffer() {
+        var p = offered
+        offered = null
+        if (mapReady) choose(p)         // routeTo ends the current guidance
+        else { routing.stop(); pending = p }
+    }
+    onNavigatingChanged: if (!navigating && offered) {
+        // The route ended meanwhile: the place is previewed as it would have been.
+        var p = offered
+        offered = null
+        receive(p)
+    }
     // After a restart the router works out the route that was on again
     // (backend/routing.py). Guidance that had started just carries on; a
     // place that was only being looked at comes back here, ready for Go.
@@ -851,6 +866,58 @@ Item {
                     lit: page.following
                     divider: false
                     onHit: page.map.call("recenter()")
+                }
+            }
+        }
+
+        // A place sent from the phone while guiding: switch to it, or keep going.
+        Sheet {
+            visible: page.offered !== null && page.navigating
+            anchors { left: parent.left; leftMargin: page.panelWidth + 32      // between the turn card and the keys
+                      bottom: parent.bottom; bottomMargin: 130 }
+            width: parent.width - page.panelWidth - 32 - 140
+            height: 190
+            Column {
+                anchors { fill: parent; margins: 20 }
+                spacing: 12
+                MapLabel {
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: page.offered ? page.offered.name : ""
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                RowLayout {
+                    width: parent.width
+                    height: 90
+                    spacing: 12
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: thereTap.pressed ? Qt.darker(page.cBlue, 1.2) : page.cBlue
+                        MapLabel {
+                            anchors.centerIn: parent
+                            text: "Go there instead"
+                            color: "white"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.Bold
+                        }
+                        TapHandler { id: thereTap; onTapped: page.takeOffer() }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 200
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: keepTap.pressed ? page.cLine : page.cPanelHi
+                        MapLabel {
+                            anchors.centerIn: parent
+                            text: "Keep going"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        TapHandler { id: keepTap; onTapped: page.offered = null }
+                    }
                 }
             }
         }

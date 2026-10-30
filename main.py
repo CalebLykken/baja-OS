@@ -249,6 +249,7 @@ def main():
     watchdog = Watchdog()
     watchdog.start()
     code = app.exec()
+    errorlog.log.flush()          # repeats still being counted go to the journal now
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
     for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):

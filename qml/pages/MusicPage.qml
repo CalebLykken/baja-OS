@@ -133,13 +133,15 @@ Item {
                     IconButton { icon: "remove"; size: 60; onClicked: media.volumeDown() }
                     LevelBar {
                         Layout.fillWidth: true
+                        opacity: media.muted ? 0.35 : 1
                         value: media.volume / 100
                         onMoved: (v) => media.setVolume(Math.round(v * 100))
                     }
                     Label {
-                        Layout.preferredWidth: 44
+                        Layout.preferredWidth: 64
                         horizontalAlignment: Text.AlignRight
-                        text: media.volume
+                        color: media.muted ? Theme.warn : Theme.text
+                        text: media.muted ? "Mute" : media.volume
                         font.family: Theme.numFont
                         font.pixelSize: Theme.fontBody
                         font.weight: Font.DemiBold

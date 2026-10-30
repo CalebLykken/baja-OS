@@ -54,6 +54,7 @@ FADE_IN_MS = 400
 FADE_STEP_MS = 30
 START_WAIT_MS = 120
 SETTLE_MS = 250            # after pausing, before the volume goes back up
+MUTE_MS = 150              # the knob's mute ramps like this, so it doesn't click
 FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
 SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
 
@@ -139,6 +140,7 @@ class MediaHub(QObject):
 
     maxVolumeChanged = pyqtSignal()
     modesChanged = pyqtSignal()
+    mutedChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
@@ -167,6 +169,9 @@ class MediaHub(QObject):
         self._fade_step = 0.0
         self._after_fade = None
         self._pausing = self._resuming = False
+        self._muted = False              # the knob's long press: silent, but still playing
+        self._mute_gain = 1.0            # 0-1 on top of the volume, ramping to 0 or 1
+        self._mute_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._mute_tick)
         self._fade_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._fade_tick)
         self._give_up = QTimer(self, singleShot=True, interval=FADE_GIVE_UP_MS,
                                timeout=self._give_up_waiting)
@@ -321,10 +326,27 @@ class MediaHub(QObject):
         if self._system_volume:
             level = ceiling if self._remote_volume else self._volume / 100 * ceiling
             with self._level_lock:
-                self._pending_level = level * self._fade
+                self._pending_level = level * self._fade * self._mute_gain
             self._level_wake.set()
         else:
-            self._sources["local"].setVolume(round(self._volume * ceiling))
+            self._sources["local"].setVolume(round(self._volume * ceiling * self._mute_gain))
+
+    def _set_muted(self, on):
+        if on == self._muted:
+            return
+        self._muted = on
+        self._mute_timer.start()
+        self.mutedChanged.emit()
+
+    def _mute_tick(self):
+        step = FADE_STEP_MS / MUTE_MS
+        if self._muted:
+            self._mute_gain = max(0.0, self._mute_gain - step)
+        else:
+            self._mute_gain = min(1.0, self._mute_gain + step)
+        self._apply_volume()
+        if self._mute_gain == (0.0 if self._muted else 1.0):
+            self._mute_timer.stop()
 
     def _level_writer(self):
         while True:
@@ -527,6 +549,15 @@ class MediaHub(QObject):
         """Ceiling on the Pi's output, 30-100 (% of full)."""
         return self._max
 
+    @pyqtProperty(bool, notify=mutedChanged)
+    def muted(self):
+        """The knob's long press: silent, but still playing. Any volume change ends it."""
+        return self._muted
+
+    @pyqtSlot()
+    def toggleMute(self):
+        self._set_muted(not self._muted)
+
     @pyqtSlot(int)
     def setMaxVolume(self, value):
         value = max(30, min(100, int(value)))
@@ -595,6 +626,7 @@ class MediaHub(QObject):
     @pyqtSlot(int)
     def setVolume(self, value):
         value = max(0, min(100, int(value)))
+        self._set_muted(False)
         if self._remote_volume:
             self._active.setVolume(value)
             return

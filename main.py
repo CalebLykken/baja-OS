@@ -36,7 +36,7 @@ from backend.routing import Router
 from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
-from backend.knob import Knob
+from backend.knob import Gestures, Knob, double_press
 from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
@@ -165,10 +165,17 @@ def main():
                      max_volume=settings.get_int("maxVolume", 100), settings=settings)
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
-    # The dash knob: turn for volume, press to play or pause.
+    # The dash knob: turn for volume; press to play or pause (a beat late, in
+    # case it's a double); double press for the next song, or while navigating
+    # the last direction again; hold to mute.
     knob = Knob()
+    gestures = Gestures()
     knob.turned.connect(lambda step: media.volumeUp() if step > 0 else media.volumeDown())
-    knob.pressed.connect(media.togglePlay)
+    knob.pressed.connect(gestures.down)
+    knob.released.connect(gestures.up)
+    gestures.single.connect(media.togglePlay)
+    gestures.double.connect(lambda: double_press(routing, media))
+    gestures.long.connect(media.toggleMute)
     # Day/night brightness follows the sun where the truck is (Seattle
     # until the GPS has a position).
     display = Display(settings, location=lambda: (gps.lat, gps.lon) if gps.hasFix else (47.6062, -122.3321))

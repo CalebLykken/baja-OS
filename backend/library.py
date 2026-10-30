@@ -271,12 +271,13 @@ class LibraryPlayer(QObject):
         """The play order for the queue as it is, the current song first."""
         self._order = play_order(len(self._queue), self._index if self._queue else 0, self._shuffle)
 
-    def _after(self, index):
+    def _after(self, index, failed=False):
         """The song that follows `index` by itself (also called on the audio
-        thread, so it only reads): the same one on repeat one, the next in
-        order, and at the end the first again on repeat all, else None."""
+        thread, so it only reads): the same one on repeat one (unless it
+        won't play: then the next, round), the next in order, and at the end
+        the first again on repeat all, else None."""
         if self._repeat == "one" and 0 <= index < len(self._queue):
-            return index
+            return step(self._order, index, 1, True) if failed else index
         return step(self._order, index, 1, self._repeat == "all")
 
     def state(self):
@@ -307,8 +308,10 @@ class LibraryPlayer(QObject):
         """Repeat is off and the last song is over: back to the first, paused."""
         if not self._queue:
             return
-        self._reorder()
-        self._index = self._order[0]
+        # A shuffle starts again from any song, not the one that just finished.
+        first = random.randrange(len(self._queue)) if self._shuffle else 0
+        self._order = play_order(len(self._queue), first, self._shuffle)
+        self._index = first
         self._engine.play_from(self._index, play=False)
         self.trackChanged.emit()
         self.positionChanged.emit()

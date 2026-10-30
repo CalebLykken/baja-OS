@@ -407,11 +407,39 @@ class ModesTest(unittest.TestCase):
             self.engine._out.pull(48000 * 4)
             if not self.queued():
                 break
-        spin(300)
+        spin(1500)                                            # until the last of it would be heard
         self.assertTrue(ended)
         self.assertFalse(self.player.playing)
         self.assertEqual(self.player.index, 0)                # back at the first, paused
         self.assertEqual(self.player.title, "Blue 1")
+
+    def test_after_the_end_a_shuffle_starts_from_another_song(self):
+        self.player.toggleShuffle()
+        self.player.cycleRepeat()
+        self.player.cycleRepeat()                             # off
+        self.player.playIndex(3)
+        with mock.patch.object(library.random, "randrange", return_value=1):
+            self.player._ended()
+        self.assertEqual((self.player.index, self.player._order[0]), (1, 1))
+        self.assertEqual(sorted(self.player._order), [0, 1, 2, 3])
+        self.assertFalse(self.player.playing)
+
+    def test_repeat_one_on_a_song_that_will_not_play_moves_on(self):
+        self.player.cycleRepeat()                             # one
+        self.assertEqual(self.player._after(1), 1)
+        self.assertEqual(self.player._after(1, failed=True), 2)
+        self.assertEqual(self.player._after(3, failed=True), 0)
+
+    def test_the_engine_does_not_loop_on_a_missing_file(self):
+        os.remove(self.player._queue[1]["path"])
+        self.player.cycleRepeat()                             # one
+        self.player.restore({"album": None, "path": self.player._queue[1]["path"],
+                             "index": 1, "position": 0}, play=True)
+        self.player.start()
+        spin(800)
+        self.assertIn(1, self.engine._bad)
+        self.assertNotIn(self.queued()[-1], (1,))             # not lined up after itself
+        self.assertEqual(self.queued()[-1], 2)
 
     def test_repeat_one_goes_round_the_same_song(self):
         self.player.cycleRepeat()                             # one

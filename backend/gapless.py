@@ -167,7 +167,7 @@ class _Output(QObject):
                 elif song.done:                 # its end: straight into the next
                     e._songs.popleft()
                     if not e._songs:
-                        nxt = e._after(song.index)
+                        nxt = e._next(song.index)
                         if nxt is not None:
                             e._songs.append(_Song(nxt, song.gen))
                         else:
@@ -214,12 +214,14 @@ class GaplessEngine(QObject):
     _toStop = pyqtSignal()
 
     def __init__(self, path_of, count, device, parent=None, after=None):
-        """`after(i)` is the song to play after song i, or None to stop (it
-        runs on the audio thread, so it must only read); by default the
-        next one, round to the first at the end."""
+        """`after(i, failed)` is the song to play after song i, or None to stop
+        (it runs on the audio thread, so it must only read); `failed`: song i
+        couldn't be decoded, so it must not be followed by itself. By default
+        the next one, round to the first at the end."""
         super().__init__(parent)
         self._path_of, self._count = path_of, count
-        self._after = after or (lambda i: (i + 1) % count() if count() else None)
+        self._after = after or (lambda i, failed=False: (i + 1) % count() if count() else None)
+        self._bad = set()           # songs that wouldn't decode since the last play_from
         self._lock = threading.Lock()
         self._songs = deque()
         self._want_play = False
@@ -266,6 +268,9 @@ class GaplessEngine(QObject):
             print(f"audio: song {index} joins in {ms} ms", flush=True)
         QTimer.singleShot(ms, lambda: gen == self._gen and self.trackStarted.emit(index))
 
+    def _next(self, index):
+        return self._after(index, index in self._bad)
+
     def _ran_out(self, gen, ms):
         """The list ended: once its last song has been heard, stop, paused."""
         QTimer.singleShot(ms, lambda: gen == self._gen and self._end())
@@ -298,7 +303,7 @@ class GaplessEngine(QObject):
                 return
             if self._songs and self._songs[-1].done and len(self._songs) < 2:
                 last = self._songs[-1]
-                nxt = self._after(last.index)
+                nxt = self._next(last.index)
                 if nxt is not None:
                     self._songs.append(_Song(nxt, last.gen))
             song = next((s for s in self._songs if not s.done), None)
@@ -333,6 +338,7 @@ class GaplessEngine(QObject):
 
     def _decode_failed(self, dec, song):
         print(f"Music: couldn't decode {self._path_of(song.index)} ({dec.errorString()})")
+        self._bad.add(song.index)                # before done: what follows it can't be itself
         song.done = True                         # skipped: it plays as nothing
         self._drop_decoder(dec)
         self._decode_more()
@@ -357,6 +363,7 @@ class GaplessEngine(QObject):
         playing first. With play False it waits there, paused."""
         skip = int(max(0, at) * RATE) * FRAME
         with self._lock:
+            self._bad.clear()
             self._want_play = play
             self._gen += 1
             if self._gain > 0.0:

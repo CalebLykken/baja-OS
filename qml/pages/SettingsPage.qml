@@ -701,6 +701,26 @@ Item {
             }
             Section {
                 Layout.fillWidth: true
+                heading: "Route options"
+                Repeater {
+                    model: [{ label: "Avoid ferries", key: "avoidFerries" },
+                            { label: "Avoid highways", key: "avoidHighways" },
+                            { label: "Avoid tolls", key: "avoidTolls" }]
+                    SettingRow {
+                        required property var modelData
+                        label: modelData.label
+                        SegmentedControl {
+                            options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                            current: typeof routing !== "undefined" && (modelData.key === "avoidFerries" ? routing.avoidFerries
+                                     : modelData.key === "avoidHighways" ? routing.avoidHighways : routing.avoidTolls)
+                            onPicked: (v) => routing.setAvoid(modelData.key, v)
+                        }
+                    }
+                }
+                Note { text: "Used for every new route. Changing one while a route is showing works it out again." }
+            }
+            Section {
+                Layout.fillWidth: true
                 heading: "Directions"
                 Row {
                     spacing: 12

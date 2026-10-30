@@ -555,6 +555,76 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(self.router.error, "Couldn't get a route")
 
 
+class AvoidTest(unittest.TestCase):
+    """The avoid options reach Valhalla's costing, on reroutes too."""
+
+    def setUp(self):
+        inline = mock.patch("backend.routing.threading", SimpleNamespace(Thread=InlineThread))
+        inline.start()
+        self.addCleanup(inline.stop)
+        self.settings = FakeSettings()
+        self.router = Router(FakeGps(), self.settings)
+        self.sent = []
+
+    def urlopen(self, req, timeout):
+        self.sent.append(json.loads(req.data))
+        return Reply(json.dumps(ROUTE).encode())
+
+    def run_with_router(self, fn):
+        with mock.patch("backend.routing.urllib.request.urlopen", self.urlopen):
+            fn()
+
+    def test_nothing_avoided_sends_no_options(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.assertNotIn("costing_options", self.sent[0])
+
+    def test_avoided_roads_are_zeroed(self):
+        self.router.setAvoid("avoidFerries", True)
+        self.router.setAvoid("avoidTolls", True)
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.assertEqual(self.sent[0]["costing_options"], {"auto": {"use_ferry": 0, "use_tolls": 0}})
+        self.assertEqual(self.sent[0]["costing"], "auto")
+
+    def test_a_reroute_carries_them(self):
+        self.router.setAvoid("avoidHighways", True)
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router._request(*self.router._dest, reroute=True))
+        self.assertEqual(self.sent[1]["costing_options"], {"auto": {"use_highways": 0}})
+
+    def test_changing_one_with_a_route_shown_asks_again(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.sent[1]["costing_options"], {"auto": {"use_ferry": 0}})
+        self.assertTrue(self.router.previewing)
+        self.assertFalse(self.router.computing)
+        self.assertTrue(self.router.avoidFerries)
+        self.assertEqual(self.settings.values["avoidFerries"], "true")
+
+    def test_no_route_means_no_request(self):
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))
+        self.assertEqual(self.sent, [])
+
+    def test_unchanged_or_unknown_does_nothing(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", False))
+        self.run_with_router(lambda: self.router.setAvoid("bogus", True))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_still_computing_the_first_route_is_replaced(self):
+        held = mock.patch("backend.routing.threading", SimpleNamespace(
+            Thread=lambda **k: SimpleNamespace(start=lambda: None)))
+        held.start()
+        self.addCleanup(held.stop)
+        self.router.routeTo("Shop", *END)
+        old = self.router._gen
+        self.router.setAvoid("avoidFerries", True)
+        self.assertGreater(self.router._gen, old)
+        self.assertTrue(self.router.computing)
+        answer(self.router, ROUTE, "", "Shop", False, gen=old)       # the old answer is dropped
+        self.assertTrue(self.router.computing)
+
+
 class StaleAnswerTest(unittest.TestCase):
     """An answer that isn't for the latest request is dropped: a cancelled
     route stays cancelled and the last place picked wins."""

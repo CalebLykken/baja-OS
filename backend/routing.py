@@ -64,6 +64,19 @@ MANEUVER_ICONS = {
 }
 
 
+# Settings > Map > Directions: setting key -> Valhalla's auto costing option
+# (0 keeps the route off that kind of road; unset is Valhalla's default).
+AVOID = {"avoidFerries": "use_ferry", "avoidHighways": "use_highways", "avoidTolls": "use_tolls"}
+
+
+def costing_options(settings):
+    """The costing_options for a route request from what's avoided in settings."""
+    if not settings:
+        return {}
+    auto = {opt: 0 for key, opt in AVOID.items() if str(settings.get(key, "false")) == "true"}
+    return {"auto": auto} if auto else {}
+
+
 def tidy(text):
     """Valhalla chains spoken steps as "... Then Keep right"; lower-case the verb."""
     return re.sub(r"\bThen ([A-Z])", lambda m: "then " + m[1].lower(), text).replace(". then ", ". Then ")
@@ -267,6 +280,7 @@ class Route:
 class Router(QObject):
     changed = pyqtSignal()          # route started/ended, computing, availability
     progressChanged = pyqtSignal()  # where the truck is along the route
+    optionsChanged = pyqtSignal()   # an avoid-ferries/highways/tolls setting
     speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
     resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
     _got = pyqtSignal(object, str, str, bool, int)   # response, error, destination name, reroute, request number
@@ -365,11 +379,15 @@ class Router(QObject):
         if self._gps.speed > 2:
             # Leave in the direction the truck is already going.
             start.update(heading=round(self._gps.heading), heading_tolerance=45)
-        body = json.dumps({
+        request = {
             "locations": [start, {"lon": lon, "lat": lat, "type": "break"}],
             "costing": "auto",
             "directions_options": {"units": "kilometers", "language": "en-US"},
-        }).encode()
+        }
+        options = costing_options(self._settings)
+        if options:
+            request["costing_options"] = options
+        body = json.dumps(request).encode()
         self._computing = True
         self._error = ""
         self.changed.emit()
@@ -502,6 +520,35 @@ class Router(QObject):
             self._spoken.add((i, "turn"))
             self._spoken.add((i, "alert"))
             self._say(m.get("verbal_pre_transition_instruction") or m.get("instruction") or "")
+
+    # ---- route options ----------------------------------------------------------------
+    def _avoids(self, key):
+        return bool(self._settings) and str(self._settings.get(key, "false")) == "true"
+
+    @pyqtProperty(bool, notify=optionsChanged)
+    def avoidFerries(self):
+        return self._avoids("avoidFerries")
+
+    @pyqtProperty(bool, notify=optionsChanged)
+    def avoidHighways(self):
+        return self._avoids("avoidHighways")
+
+    @pyqtProperty(bool, notify=optionsChanged)
+    def avoidTolls(self):
+        return self._avoids("avoidTolls")
+
+    @pyqtSlot(str, bool)
+    def setAvoid(self, key, on):
+        """Turn an avoid option on or off ("avoidFerries", "avoidHighways",
+        "avoidTolls"). A route already shown or being driven is asked for
+        again with it: the old line stays until the new one arrives, and
+        stays if no route can be found that way."""
+        if key not in AVOID or not self._settings or self._avoids(key) == on:
+            return
+        self._settings.set(key, "true" if on else "false")
+        self.optionsChanged.emit()
+        if self._dest and (self._route or self._computing):
+            self._request(*self._dest, reroute=self._route is not None)
 
     @pyqtSlot(str, float, float)
     def routeTo(self, name, lon, lat):

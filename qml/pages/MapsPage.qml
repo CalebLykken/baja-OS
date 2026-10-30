@@ -607,6 +607,15 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
+                    // Being worked out again (a route option changed), or that failed.
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: !page.hasRouting ? "" : routing.computing ? "Finding a route" : routing.error
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
                     MapLabel {
                         visible: !page.hasRouting || !routing.previewing
                         width: parent.width

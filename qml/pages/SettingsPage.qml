@@ -735,7 +735,13 @@ Item {
                         }
                     }
                 }
-                Note { text: "Used for every new route. Changing one while a route is showing works it out again." }
+                // Guidance has no other place to say a change didn't work.
+                Note {
+                    readonly property bool shown: typeof routing !== "undefined" && (routing.active || routing.previewing)
+                    text: shown && routing.computing ? "Finding a route with these options"
+                          : shown && routing.error !== "" ? routing.error + ". The route on screen hasn't changed."
+                          : "Used for every new route. Changing one while a route is showing works it out again."
+                }
             }
             Section {
                 Layout.fillWidth: true

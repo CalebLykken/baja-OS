@@ -585,6 +585,23 @@ class AvoidTest(unittest.TestCase):
         self.assertEqual(self.sent[0]["costing_options"], {"auto": {"use_ferry": 0, "use_tolls": 0}})
         self.assertEqual(self.sent[0]["costing"], "auto")
 
+    def test_a_route_that_failed_is_tried_again_with_the_new_option(self):
+        def no_route(req, timeout):
+            raise urllib.error.URLError("refused")
+        with mock.patch("backend.routing.urllib.request.urlopen", no_route):
+            self.router.routeTo("Shop", *END)
+        self.assertFalse(self.router.previewing)
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertTrue(self.router.previewing)
+
+    def test_after_arriving_an_option_asks_for_nothing(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.router._arrived = True
+        self.sent.clear()
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertEqual(self.sent, [])
+        self.assertTrue(self.router._arrived)       # the auto-stop still comes
+
     def test_a_reroute_carries_them(self):
         self.router.setAvoid("avoidHighways", True)
         self.run_with_router(lambda: self.router.routeTo("Shop", *END))

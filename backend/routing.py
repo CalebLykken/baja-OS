@@ -64,7 +64,7 @@ MANEUVER_ICONS = {
 }
 
 
-# Settings > Map > Directions: setting key -> Valhalla's auto costing option
+# Settings > Map > Route options: setting key -> Valhalla's auto costing option
 # (0 keeps the route off that kind of road; unset is Valhalla's default).
 AVOID = {"avoidFerries": "use_ferry", "avoidHighways": "use_highways", "avoidTolls": "use_tolls"}
 
@@ -541,13 +541,14 @@ class Router(QObject):
     def setAvoid(self, key, on):
         """Turn an avoid option on or off ("avoidFerries", "avoidHighways",
         "avoidTolls"). A route already shown or being driven is asked for
-        again with it: the old line stays until the new one arrives, and
-        stays if no route can be found that way."""
+        again with it, and so is one that couldn't be found (the option may
+        be why): the old line stays until the new one arrives, and stays if
+        no route can be found that way. Not after arriving: that's over."""
         if key not in AVOID or not self._settings or self._avoids(key) == on:
             return
         self._settings.set(key, "true" if on else "false")
         self.optionsChanged.emit()
-        if self._dest and (self._route or self._computing):
+        if self._dest and not self._arrived:
             self._request(*self._dest, reroute=self._route is not None)
 
     @pyqtSlot(str, float, float)

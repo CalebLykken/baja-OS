@@ -16,7 +16,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
-from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Router, route_record,
+from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, route_record,
                              saved_route)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
@@ -57,6 +57,43 @@ ROUTE = {"trip": {"summary": {"time": 200.0}, "legs": [{
         {"type": 4, "begin_shape_index": 2, "instruction": "You have arrived."},
     ],
 }]}}
+
+
+class TimeLeftTest(unittest.TestCase):
+    """Time left comes from the maneuvers' own times, not an even share."""
+
+    def route(self, times=(100.0, 100.0, 0.0), ends=(1, 2, 2)):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["summary"]["time"] = sum(times)
+        for m, t, e in zip(data["trip"]["legs"][0]["maneuvers"], times, ends):
+            m["time"], m["end_shape_index"] = t, e
+        return Route(data, "Shop")
+
+    def test_the_whole_route_at_the_start(self):
+        self.assertAlmostEqual(self.route().time_left(), 200.0)
+
+    def test_uneven_legs_are_not_averaged(self):
+        # 2.2 km in 20 s (a highway), then 760 m in 180 s: at the corner
+        # a quarter of the distance is left but nine tenths of the time.
+        r = self.route(times=(20.0, 180.0, 0.0))
+        r.along = r.cum[1]
+        self.assertAlmostEqual(r.time_left(), 180.0)
+        self.assertGreater(abs(r.time_left() - 200.0 * r.remaining / r.length), 50)
+
+    def test_part_way_along_a_leg(self):
+        r = self.route(times=(100.0, 100.0, 0.0))
+        r.along = r.cum[1] / 2
+        self.assertAlmostEqual(r.time_left(), 150.0)
+
+    def test_the_end(self):
+        r = self.route()
+        r.along = r.length
+        self.assertEqual(r.time_left(), 0.0)
+
+    def test_without_maneuver_times_it_falls_back_to_the_even_share(self):
+        r = Route(ROUTE, "Shop")
+        r.along = r.length / 2
+        self.assertAlmostEqual(r.time_left(), 100.0)
 
 
 class Changed:

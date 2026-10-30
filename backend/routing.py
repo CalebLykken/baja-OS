@@ -246,6 +246,23 @@ class Route:
     def remaining(self):
         return max(0.0, self.length - self.along)
 
+    def time_left(self):
+        """Seconds still to drive: each maneuver carries its own time, so a
+        fast road first and slow streets last aren't averaged out. The one
+        the truck is on counts for the share of it still ahead."""
+        total = 0.0
+        for m in self.maneuvers:
+            try:
+                t = float(m["time"])
+                a = self.cum[m["begin_shape_index"]]
+                b = self.cum[m["end_shape_index"]]
+            except (KeyError, TypeError, ValueError, IndexError):
+                return self.time * self.remaining / self.length if self.length > 0 else 0.0
+            if b <= self.along:
+                continue
+            total += t if a >= self.along or b <= a else t * (b - self.along) / (b - a)
+        return total
+
 
 class Router(QObject):
     changed = pyqtSignal()          # route started/ended, computing, availability
@@ -626,11 +643,8 @@ class Router(QObject):
 
     @pyqtProperty(float, notify=progressChanged)
     def remainingTime(self):
-        """Seconds, from Valhalla's estimate for the part still ahead."""
-        r = self._route
-        if not r or r.length <= 0:
-            return 0.0
-        return r.time * r.remaining / r.length
+        """Seconds, from Valhalla's time for each part still ahead."""
+        return self._route.time_left() if self._route else 0.0
 
     @pyqtProperty(bool, notify=progressChanged)
     def offRoute(self):

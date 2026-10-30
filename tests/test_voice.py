@@ -89,17 +89,21 @@ class VoiceTest(unittest.TestCase):
         self.spoken = queue.Queue()         # "<pid>:<text>" of each WAV pw-play was handed
         self.log = io.StringIO()
         self.mixer = {}                     # node -> volume, what wpctl reports and sets
+        self.sets = []                      # (node, volume) in order
+        self.played = []                    # each pw-play command line
 
         def fake_run(argv, **kwargs):
             out = ""
             if argv[:2] == ["wpctl", "get-volume"]:
-                node = int(argv[2])
+                node = int(argv[2]) if argv[2].isdigit() else argv[2]   # or the default sink
                 if node not in self.mixer:
                     return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no such node")
                 out = f"Volume: {self.mixer[node]:.2f}\n"
             elif argv[:2] == ["wpctl", "set-volume"]:
-                self.mixer[int(argv[2])] = float(argv[3])
+                self.mixer[int(argv[2]) if argv[2].isdigit() else argv[2]] = float(argv[3])
+                self.sets.append((argv[2], float(argv[3])))
             elif argv[0] == "pw-play":
+                self.played.append(argv)
                 self.spoken.put(Path(argv[-1]).read_text())
             elif argv[0] == "pw-dump":
                 out = "[]"
@@ -371,6 +375,81 @@ class VoiceTest(unittest.TestCase):
     def test_one_stream_that_will_not_be_put_back_does_not_leave_the_others(self):
         done = self.duck_and_play({2})
         self.assertEqual(done, [("7", "0.300"), ("8", "0.240"), ("8", "0.800")])
+
+
+    # ---- spoken directions volume
+    SINK = "@DEFAULT_AUDIO_SINK@"
+
+    def say_with(self, sink, settings=None, music=1.0):
+        settings = settings or {}
+        self.mixer[self.SINK] = sink
+        self.mixer[7] = music
+        v = self.start("ok")
+        v._settings = mock.Mock(get=lambda k, d=None: settings.get(k, d))
+        v._level = voice.clamp_level(settings.get("voiceVolume", 70))
+        with mock.patch.object(voice, "_output_streams", return_value={7: music}):
+            v.say("turn left")
+            self.next_spoken()
+            time.sleep(0.3)                  # the put-back after pw-play
+        argv = self.played[0]
+        return float(argv[argv.index("--volume") + 1])
+
+    def sink_sets(self):
+        return [v for n, v in self.sets if n == self.SINK]
+
+    def test_with_the_output_at_full_the_stream_plays_at_the_level(self):
+        # Spotify: the output sits at the ceiling.
+        self.assertAlmostEqual(self.say_with(1.0, {"voiceVolume": 60}), 0.6, places=3)
+        self.assertEqual(self.sink_sets(), [])
+
+    def test_the_ceiling_scales_the_level(self):
+        # Headphones: ceiling 50%, output at 0.5, level 80% -> 0.4 at the speaker.
+        vol = self.say_with(0.5, {"voiceVolume": 80, "maxVolume": 50})
+        self.assertAlmostEqual(vol, 0.8, places=3)
+
+    def test_quiet_local_music_does_not_make_directions_quiet(self):
+        # Output at 0.1 (music turned down): raised to the target for the line, then put back.
+        vol = self.say_with(0.1, {"voiceVolume": 70})
+        self.assertAlmostEqual(vol, 1.0)
+        self.assertEqual([round(x, 3) for x in self.sink_sets()], [0.7, 0.1])
+        # The music went to 0.3 x (0.1 / 0.7), not 0.3: it stays as quiet as it was.
+        music = [v for n, v in self.sets if n == "7"]
+        self.assertAlmostEqual(music[0], 0.3 * 0.1 / 0.7, places=3)
+        self.assertAlmostEqual(self.mixer[7], 1.0)
+
+    def test_music_at_zero_does_not_mute_directions(self):
+        vol = self.say_with(0.0, {"voiceVolume": 70})
+        self.assertAlmostEqual(vol, 1.0)
+        self.assertEqual(self.sink_sets(), [0.7, 0.0])
+        self.assertEqual([v for n, v in self.sets if n == "7"][0], 0.0)    # music stays silent
+
+    def test_an_output_moved_during_the_line_is_left_alone(self):
+        v = self.start("ok")
+        self.mixer[self.SINK] = 0.1
+        real = voice.subprocess.run
+
+        def run(argv, **kwargs):
+            if argv[0] == "pw-play":
+                self.mixer[self.SINK] = 0.4          # the knob
+            return real(argv, **kwargs)
+        with mock.patch.object(voice.subprocess, "run", side_effect=run), \
+                mock.patch.object(voice, "_output_streams", return_value={}):
+            v.say("turn left")
+            self.next_spoken()
+            time.sleep(0.3)
+        self.assertEqual(self.mixer[self.SINK], 0.4)
+
+    def test_the_level_is_saved_and_never_below_the_minimum(self):
+        saved = {}
+        settings = FakeSettings()
+        settings.set = lambda k, val: saved.update({k: val})
+        v = voice.Voice(settings)
+        v.setLevel(0)
+        self.assertEqual(v.level, voice.VOICE_LEVEL[0])
+        self.assertEqual(saved["voiceVolume"], voice.VOICE_LEVEL[0])
+        v.setLevel(500)
+        self.assertEqual(v.level, 100)
+        self.assertEqual(voice.clamp_level("junk"), voice.VOICE_LEVEL_DEFAULT)
 
 
 class FakeMixer:

@@ -281,9 +281,30 @@ Item {
                         onClicked: voice.test()
                     }
                 }
+                RowLayout {
+                    visible: typeof voice !== "undefined" && voice.available
+                    Layout.fillWidth: true
+                    spacing: 16
+                    IconButton { icon: "remove"; size: 60; onClicked: voice.setLevel(voice.level - 5) }
+                    LevelBar {
+                        Layout.fillWidth: true
+                        segments: 14
+                        value: typeof voice !== "undefined" ? (voice.level - 30) / 70 : 0
+                        onMoved: (v) => voice.setLevel(Math.round((30 + v * 70) / 5) * 5)
+                    }
+                    Label {
+                        Layout.preferredWidth: 64
+                        horizontalAlignment: Text.AlignRight
+                        text: (typeof voice !== "undefined" ? voice.level : 0) + "%"
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    IconButton { icon: "add"; size: 60; onClicked: voice.setLevel(voice.level + 5) }
+                }
                 Note {
                     text: typeof voice !== "undefined" && voice.available
-                          ? "Turn instructions are spoken over the music, which dips while they play."
+                          ? "Turn instructions are spoken over the music, which dips while they play. Their volume is their own: it follows the Loudest volume above, not the music volume or the source."
                           : "Run deploy/audio/install-voice.sh on the Pi once to add the voice (about 100 MB)."
                 }
             }

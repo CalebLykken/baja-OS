@@ -15,7 +15,6 @@ import os
 import signal
 import sys
 import threading
-import traceback
 from pathlib import Path
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
@@ -26,6 +25,7 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
+from backend import errorlog
 from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.eq import Equalizer
@@ -98,18 +98,12 @@ def make_media_player(music_dir, demo_flag=None, on_pi=None):
     return LibraryPlayer([])
 
 
-_errors = 0
-
-
 def log_exception(exc_type, exc, tb):
     """Log an uncaught error and carry on. Without its own sys.excepthook,
     PyQt aborts the whole dashboard (exit 134) when an exception escapes a
-    slot, a timer or a property QML reads."""
-    global _errors
-    _errors += 1
-    print(f"Uncaught error #{_errors}:", file=sys.stderr)
-    traceback.print_exception(exc_type, exc, tb)
-    sys.stderr.flush()
+    slot, a timer or a property QML reads. Repeats are counted and
+    summarised (backend/errorlog.py), not each written out."""
+    errorlog.log.report(exc_type, exc, tb)
 
 
 def log_thread_exception(args):
@@ -117,9 +111,8 @@ def log_thread_exception(args):
     if args.exc_type is SystemExit:
         return
     name = args.thread.name if args.thread else "?"
-    print(f"Thread {name} stopped on an error:", file=sys.stderr)
-    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
-    sys.stderr.flush()
+    errorlog.log.report(args.exc_type, args.exc_value, args.exc_traceback,
+                    label=f"Thread {name} stopped on an error:")
 
 
 def init_web_engine():

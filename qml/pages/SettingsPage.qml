@@ -812,8 +812,9 @@ Item {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     font.pixelSize: Theme.fontBody
-                    color: system.power !== "" ? Theme.warn : Theme.textDim
-                    text: system.power !== "" ? system.power : "Power supply and temperature are fine"
+                    color: system.power !== "" || system.errors > 0 ? Theme.warn : Theme.textDim
+                    text: (system.power !== "" ? system.power : "Power supply and temperature are fine")
+                          + (system.errors > 0 ? " · " + system.errors + (system.errors === 1 ? " error" : " errors") + " since start" : "")
                 }
             }
 

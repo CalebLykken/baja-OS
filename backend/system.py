@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
@@ -131,7 +131,8 @@ class SystemInfo(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._v = {"temp": None, "fan": None, "power": "", "memUsed": 0, "memTotal": 0,
-                   "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False}
+                   "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False,
+                   "errors": 0}
         self._version = version_text()
         self._busy = False
         self._read_error = ""      # the error the last reading died of, while it keeps happening
@@ -159,6 +160,7 @@ class SystemInfo(QObject):
                     "memUsed": used, "memTotal": total,
                     "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,
                     "uptime": uptime_text(), "canPower": can_power(),
+                    "errors": errorlog.log.count(),
                 }
                 self._logged()
             except Exception as e:
@@ -217,6 +219,11 @@ class SystemInfo(QObject):
     @pyqtProperty(str, notify=changed)
     def uptime(self):
         return self._v["uptime"]
+
+    @pyqtProperty(int, notify=changed)
+    def errors(self):
+        """Uncaught errors since start (main.log_exception), as of the last check."""
+        return self._v["errors"]
 
     @pyqtProperty(str, constant=True)
     def version(self):

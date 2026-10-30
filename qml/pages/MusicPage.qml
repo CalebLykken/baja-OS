@@ -207,6 +207,17 @@ Item {
                     clip: true
                     model: spotifyQueue ? media.upNext : media.queue
                     boundsBehavior: Flickable.StopAtBounds
+                    // Open on the playing song, and follow it as it changes.
+                    function showPlaying() {
+                        if (visible && !spotifyQueue && media.index >= 0 && count > 0)
+                            positionViewAtIndex(media.index, ListView.Center)
+                    }
+                    onVisibleChanged: Qt.callLater(showPlaying)
+                    onCountChanged: Qt.callLater(showPlaying)
+                    Connections {
+                        target: media
+                        function onTrackChanged() { Qt.callLater(queue.showPlaying) }
+                    }
                     delegate: SongRow {
                         width: queue.width
                         number: index + 1

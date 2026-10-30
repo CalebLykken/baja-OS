@@ -415,6 +415,24 @@ Item {
                         }
                     }
                 }
+                // A network that doesn't broadcast its name: type it in.
+                Rectangle {
+                    visible: wifi.available && wifi.canControl
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 64
+                    radius: Theme.radius
+                    color: otherTap.pressed ? Theme.panelHi : "transparent"
+                    Label {
+                        anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+                        text: "Other network…"
+                        font.pixelSize: Theme.fontBody
+                    }
+                    TapHandler {
+                        id: otherTap
+                        enabled: wifi.busy === ""
+                        onTapped: joinSheet.openHidden()
+                    }
+                }
                 Note {
                     visible: wifi.available
                     text: wifi.networks.length === 0 ? "Looking for networks"
@@ -925,11 +943,14 @@ Item {
         property string ssid: ""
         property string password: ""
         property bool reveal: false
-        function open(name) { ssid = name; password = ""; reveal = false }
-        function close() { ssid = ""; password = "" }
+        property bool hidden: false      // a network typed in by hand
+        property bool naming: false      // ...and its name is still being typed
+        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false }
+        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true }
+        function close() { ssid = ""; password = ""; hidden = false; naming = false }
 
         anchors.fill: parent
-        visible: ssid !== ""
+        visible: ssid !== "" || naming
         color: Theme.bg
         // Swallow taps so nothing underneath reacts.
         MouseArea { anchors.fill: parent }
@@ -943,7 +964,7 @@ Item {
                 spacing: 14
                 Label {
                     Layout.fillWidth: true
-                    text: "Join “" + joinSheet.ssid + "”"
+                    text: joinSheet.naming ? "Other network" : "Join “" + joinSheet.ssid + "”"
                     elide: Text.ElideRight
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
@@ -967,14 +988,15 @@ Item {
                         width: Math.min(implicitWidth, parent.width - 50)
                         clip: true
                         horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
-                        text: joinSheet.password === "" ? ""
+                        text: joinSheet.naming ? joinSheet.ssid
+                              : joinSheet.password === "" ? ""
                               : joinSheet.reveal ? joinSheet.password : "•".repeat(joinSheet.password.length)
                         font.pixelSize: Theme.fontTitle
                     }
                     Label {
-                        visible: joinSheet.password === ""
+                        visible: joinSheet.naming ? joinSheet.ssid === "" : joinSheet.password === ""
                         anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter }
-                        text: "Password"
+                        text: joinSheet.naming ? "Network name" : joinSheet.hidden ? "Password (empty if open)" : "Password"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -994,6 +1016,7 @@ Item {
                     }
                 }
                 IconButton {
+                    visible: !joinSheet.naming
                     size: 64
                     icon: joinSheet.reveal ? "visibility_off" : "visibility"
                     onClicked: joinSheet.reveal = !joinSheet.reveal
@@ -1004,12 +1027,19 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.maximumHeight: 440
-                doneLabel: "Join"
-                doneEnabled: joinSheet.password.length >= 8      // WPA passwords are 8+
-                onTyped: (ch) => joinSheet.password += ch
-                onBackspace: joinSheet.password = joinSheet.password.slice(0, -1)
+                doneLabel: joinSheet.naming ? "Next" : "Join"
+                doneEnabled: joinSheet.naming ? joinSheet.ssid.length > 0
+                             : joinSheet.password.length >= 8      // WPA passwords are 8+
+                                || (joinSheet.hidden && joinSheet.password.length === 0)
+                onTyped: (ch) => { if (joinSheet.naming) joinSheet.ssid += ch; else joinSheet.password += ch }
+                onBackspace: {
+                    if (joinSheet.naming) joinSheet.ssid = joinSheet.ssid.slice(0, -1)
+                    else joinSheet.password = joinSheet.password.slice(0, -1)
+                }
                 onDone: {
-                    wifi.join(joinSheet.ssid, joinSheet.password)
+                    if (joinSheet.naming) { joinSheet.naming = false; return }
+                    if (joinSheet.hidden) wifi.joinHidden(joinSheet.ssid, joinSheet.password)
+                    else wifi.join(joinSheet.ssid, joinSheet.password)
                     joinSheet.close()
                 }
             }

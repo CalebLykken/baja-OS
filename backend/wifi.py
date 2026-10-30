@@ -54,6 +54,12 @@ def split_terse(line):
     return [p.replace("\\:", ":").replace("\\\\", "\\") for p in parts]
 
 
+def valid_ssid(ssid):
+    """A name nmcli can take: 1 to 32 bytes, no control characters."""
+    return (bool(ssid) and len(ssid.encode("utf-8", "replace")) <= 32
+            and not any(ord(ch) < 32 or ord(ch) == 127 for ch in ssid))
+
+
 def can_control():
     _, out, _ = nmcli("-t", "-f", "PERMISSION,VALUE", "general", "permissions", timeout=4)
     perms = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
@@ -268,16 +274,41 @@ class Wifi(QObject):
                 return self._why(err, ssid), False
             if saved:                       # new password for a saved network
                 nmcli("connection", "delete", "uuid", saved["uuid"])
-            # --ask reads the password from stdin rather than the command line.
-            rc, out, err = nmcli("--ask", "device", "wifi", "connect", ssid,
-                                 input=password + "\n", timeout=45)
-            if rc != 0:
-                return self._why(err or out, ssid), False
-            # Keep trying forever (the hotspot comes and goes), no power saving.
-            nmcli("connection", "modify", "id", ssid,
-                  "connection.autoconnect-retries", "0", "802-11-wireless.powersave", "2")
-            return f"Connected to {ssid}", True
+            return self._connect_new(ssid, password, hidden=False)
         self._run(ssid, work, f"Couldn't join {ssid}")
+
+    @pyqtSlot(str, str)
+    def joinHidden(self, ssid, password):
+        """Join a network that doesn't broadcast its name (typed in by hand).
+        An empty password means an open network."""
+        if not valid_ssid(ssid):
+            self._message = "That isn't a valid network name"
+            self.changed.emit()
+            return
+        saved = [c for c in self._saved if c["ssid"] == ssid]
+
+        def work():
+            for c in saved:                 # start over, as for a changed password
+                nmcli("connection", "delete", "uuid", c["uuid"])
+            return self._connect_new(ssid, password, hidden=True)
+        self._run(ssid, work, f"Couldn't join {ssid}")
+
+    def _connect_new(self, ssid, password, hidden):
+        """Add and join a network that isn't saved yet: (message, ok)."""
+        args = ["device", "wifi", "connect", ssid]
+        if hidden:
+            args += ["hidden", "yes"]
+        if password or not hidden:
+            # --ask reads the password from stdin rather than the command line.
+            rc, out, err = nmcli("--ask", *args, input=password + "\n", timeout=45)
+        else:
+            rc, out, err = nmcli(*args, timeout=45)
+        if rc != 0:
+            return self._why(err or out, ssid), False
+        # Keep trying forever (the hotspot comes and goes), no power saving.
+        nmcli("connection", "modify", "id", ssid,
+              "connection.autoconnect-retries", "0", "802-11-wireless.powersave", "2")
+        return f"Connected to {ssid}", True
 
     @pyqtSlot(str)
     def forget(self, ssid):

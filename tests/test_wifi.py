@@ -16,7 +16,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan
+from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan, valid_ssid
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -404,6 +404,62 @@ class WrongPasswordTest(unittest.TestCase):
         self.join("Phone", "hunter22", 4, "Error: Secrets were required, but not provided.")
         self.assertEqual(self.wifi.message, "Wrong password for Phone")
         self.assertEqual(self.asked, [])
+
+
+class HiddenNetworkTest(unittest.TestCase):
+    """A network typed in by hand joins with `hidden yes`, the password on stdin."""
+
+    def setUp(self):
+        self.wifi = Wifi({})
+        self.wifi._available = False
+        INLINE.start()
+        self.addCleanup(mock.patch.stopall)
+        self.calls = []
+
+    def fake(self, *args, input=None, timeout=10):
+        self.calls.append((args, input))
+        return self.rc, "", self.err
+
+    def join(self, ssid, password, rc=0, err=""):
+        self.rc, self.err = rc, err
+        with mock.patch("backend.wifi.nmcli", self.fake):
+            self.wifi.joinHidden(ssid, password)
+
+    def test_joins_with_hidden_yes_and_the_password_on_stdin(self):
+        self.join("Secret Net", "hunter22")
+        args, stdin = self.calls[0]
+        self.assertEqual(args, ("--ask", "device", "wifi", "connect", "Secret Net", "hidden", "yes"))
+        self.assertEqual(stdin, "hunter22\n")
+        self.assertNotIn("hunter22", " ".join(a for c, _ in self.calls for a in c))
+        self.assertEqual(self.wifi.message, "Connected to Secret Net")
+
+    def test_an_open_hidden_network_sends_no_password(self):
+        self.join("Open", "")
+        self.assertEqual(self.calls[0], (("device", "wifi", "connect", "Open", "hidden", "yes"), None))
+
+    def test_a_wrong_password_says_so_and_frees_the_page(self):
+        self.join("Secret Net", "nope", 4, "Error: Secrets were required, but not provided.")
+        self.assertEqual(self.wifi.message, "Wrong password for Secret Net")
+        self.assertEqual(self.wifi.busy, "")
+
+    def test_the_name_goes_to_nmcli_as_one_argument(self):
+        self.join("a; reboot $(x)", "hunter22")
+        self.assertEqual(self.calls[0][0][4], "a; reboot $(x)")
+
+    def test_a_bad_name_never_reaches_nmcli(self):
+        for bad in ("", "x" * 33, "a\nb", "a\x00b"):
+            self.join(bad, "hunter22")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.wifi.message, "That isn't a valid network name")
+
+    def test_a_saved_network_of_that_name_is_replaced(self):
+        self.wifi._saved = [{"uuid": "u1", "ssid": "Secret Net", "type": "802-11-wireless"}]
+        self.join("Secret Net", "hunter22")
+        self.assertEqual(self.calls[0][0], ("connection", "delete", "uuid", "u1"))
+
+    def test_valid_ssid_counts_bytes(self):
+        self.assertTrue(valid_ssid("é" * 16))
+        self.assertFalse(valid_ssid("é" * 17))
 
 
 if __name__ == "__main__":

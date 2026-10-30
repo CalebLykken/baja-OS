@@ -447,6 +447,42 @@ class SavingTest(unittest.TestCase):
         self.assertGreater(json.loads(self.settings.values["route"])["at"], time.time() - 5)
 
 
+class RepeatTest(unittest.TestCase):
+    def setUp(self):
+        self.gps = FakeGps()
+        self.router = Router(self.gps)
+        self.said = []
+        self.router.speak.connect(self.said.append)
+        self.router._request = lambda *a, **k: None
+        self.router.routeTo("Shop", *END)
+        answer(self.router, ROUTE, "", "Shop", False)
+
+    def test_nothing_without_guidance(self):
+        self.router.repeatLast()                       # only a preview
+        self.assertEqual(self.said, [])
+        self.router.stop()
+        self.router.repeatLast()
+        self.assertEqual(self.said, [])
+
+    def test_says_the_last_direction_again(self):
+        self.router.go()
+        self.router.repeatLast()
+        self.assertEqual(self.said, ["Drive north.", "Drive north."])
+        self.gps.at(CORNER[0], 47.0195)                 # just before the right turn
+        self.router._on_fix()
+        self.router.repeatLast()
+        self.assertEqual(self.said[-1], self.said[-2])
+        self.assertNotEqual(self.said[-1], "Drive north.")
+
+    def test_a_new_route_forgets_it(self):
+        self.router.go()
+        self.router.routeTo("Cafe", *START)
+        answer(self.router, ROUTE, "", "Cafe", False)
+        self.said.clear()
+        self.router.repeatLast()
+        self.assertEqual(self.said, [])
+
+
 class InlineThread:
     """Stands in for threading.Thread: start() runs the work on the spot."""
 

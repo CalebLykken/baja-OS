@@ -735,7 +735,7 @@ Item {
                     }
                 }
             }
-            TapHandler { onTapped: page.map.call("recenter()") }
+            TapHandler { onTapped: routing.repeatLast() }    // say it again (Re-center is its own key)
         }
 
         // ... and the trip, bottom-left: arrival, time left, distance left.

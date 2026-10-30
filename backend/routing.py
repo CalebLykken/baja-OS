@@ -277,6 +277,7 @@ class Router(QObject):
         self._gps = gps
         self._settings = settings
         self._spoken = set()          # (maneuver index, "alert"/"turn") already said
+        self._last_said = ""          # the last direction said, for repeatLast()
         self._started = False         # guidance running (False: just a preview)
         self._available = False
         self._route = None
@@ -462,7 +463,22 @@ class Router(QObject):
 
     def _say(self, text):
         if text:
-            self.speak.emit(tidy(text))
+            self._last_said = tidy(text)
+            self.speak.emit(self._last_said)
+
+    @pyqtSlot()
+    def repeatLast(self):
+        """Say the last direction again (a missed prompt over road noise).
+        Before anything has been said, the next turn. Nothing without guidance."""
+        r = self._route
+        if not r or not self._started:
+            return
+        if not self._last_said and not self._arrived:
+            m = r.next_maneuver()
+            self._say(m.get("verbal_pre_transition_instruction") or m.get("instruction") or "")
+            return
+        if self._last_said:
+            self.speak.emit(self._last_said)
 
     def _prompt(self, r):
         """Say the next turn twice: an early warning, then just before it."""
@@ -499,6 +515,7 @@ class Router(QObject):
             self._gps.clearPath()
         self._started = False
         self._route = None
+        self._last_said = ""
         self._dest = (name, lon, lat)
         self._request(name, lon, lat)
 
@@ -507,6 +524,7 @@ class Router(QObject):
         self._gps.clearPath()
         self._started = False
         self._route = None
+        self._last_said = ""
         self._dest = None
         self._error = ""
         self._computing = False

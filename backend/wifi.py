@@ -34,6 +34,8 @@ WATCH_EVERY_MS = 10000
 TETHER_AFTER_S = 45          # this long with no Wi-Fi before trying the phone
 TETHER_RETRY_S = 120
 UNTETHER_AFTER_S = 60        # Wi-Fi back this long before letting the phone go
+HIDDEN_RETRIES = 2           # a hidden network can take more than one directed scan to show
+HIDDEN_RETRY_S = 5
 IPHONE_GATEWAY = "172.20.10.1"
 HOTSPOT_ADDRESS = "172.20.10.14/28"   # a fixed extra address, for the "Send to Baja" Shortcut
 
@@ -298,11 +300,18 @@ class Wifi(QObject):
         args = ["device", "wifi", "connect", ssid]
         if hidden:
             args += ["hidden", "yes"]
-        if password or not hidden:
-            # --ask reads the password from stdin rather than the command line.
-            rc, out, err = nmcli("--ask", *args, input=password + "\n", timeout=45)
-        else:
-            rc, out, err = nmcli(*args, timeout=45)
+        tries = 1 + (HIDDEN_RETRIES if hidden else 0)
+        for attempt in range(tries):
+            if password or not hidden:
+                # --ask reads the password from stdin rather than the command line.
+                rc, out, err = nmcli("--ask", *args, input=password + "\n", timeout=45)
+            else:
+                rc, out, err = nmcli(*args, timeout=45)
+            # nmcli looks for a hidden network right after its directed scan,
+            # which can come up empty the first time. (On the worker thread.)
+            if rc == 0 or not hidden or attempt == tries - 1 or not self._not_found(err or out):
+                break
+            time.sleep(HIDDEN_RETRY_S)
         if rc != 0:
             return self._why(err or out, ssid), False
         # Keep trying forever (the hotspot comes and goes), no power saving.
@@ -319,6 +328,11 @@ class Wifi(QObject):
                 nmcli("connection", "delete", "uuid", c["uuid"])
             return f"Forgot {ssid}", True
         self._run(ssid, work, f"Couldn't forget {ssid}")
+
+    @staticmethod
+    def _not_found(err):
+        e = err.lower()
+        return "no network with ssid" in e or "failed to scan hidden ssid" in e
 
     @staticmethod
     def _wrong_password(err):

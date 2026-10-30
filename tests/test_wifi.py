@@ -457,6 +457,39 @@ class HiddenNetworkTest(unittest.TestCase):
         self.join("Secret Net", "hunter22")
         self.assertEqual(self.calls[0][0], ("connection", "delete", "uuid", "u1"))
 
+    def join_seq(self, results):
+        """joinHidden with nmcli answering from results, one per call."""
+        it = iter(results)
+
+        def fake(*args, input=None, timeout=10):
+            self.calls.append((args, input))
+            return next(it, (0, "", ""))
+        with mock.patch("backend.wifi.nmcli", fake), \
+                mock.patch("backend.wifi.time.sleep") as sleep:
+            self.wifi.joinHidden("Secret Net", "hunter22")
+        return sleep
+
+    def test_a_missed_first_scan_is_retried_after_a_pause(self):
+        sleep = self.join_seq([(10, "", "Error: No network with SSID 'Secret Net' found."),
+                               (10, "", "Error: Failed to scan hidden SSID"), (0, "", "")])
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(5)
+        tries = [c for c in self.calls if c[0][0] == "--ask"]
+        self.assertEqual([t[1] for t in tries], ["hunter22\n"] * 3)
+        self.assertEqual(self.wifi.message, "Connected to Secret Net")
+
+    def test_the_retries_stop_after_two_and_the_page_is_freed(self):
+        miss = (10, "", "Error: No network with SSID 'Secret Net' found.")
+        sleep = self.join_seq([miss] * 5)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(len([c for c in self.calls if c[0][0] == "--ask"]), 3)
+        self.assertEqual(self.wifi.message, "Can't see Secret Net; is the hotspot on?")
+        self.assertEqual(self.wifi.busy, "")
+
+    def test_a_wrong_password_is_not_retried(self):
+        sleep = self.join_seq([(4, "", "Error: Secrets were required, but not provided.")])
+        self.assertEqual(sleep.call_count, 0)
+
     def test_valid_ssid_counts_bytes(self):
         self.assertTrue(valid_ssid("é" * 16))
         self.assertFalse(valid_ssid("é" * 17))

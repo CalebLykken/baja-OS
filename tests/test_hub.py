@@ -6,8 +6,11 @@ the phone and Spotify.
 """
 
 import json
+import tempfile
 import time
 import unittest
+import wave
+from pathlib import Path
 from unittest import mock
 
 try:
@@ -108,7 +111,8 @@ class HubTest(unittest.TestCase):
         self.spotify.play()                          # Spotify takes over: local music pauses
         self.assertEqual(hub.source, "spotify")
         self.assertEqual(self.state(), {"source": "spotify", "playing": True,
-                                        "local": {"album": None, "path": "", "index": 2, "position": 10}})
+                                        "local": {"album": None, "path": "", "index": 2, "position": 10},
+                                        "modes": {"shuffle": False, "repeat": "all"}})
 
     def test_every_few_seconds(self):
         hub = self.make(music=saved("local", True, position=10))
@@ -125,6 +129,74 @@ class HubTest(unittest.TestCase):
         self.assertTrue(plays_on_start(read_state(saved("local", True))))
         for source, playing in (("local", False), ("spotify", True), ("phone", True)):
             self.assertFalse(plays_on_start(read_state(saved(source, playing))), source)
+
+
+class ModesTest(unittest.TestCase):
+    """Shuffle and repeat: the Pi's own music only, kept between runs."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tracks = []
+        for n in range(1, 5):
+            path = Path(tmp.name) / f"t{n}.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(48000)
+                w.writeframes(bytes(48000 * 4))
+            self.tracks.append({"path": str(path), "title": f"T{n}", "artist": "Band", "duration": 1,
+                                "art": "", "album": "A", "albumArtist": "", "disc": 0, "track": n})
+
+    def make(self, **values):
+        from backend.library import LibraryPlayer
+        self.settings = FakeSettings(**values)
+        self.local = LibraryPlayer(self.tracks)
+        self.addCleanup(self.local._engine._shutdown)
+        self.local.start = lambda: None         # no decoding left running when the test ends
+        with mock.patch("backend.hub.shutil.which", return_value=None):
+            hub = MediaHub(self.local, FakeSource(), FakeSource(), settings=self.settings)
+        hub.start()
+        self.addCleanup(hub._save_timer.stop)
+        return hub
+
+    def test_the_keys_set_and_save_them(self):
+        hub = self.make()
+        self.assertEqual((hub.hasModes, hub.shuffle, hub.repeat), (True, False, "all"))
+        hub.toggleShuffle()
+        hub.cycleRepeat()
+        self.assertEqual((hub.shuffle, hub.repeat), (True, "one"))
+        self.assertEqual(json.loads(self.settings.values["music"])["modes"],
+                         {"shuffle": True, "repeat": "one"})
+
+    def test_they_come_back_after_a_restart(self):
+        state = json.loads(saved("local", False))
+        state["modes"] = {"shuffle": True, "repeat": "off"}
+        hub = self.make(music=json.dumps(state))
+        self.assertEqual((hub.shuffle, hub.repeat), (True, "off"))
+
+    def test_junk_saved_leaves_the_defaults(self):
+        for modes in ("x", {"shuffle": "yes", "repeat": "sideways"}, None):
+            state = json.loads(saved("local", False))
+            state["modes"] = modes
+            hub = self.make(music=json.dumps(state))
+            self.assertEqual((hub.shuffle, hub.repeat), (False, "all"), modes)
+
+    def test_not_on_other_sources(self):
+        hub = self.make()
+        self.assertTrue(hub.hasModes)
+        hub._set_source("spotify")
+        self.assertFalse(hub.hasModes)
+        hub.toggleShuffle()
+        hub.cycleRepeat()
+        self.assertEqual((self.local.shuffle, self.local.repeat), (False, "all"))
+
+    def test_the_demo_player_has_none(self):
+        demo = MediaPlayer()
+        self.assertFalse(demo.hasModes)
+        demo.toggleShuffle()
+        demo.cycleRepeat()
+        self.assertEqual((demo.shuffle, demo.repeat), (False, "all"))
 
 
 class NoMusicTest(unittest.TestCase):

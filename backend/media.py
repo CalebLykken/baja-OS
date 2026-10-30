@@ -27,6 +27,7 @@ class MediaPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()             # never: the demo has no albums
+    modesChanged = pyqtSignal()             # never: the demo plays in order
 
     def __init__(self, queue=None, parent=None):
         """The demo playlist, or `queue` (a list of {title, artist, duration};
@@ -111,6 +112,29 @@ class MediaPlayer(QObject):
     @pyqtProperty("QVariantList", constant=True)
     def queue(self):
         return self._queue
+
+    @pyqtProperty(bool, constant=True)
+    def hasModes(self):
+        return False
+
+    @pyqtProperty(bool, constant=True)
+    def shuffle(self):
+        return False
+
+    @pyqtProperty(str, constant=True)
+    def repeat(self):
+        return "all"
+
+    def set_modes(self, shuffle, repeat):
+        pass
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        pass
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        pass
 
     @pyqtProperty("QVariantList", constant=True)
     def albums(self):

@@ -19,7 +19,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 try:
     from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer
     from backend import library
-    from backend.library import LibraryPlayer, group_albums, resume_point, scan
+    from backend.library import LibraryPlayer, group_albums, play_order, resume_point, scan, step
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 or mutagen isn't installed ({e})")
 
@@ -285,6 +285,151 @@ class EmptyPlayerTest(unittest.TestCase):
 
     def test_no_songs_means_no_resume_point(self):
         self.assertEqual(resume_point([], [], self.SAVED), (-1, 0, 0))
+
+
+class OrderTest(unittest.TestCase):
+    """Which song follows which: shuffle and repeat."""
+
+    def test_play_order(self):
+        self.assertEqual(play_order(4, 2, False), [0, 1, 2, 3])
+        for first in range(4):
+            order = play_order(4, first, True)
+            self.assertEqual((order[0], sorted(order)), (first, [0, 1, 2, 3]))
+        self.assertEqual(play_order(0, 0, True), [])
+        self.assertEqual(sorted(play_order(3, 9, True)), [0, 1, 2])      # a stale first position
+
+    def test_step(self):
+        order = [2, 0, 1]
+        self.assertEqual((step(order, 2, 1, False), step(order, 0, 1, False)), (0, 1))
+        self.assertIsNone(step(order, 1, 1, False))                      # the end, no wrap
+        self.assertEqual(step(order, 1, 1, True), 2)                     # round to the first
+        self.assertEqual(step(order, 2, -1, True), 1)                    # and back round
+        self.assertIsNone(step(order, 2, -1, False))
+        self.assertEqual(step(order, 7, 1, False), 2)                    # not in it: the first
+        self.assertIsNone(step([], 0, 1, True))
+
+
+class ModesTest(unittest.TestCase):
+    """The real player: what plays after each song, and that the engine follows it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tracks = []
+        for n in range(1, 5):
+            path = Path(tmp.name) / f"Blue-{n}.wav"
+            write_wav(path, 1)
+            tracks.append(track(str(path), "Blue", n))
+        self.player = LibraryPlayer(tracks)
+        self.addCleanup(self.player._engine._shutdown)
+        self.engine = self.player._engine
+
+    def queued(self):
+        """The songs the engine has decoded or lined up, in order."""
+        with self.engine._lock:
+            return [s.index for s in self.engine._songs]
+
+    def follows(self):
+        return [self.player._after(i) for i in range(4)]
+
+    def test_the_default_is_how_it_always_played(self):
+        self.assertEqual((self.player.shuffle, self.player.repeat), (False, "all"))
+        self.assertEqual(self.follows(), [1, 2, 3, 0])
+
+    def test_repeat_cycles_and_changes_what_follows(self):
+        self.player.cycleRepeat()
+        self.assertEqual((self.player.repeat, self.follows()), ("one", [0, 1, 2, 3]))
+        self.player.cycleRepeat()
+        self.assertEqual((self.player.repeat, self.follows()), ("off", [1, 2, 3, None]))
+        self.player.cycleRepeat()
+        self.assertEqual((self.player.repeat, self.follows()), ("all", [1, 2, 3, 0]))
+
+    def test_shuffle_plays_everything_once_starting_from_this_song(self):
+        self.player.playIndex(2)
+        self.player.toggleShuffle()
+        seen, i = [2], self.player._after(2)
+        while i != 2:
+            seen.append(i)
+            i = self.player._after(i)
+        self.assertEqual(sorted(seen), [0, 1, 2, 3])          # all of them, then round again
+        self.player.cycleRepeat()
+        self.player.cycleRepeat()                             # off
+        last = self.player._order[-1]
+        self.assertIsNone(self.player._after(last))
+        self.player.toggleShuffle()
+        self.assertEqual(self.player._order, [0, 1, 2, 3])
+
+    def test_the_keys_still_move_on_whatever_repeat_says(self):
+        self.player.cycleRepeat()                             # one
+        self.player.playIndex(1)
+        self.player.next()
+        self.assertEqual(self.player.index, 2)
+        self.player.cycleRepeat()                             # off
+        self.player.playIndex(3)
+        self.player.next()
+        self.assertEqual(self.player.index, 0)                # round, not stuck
+
+    def test_next_and_back_follow_the_shuffle_order(self):
+        self.player.toggleShuffle()
+        order = list(self.player._order)
+        self.player.playIndex(order[0])
+        self.player._order = order = list(self.player._order)
+        self.player.next()
+        self.assertEqual(self.player.index, order[1])
+        self.player.next()
+        self.assertEqual(self.player.index, order[2])
+
+    def test_a_changed_mode_replaces_the_song_lined_up_next(self):
+        self.player.start()
+        spin(500)                                             # song 0 decoded, song 1 lined up
+        self.assertEqual(self.queued(), [0, 1])
+        self.player.cycleRepeat()                             # one: 0 again
+        spin(500)
+        self.assertEqual(self.queued(), [0, 0])
+        self.player.cycleRepeat()                             # off
+        spin(500)
+        self.assertEqual(self.queued(), [0, 1])
+
+    def test_the_feed_stops_after_the_last_song_with_repeat_off(self):
+        self.player.cycleRepeat()
+        self.player.cycleRepeat()                             # off
+        self.player.restore({"album": None, "path": self.player._queue[3]["path"],
+                             "index": 3, "position": 0}, play=True)
+        self.player.start()
+        spin(500)
+        self.assertEqual(self.queued(), [3])                  # nothing lined up after it
+        ended = []
+        self.engine.ended.connect(lambda: ended.append(True))
+        # The audio thread isn't pulling on this Mac: pull here. Its wantDecode would run
+        # straight back into the engine under the lock the pull holds (it's queued on the Pi).
+        self.engine._out.wantDecode.disconnect()
+        for _ in range(40):
+            self.engine._out.pull(48000 * 4)
+            if not self.queued():
+                break
+        spin(300)
+        self.assertTrue(ended)
+        self.assertFalse(self.player.playing)
+        self.assertEqual(self.player.index, 0)                # back at the first, paused
+        self.assertEqual(self.player.title, "Blue 1")
+
+    def test_repeat_one_goes_round_the_same_song(self):
+        self.player.cycleRepeat()                             # one
+        self.player.restore({"album": None, "path": self.player._queue[1]["path"],
+                             "index": 1, "position": 0}, play=True)
+        self.player.start()
+        spin(500)
+        self.assertEqual(self.queued(), [1, 1])
+
+    def test_a_new_album_has_its_own_order(self):
+        self.player.toggleShuffle()
+        self.player.playAll()
+        self.assertEqual(sorted(self.player._order), [0, 1, 2, 3])
+        self.assertEqual(self.player._order[0], 0)
+
+    def test_set_modes_ignores_junk(self):
+        self.player.set_modes(True, "sideways")
+        self.assertEqual((self.player.shuffle, self.player.repeat), (True, "all"))
 
 
 if __name__ == "__main__":

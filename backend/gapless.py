@@ -84,6 +84,7 @@ class _Output(QObject):
     and fade state the engine shares under its lock."""
     joined = pyqtSignal(int, int, int)  # a song took over: its index, generation, ms until heard
     wantDecode = pyqtSignal()           # songs changed: the main thread decodes
+    ran_out = pyqtSignal(int, int)      # nothing follows the last song: generation, ms until it's heard
 
     def __init__(self, engine):
         super().__init__()
@@ -166,9 +167,11 @@ class _Output(QObject):
                 elif song.done:                 # its end: straight into the next
                     e._songs.popleft()
                     if not e._songs:
-                        n = e._count()
-                        if n:
-                            e._songs.append(_Song((song.index + 1) % n, song.gen))
+                        nxt = e._after(song.index)
+                        if nxt is not None:
+                            e._songs.append(_Song(nxt, song.gen))
+                        else:
+                            self.ran_out.emit(song.gen, int((held + len(out)) * 1000 / BYTES_PER_S))
                     if e._songs:
                         ahead = held + len(out)
                         nxt = e._songs[0]
@@ -205,13 +208,18 @@ class GaplessEngine(QObject):
     `play_from` after). `trackStarted(i)` says song i is now being heard;
     it's never sent for a song from before the latest `play_from`."""
     trackStarted = pyqtSignal(int)
+    ended = pyqtSignal()                # the last song has been heard and nothing follows
     _toDevice = pyqtSignal(object)
     _toVolume = pyqtSignal(float)
     _toStop = pyqtSignal()
 
-    def __init__(self, path_of, count, device, parent=None):
+    def __init__(self, path_of, count, device, parent=None, after=None):
+        """`after(i)` is the song to play after song i, or None to stop (it
+        runs on the audio thread, so it must only read); by default the
+        next one, round to the first at the end."""
         super().__init__(parent)
         self._path_of, self._count = path_of, count
+        self._after = after or (lambda i: (i + 1) % count() if count() else None)
         self._lock = threading.Lock()
         self._songs = deque()
         self._want_play = False
@@ -228,6 +236,7 @@ class GaplessEngine(QObject):
         self._out.moveToThread(self._thread)
         self._out.joined.connect(self._joined)
         self._out.wantDecode.connect(self._decode_more)
+        self._out.ran_out.connect(self._ran_out)
         self._toDevice.connect(self._out.make_sink)
         self._toVolume.connect(self._out.set_volume)
         self._toStop.connect(self._out.stop)
@@ -257,6 +266,27 @@ class GaplessEngine(QObject):
             print(f"audio: song {index} joins in {ms} ms", flush=True)
         QTimer.singleShot(ms, lambda: gen == self._gen and self.trackStarted.emit(index))
 
+    def _ran_out(self, gen, ms):
+        """The list ended: once its last song has been heard, stop, paused."""
+        QTimer.singleShot(ms, lambda: gen == self._gen and self._end())
+
+    def _end(self):
+        with self._lock:
+            self._want_play = False
+            if self._pending is None:
+                self._target = 0.0
+        self.ended.emit()
+
+    def refresh_next(self):
+        """The order changed (shuffle, repeat): forget the song already lined
+        up after the current one and line up the right one."""
+        with self._lock:
+            if self._pending is not None:
+                return
+            while len(self._songs) > 1:
+                self._songs.pop()
+        self._decode_more()
+
     # ---- decoding (main thread) ---------------------------------------------
     def _decode_more(self):
         """Decode the first song not yet decoded; once the current song is
@@ -267,10 +297,10 @@ class GaplessEngine(QObject):
             if self._decoding is not None:
                 return
             if self._songs and self._songs[-1].done and len(self._songs) < 2:
-                n = self._count()
-                if n:
-                    last = self._songs[-1]
-                    self._songs.append(_Song((last.index + 1) % n, last.gen))
+                last = self._songs[-1]
+                nxt = self._after(last.index)
+                if nxt is not None:
+                    self._songs.append(_Song(nxt, last.gen))
             song = next((s for s in self._songs if not s.done), None)
         if song is None:
             return

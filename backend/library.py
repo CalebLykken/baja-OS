@@ -14,6 +14,7 @@ it was given is kept for the next run that has music.
 """
 
 import functools
+import random
 import re
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from backend.gapless import GaplessEngine
 
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
+REPEATS = ("all", "one", "off")      # the order the key cycles; "all" is how it always played
 NO_SONG = {"title": "", "artist": "", "art": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
@@ -173,6 +175,32 @@ def resume_point(albums, tracks, state):
     return album, index, max(0, int(position))
 
 
+def play_order(count, first, shuffle):
+    """Queue positions in the order they play: folder order, or (shuffle)
+    every song once, `first` leading."""
+    order = list(range(count))
+    if shuffle and count:
+        first = first if 0 <= first < count else 0
+        order.remove(first)
+        random.shuffle(order)
+        order.insert(0, first)
+    return order
+
+
+def step(order, index, delta, wrap):
+    """The position `delta` songs from `index` in `order`; at either end it
+    goes round if `wrap`, else None. A position that isn't in the order (the
+    queue changed under it) gives the first."""
+    if not order:
+        return None
+    if index not in order:
+        return order[0]
+    at = order.index(index) + delta
+    if 0 <= at < len(order):
+        return order[at]
+    return order[at % len(order)] if wrap else None
+
+
 def preferred_output():
     """The equalizer when it's running, so music goes through it and on to
     whichever output is the default (the sound board); else the default.
@@ -190,6 +218,7 @@ class LibraryPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()
+    modesChanged = pyqtSignal()         # shuffle or repeat
 
     def __init__(self, tracks, parent=None):
         super().__init__(parent)
@@ -202,10 +231,14 @@ class LibraryPlayer(QObject):
         self._start_playing = False
         self._saved = None              # what restore() was given, kept while there are no songs
         self._volume = 40
+        self._shuffle = False
+        self._repeat = "all"
+        self._order = list(range(len(self._queue)))   # queue positions, in play order
 
         self._engine = GaplessEngine(lambda i: self._queue[i]["path"], lambda: len(self._queue),
-                                     preferred_output(), self)
+                                     preferred_output(), self, after=self._after)
         self._engine.trackStarted.connect(self._heard)
+        self._engine.ended.connect(self._ended)
         # The equalizer may start after the dashboard: move to it when it does.
         self._devices = QMediaDevices(self)
         self._devices.audioOutputsChanged.connect(self._pick_output)
@@ -226,6 +259,25 @@ class LibraryPlayer(QObject):
         if album >= 0:
             self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
         self._album = album
+        self._reorder()
+
+    def set_modes(self, shuffle, repeat):
+        """Shuffle and repeat from the last run (before restore())."""
+        self._shuffle = bool(shuffle)
+        self._repeat = repeat if repeat in REPEATS else "all"
+        self._reorder()
+
+    def _reorder(self):
+        """The play order for the queue as it is, the current song first."""
+        self._order = play_order(len(self._queue), self._index if self._queue else 0, self._shuffle)
+
+    def _after(self, index):
+        """The song that follows `index` by itself (also called on the audio
+        thread, so it only reads): the same one on repeat one, the next in
+        order, and at the end the first again on repeat all, else None."""
+        if self._repeat == "one" and 0 <= index < len(self._queue):
+            return index
+        return step(self._order, index, 1, self._repeat == "all")
 
     def state(self):
         """Where local music is up to, to save between runs. With no songs,
@@ -251,11 +303,25 @@ class LibraryPlayer(QObject):
     def _pick_output(self):
         self._engine.set_device(preferred_output())
 
-    def _go(self, index):
-        """Play song `index` of the queue now."""
+    def _ended(self):
+        """Repeat is off and the last song is over: back to the first, paused."""
+        if not self._queue:
+            return
+        self._reorder()
+        self._index = self._order[0]
+        self._engine.play_from(self._index, play=False)
+        self.trackChanged.emit()
+        self.positionChanged.emit()
+        self.playingChanged.emit()
+
+    def _go(self, index, reorder=False):
+        """Play song `index` of the queue now. `reorder`: a song picked on
+        purpose, so a shuffle starts over from it."""
         if not self._queue:
             return
         self._index = index % len(self._queue)
+        if reorder:
+            self._reorder()
         self._engine.play_from(self._index)
         self.trackChanged.emit()
         self.positionChanged.emit()
@@ -320,6 +386,20 @@ class LibraryPlayer(QObject):
         return [{"title": self._all[i]["title"], "artist": self._all[i]["artist"],
                  "duration": self._all[i]["duration"]} for i in self._albums[album]["tracks"]]
 
+    @pyqtProperty(bool, constant=True)
+    def hasModes(self):
+        """Shuffle and repeat work on this source."""
+        return True
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def shuffle(self):
+        return self._shuffle
+
+    @pyqtProperty(str, notify=modesChanged)
+    def repeat(self):
+        """'all' (round to the first, as it always has), 'one' or 'off' (stop after the last)."""
+        return self._repeat
+
     @pyqtProperty(int, notify=positionChanged)
     def position(self):
         return self._engine.position()
@@ -342,16 +422,33 @@ class LibraryPlayer(QObject):
 
     @pyqtSlot()
     def next(self):
-        self._go(self._index + 1)
+        # The key always moves on (round at the end), even on repeat one or off.
+        self._go(step(self._order, self._index, 1, True) or 0)
 
     @pyqtSlot()
     def previous(self):
         # Like a head unit: back to the start of the song, unless just begun.
-        self._go(self._index if self._engine.position() > 3 else self._index - 1)
+        if self._engine.position() > 3:
+            self._go(self._index)
+        else:
+            self._go(step(self._order, self._index, -1, True) or 0)
 
     @pyqtSlot(int)
     def playIndex(self, index):
-        self._go(index)
+        self._go(index, reorder=True)
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        self._shuffle = not self._shuffle
+        self._reorder()                 # from the song playing
+        self._engine.refresh_next()
+        self.modesChanged.emit()
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        self._repeat = REPEATS[(REPEATS.index(self._repeat) + 1) % len(REPEATS)]
+        self._engine.refresh_next()
+        self.modesChanged.emit()
 
     @pyqtSlot(int, int)
     def playAlbum(self, album, start=0):
@@ -360,6 +457,7 @@ class LibraryPlayer(QObject):
             return
         self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
         self._album = album
+        self._reorder()
         self.queueChanged.emit()
         self.playIndex(start)
 
@@ -370,6 +468,7 @@ class LibraryPlayer(QObject):
             return
         self._queue = list(self._all)
         self._album = -1
+        self._reorder()
         self.queueChanged.emit()
         self.playIndex(0)
 

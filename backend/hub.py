@@ -25,7 +25,9 @@ frame; Spotify covers are downloaded and cached first.
 
 Which source was on, and where local music was up to, are saved in
 settings (every few seconds while it plays, and whenever that changes), so
-a restart picks up the same album and song, near the same place. Local
+a restart picks up the same album and song, near the same place. Shuffle
+and repeat (the Pi's own music only; Spotify and the phone have no way to
+set them from here) are saved with it. Local
 music plays again only if it was what was playing; after Spotify or the
 phone it waits, paused, for them to come back.
 """
@@ -136,6 +138,7 @@ class MediaHub(QObject):
     _artReady = pyqtSignal(str, str, str, str)   # source, its art url, local copy, rounded card
 
     maxVolumeChanged = pyqtSignal()
+    modesChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
@@ -146,6 +149,9 @@ class MediaHub(QObject):
         saved = read_state(str(settings.get("music", ""))) if settings else None
         self._was_playing = plays_on_start(saved)      # kept while local music has no songs
         if saved is not None:
+            modes = saved.get("modes")
+            if isinstance(modes, dict):
+                local.set_modes(modes.get("shuffle") is True, modes.get("repeat"))
             local.restore(saved.get("local"), play=self._was_playing)
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
         self._system_volume = bool(shutil.which("wpctl"))
@@ -182,6 +188,7 @@ class MediaHub(QObject):
         spotify.changed.connect(self._spotify_changed)
         spotify.queueChanged.connect(self.queueChanged)
         local.queueChanged.connect(self.queueChanged)       # an album started
+        local.modesChanged.connect(self.modesChanged)
         self._recent_art = {}             # Spotify cover URL -> saved copy
         spotify.recentsChanged.connect(self._save_recent_art)
         spotify.recentsChanged.connect(self.recentsChanged)
@@ -198,7 +205,8 @@ class MediaHub(QObject):
             src.start()
         if self._settings:
             # Only from here: before it starts, local music doesn't know its place.
-            for sig in (self.sourceChanged, self.playingChanged, self.trackChanged):
+            for sig in (self.sourceChanged, self.playingChanged, self.trackChanged,
+                        self.modesChanged):
                 sig.connect(self._save)
             self._save_timer.start()
 
@@ -212,7 +220,9 @@ class MediaHub(QObject):
             playing = self._was_playing
         self._settings.set("music", json.dumps({
             "source": self._source, "playing": playing,
-            "local": self._sources["local"].state()}))
+            "local": self._sources["local"].state(),
+            "modes": {"shuffle": self._sources["local"].shuffle,
+                      "repeat": self._sources["local"].repeat}}))
 
     def _no_songs(self):
         """True when local music is the source and has nothing to play."""
@@ -233,7 +243,7 @@ class MediaHub(QObject):
             self._source = source
             self._apply_volume()
             for sig in ("sourceChanged", "volumeChanged", "trackChanged",
-                        "positionChanged", "playingChanged", "queueChanged"):
+                        "positionChanged", "playingChanged", "queueChanged", "modesChanged"):
                 getattr(self, sig).emit()
 
     def _pause_others(self, keep):
@@ -475,6 +485,30 @@ class MediaHub(QObject):
     def upNext(self):
         """What Spotify plays next (display only)."""
         return self._sources["spotify"].upNext if self._source == "spotify" else []
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def hasModes(self):
+        """Shuffle and repeat can be set: the Pi's own music is the source."""
+        return self._source == "local" and self._sources["local"].hasModes
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def shuffle(self):
+        return self._sources["local"].shuffle
+
+    @pyqtProperty(str, notify=modesChanged)
+    def repeat(self):
+        """'all', 'one' or 'off' for the Pi's own music."""
+        return self._sources["local"].repeat
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        if self.hasModes:
+            self._sources["local"].toggleShuffle()
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        if self.hasModes:
+            self._sources["local"].cycleRepeat()
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):

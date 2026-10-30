@@ -54,6 +54,21 @@ Item {
                     Layout.fillWidth: true
                     SourceBadge {}
                     Item { Layout.fillWidth: true }
+                    // The Pi's own music only: Spotify and the phone have no way to set these from here.
+                    IconButton {
+                        visible: media.hasModes
+                        icon: "shuffle"
+                        size: 60
+                        active: media.shuffle
+                        onClicked: media.toggleShuffle()
+                    }
+                    IconButton {
+                        visible: media.hasModes
+                        icon: media.repeat === "one" ? "repeat_one" : "repeat"
+                        size: 60
+                        active: media.repeat !== "off"
+                        onClicked: media.cycleRepeat()
+                    }
                     IconButton {
                         icon: "equalizer"
                         size: 60

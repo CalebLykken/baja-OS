@@ -15,6 +15,8 @@ from unittest import mock
 
 try:
     from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
+    from PyQt6.QtMultimedia import QAudio
+    from backend import gapless
     from backend.hub import MediaHub, plays_on_start, read_state
     from backend.media import MediaPlayer
 except ImportError as e:
@@ -131,6 +133,39 @@ class HubTest(unittest.TestCase):
             self.assertFalse(plays_on_start(read_state(saved(source, playing))), source)
 
 
+class FakeSink(QObject):
+    """Stands in for QAudioSink: no audio device needed, nothing asks the feed for data."""
+    stateChanged = pyqtSignal(object)
+
+    def __init__(self, device, fmt, parent=None):
+        super().__init__(parent)
+        self._device, self._size = device, 0
+
+    def setBufferSize(self, n):
+        self._size = n
+
+    def bufferSize(self):
+        return self._size
+
+    def bytesFree(self):
+        return self._size
+
+    def setVolume(self, v):
+        pass
+
+    def start(self, feed):
+        pass
+
+    def stop(self):
+        pass
+
+    def error(self):
+        return QAudio.Error.NoError
+
+    def device(self):
+        return self._device
+
+
 class ModesTest(unittest.TestCase):
     """Shuffle and repeat: the Pi's own music only, kept between runs."""
 
@@ -150,10 +185,12 @@ class ModesTest(unittest.TestCase):
 
     def make(self, **values):
         from backend.library import LibraryPlayer
+        patch = mock.patch.object(gapless, "QAudioSink", FakeSink)
+        patch.start()
+        self.addCleanup(patch.stop)          # undone after the engine is shut down
         self.settings = FakeSettings(**values)
         self.local = LibraryPlayer(self.tracks)
         self.addCleanup(self.local._engine._shutdown)
-        self.local.start = lambda: None         # no decoding left running when the test ends
         with mock.patch("backend.hub.shutil.which", return_value=None):
             hub = MediaHub(self.local, FakeSource(), FakeSource(), settings=self.settings)
         hub.start()

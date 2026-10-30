@@ -109,8 +109,10 @@ class _Output(QObject):
         self.sink.start(self.feed)
 
     def _state(self, state):
-        if state == QAudio.State.StoppedState and self.sink.error() != QAudio.Error.NoError:
-            QTimer.singleShot(1000, lambda: self.make_sink(self.sink.device()))
+        if (state == QAudio.State.StoppedState and self.sink is not None
+                and self.sink.error() != QAudio.Error.NoError):
+            device = self.sink.device()
+            QTimer.singleShot(1000, lambda: self.sink is not None and self.make_sink(device))
 
     @pyqtSlot(float)
     def set_volume(self, v):
@@ -122,6 +124,8 @@ class _Output(QObject):
     def stop(self):
         if self.sink is not None:
             self.sink.stop()
+            self.sink.deleteLater()
+            self.sink = None
 
     def latency(self):
         return max(0, self.sink.bufferSize() - self.sink.bytesFree()) if self.sink else 0
@@ -221,6 +225,7 @@ class GaplessEngine(QObject):
         super().__init__(parent)
         self._path_of, self._count = path_of, count
         self._after = after or (lambda i, failed=False: (i + 1) % count() if count() else None)
+        self._closed = False
         self._bad = set()           # songs that wouldn't decode since the last play_from
         self._lock = threading.Lock()
         self._songs = deque()
@@ -242,6 +247,9 @@ class GaplessEngine(QObject):
         self._toDevice.connect(self._out.make_sink)
         self._toVolume.connect(self._out.set_volume)
         self._toStop.connect(self._out.stop)
+        # The stream and its feed belong to the audio thread: delete them there
+        # as it ends, not from whichever thread happens to collect them later.
+        self._thread.finished.connect(self._out.deleteLater)
         self._thread.start(QThread.Priority.TimeCriticalPriority)
         self._toDevice.emit(device)
         app = QCoreApplication.instance()
@@ -249,9 +257,14 @@ class GaplessEngine(QObject):
             app.aboutToQuit.connect(self._shutdown)
 
     def _shutdown(self):
+        """Stop the stream, the audio thread and any decoder still running.
+        Safe to call twice (a test, then the app quitting)."""
+        self._closed = True
         self._toStop.emit()
         self._thread.quit()
         self._thread.wait(1000)
+        with self._lock:
+            self._stop_decoder()
 
     # ---- the stream ---------------------------------------------------------
     def set_device(self, device):
@@ -297,6 +310,8 @@ class GaplessEngine(QObject):
         """Decode the first song not yet decoded; once the current song is
         decoded, line up the next one too."""
         with self._lock:
+            if self._closed:
+                return
             if self._decoding is not None and self._decoding not in self._songs:
                 self._stop_decoder()            # its song was skipped
             if self._decoding is not None:

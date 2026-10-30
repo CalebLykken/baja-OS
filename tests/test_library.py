@@ -17,13 +17,48 @@ from unittest import mock
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 try:
-    from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer
-    from backend import library
+    from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSignal
+    from PyQt6.QtMultimedia import QAudio, QMediaDevices
+    from backend import gapless, library
     from backend.library import LibraryPlayer, group_albums, play_order, resume_point, scan, step
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 or mutagen isn't installed ({e})")
 
 app = QCoreApplication.instance() or QCoreApplication([])
+
+
+class FakeSink(QObject):
+    """Stands in for QAudioSink, so nothing here depends on the Mac's (or CI's)
+    audio device: it never asks the feed for anything."""
+    stateChanged = pyqtSignal(object)
+
+    def __init__(self, device, fmt, parent=None):
+        super().__init__(parent)
+        self._device, self._size = device, 0
+
+    def setBufferSize(self, n):
+        self._size = n
+
+    def bufferSize(self):
+        return self._size
+
+    def bytesFree(self):
+        return self._size
+
+    def setVolume(self, v):
+        pass
+
+    def start(self, feed):
+        pass
+
+    def stop(self):
+        pass
+
+    def error(self):
+        return QAudio.Error.NoError
+
+    def device(self):
+        return self._device
 
 
 def write_wav(path, seconds):
@@ -211,6 +246,8 @@ class RestoreTest(unittest.TestCase):
         self.assertGreaterEqual(self.player.position, 1)
 
     def test_play_after_a_paused_restore_goes_on_from_there(self):
+        if not QMediaDevices.defaultAudioOutput().isFormatSupported(gapless.audio_format()):
+            self.skipTest("the default audio output can't play the engine's format")
         self.player.restore({"album": None, "path": self.tracks[0]["path"], "index": 0, "position": 2})
         self.player.start()
         spin(200)
@@ -310,9 +347,14 @@ class OrderTest(unittest.TestCase):
 
 
 class ModesTest(unittest.TestCase):
-    """The real player: what plays after each song, and that the engine follows it."""
+    """The real player: what plays after each song, and that the engine follows it.
+    The stream is a FakeSink, so this runs the same with or without a working
+    audio device."""
 
     def setUp(self):
+        patch = mock.patch.object(gapless, "QAudioSink", FakeSink)
+        patch.start()
+        self.addCleanup(patch.stop)          # registered first: undone after the engine is shut down
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         tracks = []
@@ -400,7 +442,7 @@ class ModesTest(unittest.TestCase):
         self.assertEqual(self.queued(), [3])                  # nothing lined up after it
         ended = []
         self.engine.ended.connect(lambda: ended.append(True))
-        # The audio thread isn't pulling on this Mac: pull here. Its wantDecode would run
+        # Nothing pulls from the FakeSink: pull here. Its wantDecode would run
         # straight back into the engine under the lock the pull holds (it's queued on the Pi).
         self.engine._out.wantDecode.disconnect()
         for _ in range(40):

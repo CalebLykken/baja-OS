@@ -166,10 +166,12 @@ class Ducker:
     def duck(self, scale=1.0):
         """Turn down every stream not already ducked, to DUCK_TO of what it
         was times `scale` (<1 while the output is raised for the voice, so
-        the music stays as quiet as it was)."""
+        the music stays as quiet as it was). True if every stream was read
+        and turned down."""
         with self._lock:
             self._depth += 1
-            names = _stream_names() or {}
+            dumped = _stream_names()
+            names = dumped or {}
             held = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
             # A stream the last run left ducked, now back at that level, already has
             # its real "before" on file: don't save the ducked level as a new one.
@@ -181,7 +183,9 @@ class Ducker:
                                     "ducked": v * DUCK_TO * scale, "give_up": None, "started": True,
                                     "failing": False, "recovered": False})
             self._write()               # before any volume moves
-            _set_volumes({n: v * DUCK_TO * scale for n, v in new.items()})
+            done = _set_volumes({n: v * DUCK_TO * scale for n, v in new.items()})
+            unread = set(names) - set(new) - held   # streams wpctl wouldn't read
+            return dumped is not None and not unread and done == set(new)
 
     def release(self):
         with self._lock:
@@ -404,13 +408,14 @@ class Voice(QObject):
         for ducking the music). The stream is only ever turned down, never
         amplified (Piper's WAVs are near full scale), so an output quieter
         than the target is raised instead. Without a reading of the output
-        the stream just plays at the level."""
+        the stream just plays at the level. wpctl volumes are cubic in amplitude
+        and pw-play's is linear, so the stream gets the ratio cubed."""
         target = self._target()
         sink = _volume(SINK)
         if sink is None:
-            return self._level / 100, None, 1.0
+            return (self._level / 100) ** 3, None, 1.0
         if sink >= target:
-            return target / sink, None, 1.0
+            return (target / sink) ** 3, None, 1.0
         return 1.0, target, sink / target
 
     def _run(self):
@@ -438,8 +443,9 @@ class Voice(QObject):
                 gain, raise_to, scale = self._plan_levels()
                 raised = None
                 try:
-                    self._ducker.duck(scale)
-                    if raise_to is not None and _set_volumes({SINK: raise_to}):
+                    ducked = self._ducker.duck(scale)
+                    # Raising the output with music not turned down would blast it.
+                    if raise_to is not None and ducked and _set_volumes({SINK: raise_to}):
                         raised = raise_to
                     subprocess.run(["pw-play", "--media-role", "Navigation",
                                     "--volume", f"{gain:.3f}",
@@ -459,7 +465,7 @@ class Voice(QObject):
         if raised is None:
             return
         now = _volume(SINK)
-        if now is not None and abs(now - raised) <= DUCK_TOL:
+        if now is None or abs(now - raised) <= DUCK_TOL:     # unreadable: put it back anyway
             _set_volumes({SINK: raised * scale})
 
     # ---- what QML and the router use -----------------------------------------------

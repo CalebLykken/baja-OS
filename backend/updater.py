@@ -298,7 +298,7 @@ def _undo(root, before, target, error):
         git(root, "reset", "--hard", before, timeout=None)
         # Files only the target has: the reset doesn't know them, and left
         # there they'd be "in the way" of the next try.
-        for name in git(root, "diff", "--name-only", "-z", "--diff-filter=A", before, target).split("\0"):
+        for name in git(root, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", before, target).split("\0"):
             if name:
                 (Path(root) / name).unlink(missing_ok=True)
         clear_marker(root)

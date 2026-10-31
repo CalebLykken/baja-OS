@@ -608,6 +608,32 @@ class GuardTest(Repos):
         (self.pi / MARKER).write_bytes(b"\xff\x00junk")
         self.assertEqual(self.guard(), 0)
 
+    def test_a_renamed_file_isnt_left_in_the_way(self):
+        before = self.head()
+        self.git(self.mac, "mv", "app.py", "moved.py")
+        target = self.push("One")
+        check_for_updates(self.pi)
+        write_marker(self.pi, "merging", before, target)
+        (self.pi / "moved.py").write_text("First\n")
+        self.assertEqual(self.guard(), 75)
+        self.assertFalse((self.pi / "moved.py").exists())
+        self.assertEqual(update_to(self.pi, target)["state"], "updated")
+
+    def test_a_marker_that_cant_be_saved_still_ends_in_a_start(self):
+        before, target = self.cut_off()
+        (self.pi / (MARKER + ".new")).mkdir()
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(self.head(), before)
+
+    def test_a_guard_that_keeps_asking_for_a_restart_cant_stop_the_start(self):
+        (self.pi / "deploy").mkdir(exist_ok=True)
+        shutil.copy(HERE / "run.sh", self.pi / "run.sh")
+        (self.pi / "deploy" / "update-guard.sh").write_text("exit 75\n")
+        (self.pi / "main.py").write_text("print('started')\n")
+        env = dict(self.env, QT_QPA_PLATFORM="offscreen", QT_QPA_EGLFS_KMS_CONFIG="x")
+        done = subprocess.run(["./run.sh"], cwd=self.pi, env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "started"))
+
     def run_sh(self):
         env = dict(self.env, QT_QPA_PLATFORM="offscreen", QT_QPA_EGLFS_KMS_CONFIG="x")
         return subprocess.run(["./run.sh"], cwd=self.pi, env=env, capture_output=True, text=True)

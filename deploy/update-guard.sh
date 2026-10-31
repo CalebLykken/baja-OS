@@ -70,13 +70,13 @@ if [ "$phase" = pending ]; then
     fi
     echo "update-guard: ${target} didn't come up in $MAX_STARTS starts; back to ${before}" >&2
     go_back || { echo "update-guard: couldn't go back" >&2; exit 0; }
-    save fell-back 0
+    save fell-back 0 || exit 0
 else
     echo "update-guard: an update was cut off; back to ${before}" >&2
     go_back || { echo "update-guard: couldn't go back" >&2; exit 0; }
     # Files only the target has: the reset doesn't know them, and left there
     # they'd be "in the way" of the next try.
-    git diff --name-only -z --diff-filter=A "$before" "$target" 2>/dev/null | xargs -0 rm -f --
-    save cut-off 0
+    git diff --name-only -z --no-renames --diff-filter=A "$before" "$target" 2>/dev/null | xargs -0 rm -f --
+    save cut-off 0 || exit 0
 fi
 exit 75

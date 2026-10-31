@@ -435,17 +435,29 @@ class Route:
         end = self.leg_ends[self.leg]
         return abs(self.along - self.cum[end]) < ARRIVED_M and _metres(self._p, self.shape[end]) < ARRIVED_M
 
+    def _gone_by(self, heading, speed, off_max):
+        """The next stop is behind the truck, which is moving the way the line
+        goes and within off_max of it."""
+        return not (self.leg >= len(self.leg_ends) or self.along <= self.cum[self.leg_ends[self.leg]] + ARRIVED_M
+                    or self.off > off_max or speed <= HEADING_MS or self._wrong_way(self.seg, heading))
+
     def past_stop(self, heading, speed):
         """The truck has gone by the next stop without coming near it (a
         tunnel, a gap in the fixes). On a new route it can be put on the way
         back of an out-and-back to a stop, so it takes a few fixes in a row
         on the line, moving the way the line goes."""
-        if (self.leg >= len(self.leg_ends) or self.along <= self.cum[self.leg_ends[self.leg]] + ARRIVED_M
-                or self.off > ARRIVED_M or speed <= HEADING_MS or self._wrong_way(self.seg, heading)):
+        if not self._gone_by(heading, speed, ARRIVED_M):
             self._past = 0
             return False
         self._past += 1
         return self._past >= JUMP_FIXES
+
+    def passed_stop(self, heading, speed):
+        """Before a reroute: the next stop is behind a truck that has since left
+        the line (a frontage road 35-60 m over), which past_stop never saw. A
+        reroute would turn it back for the stop. Being off the line now (it
+        must be, to reroute) doesn't count against it."""
+        return self._gone_by(heading, speed, math.inf)
 
     def stops_left(self):
         return self.stops[self.leg:]
@@ -919,6 +931,8 @@ class Router(QObject):
                     and not self._computing
                     and now - self._last_reroute > REROUTE_EVERY_S and self._dest):
                 self._last_reroute = now
+                while r.passed_stop(self._gps.heading, self._gps.speed):
+                    self._leave_stop(r)
                 self._request(*self._dest, reroute=True)
         else:
             self._off_count = 0

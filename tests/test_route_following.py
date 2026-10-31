@@ -472,6 +472,28 @@ class StopsTest(unittest.TestCase):
             self.at(0, n)
         self.assertEqual(self.router.stopCount, 2)
 
+    def leave_line(self, e, n):
+        """Three fixes well off the line, enough for a reroute."""
+        self.gps.heading = 60.0
+        with mock.patch("backend.routing.time.monotonic", lambda: 5000.0):
+            for k in range(3):
+                self.router._clock = lambda k=k: 5000.0 + 2 * k
+                self.at(e + 40 * k, n + 15 * k)
+
+    def test_a_stop_gone_by_on_a_road_beside_the_line_isnt_asked_for_again(self):
+        self.driving()
+        for n in range(0, 1500, 15):
+            self.at(45, n)
+        self.leave_line(70, 1515)
+        self.assertEqual(self.asked, [([STOP_B], True)])
+
+    def test_a_stop_not_reached_yet_stays_in_a_reroute(self):
+        self.driving()
+        for n in range(0, 900, 15):
+            self.at(0, n)
+        self.leave_line(70, 915)
+        self.assertEqual(self.asked, [([STOP_A, STOP_B], True)])
+
     def test_past_a_stop_waits_for_a_new_route_on_its_way(self):
         self.driving()
         self.router._computing = True

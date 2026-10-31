@@ -439,7 +439,10 @@ From the Mac:
 
 Or on the Pi: `git pull && sudo systemctl restart baja-os`, or Settings > System > Check for updates
 (needs a real `git clone` that can reach GitHub, not a push.sh copy; it doesn't re-run `setup-pi.sh`,
-so run that over SSH when a release changes `deploy/` or the packages).
+so run that over SSH when a release changes `deploy/` or the packages). An update from Settings looks
+after itself: one that's cut off is put back on the next start, and one that keeps dying before it has run
+for a minute falls back to the commit before it after three tries (`deploy/update-guard.sh`), and says so
+on screen.
 
 ## Next steps
 

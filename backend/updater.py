@@ -11,13 +11,32 @@ updated from the Mac instead.
 
 It won't update with tracked files changed here or commits made here
 (sort that out over SSH), nor while the truck is moving or directions are
-on. The restart waits for the same.
+on. The restart waits for directions to end; if the truck moves after the
+update, there's no restart at all (a red light mustn't end in one, and a
+stop is never known to be long enough): the new version starts on the next
+boot. A truck that has never reported a speed isn't known to be stopped, so
+it won't update either: that takes the OBD adapter or the GPS answering.
 
 Git is never allowed to ask for anything: no terminal, no askpass, so a
 private repo without a key fails at once with a sentence saying so. A
 fetch that takes too long is stopped with SIGTERM, which lets git remove
 its lock files; the fast-forward is never stopped, since cut off halfway it
-would leave a mix of old and new files.
+would leave a mix of old and new files. If it fails, or the power goes
+halfway, the tree is put back on the commit it started from.
+
+deploy/update-guard.sh (run by run.sh, before any Python) does the putting
+back after a power cut, and falls back to the old commit if the new one
+keeps dying before it's up. They talk through MARKER, a small file next to
+the code:
+
+    merging     written before the merge. Still there on the next start:
+                the merge was cut off, so go back ("cut-off").
+    pending     the merge is done. The guard counts the starts; the dashboard
+                removes the file after HEALTHY_AFTER_MS of running (from the
+                UI thread, so a frozen one doesn't count). Too many starts
+                without that: go back ("fell-back").
+    cut-off, fell-back
+                for the dashboard to say so on screen, until OK.
 
 The read-only root (#36) isn't in place yet. Until then a read-only file
 system is just reported as such. Once it is, a checkout on the root needs
@@ -46,6 +65,12 @@ MAX_LISTED = 8              # commit subjects shown; `count` says how many in al
 MOVING_MPH = 3.0            # as backend/ignition.py: walking pace counts as stopped
 MPH_TO_MS = 0.44704
 RESTART_DELAY_MS = 3000     # long enough to read "Updated"
+MARKER = ".update-state"    # git-ignored; the phases are above
+HEALTHY_AFTER_MS = 60000    # up this long on a new version: it works, keep it
+
+DRIVING = "Not while driving: stop the truck first."
+NO_SPEED = ("Can't tell the truck is stopped: neither the car nor the GPS has "
+            "reported a speed yet.")
 
 NOT_A_CHECKOUT = ("This copy has no git history (deploy/push.sh copies without it), "
                   "so it can't update itself: push from the Mac instead.")
@@ -207,6 +232,81 @@ def check_for_updates(root):
         return _result("failed", f"Couldn't check: {e}")
 
 
+def write_marker(root, phase, before, target):
+    """Replaces MARKER in one step, on the disk before this returns: the
+    next thing may be a power cut."""
+    path = Path(root) / MARKER
+    tmp = path.with_name(MARKER + ".new")
+    with open(tmp, "w") as f:
+        f.write(f"phase {phase}\nbefore {before}\ntarget {target}\nstarts 0\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    folder = os.open(root, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+def read_marker(root):
+    """MARKER as a dict, {} if there's none (or it can't be read)."""
+    try:
+        lines = (Path(root) / MARKER).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    return dict(x.split(" ", 1) for x in lines if " " in x)
+
+
+def clear_marker(root):
+    (Path(root) / MARKER).unlink(missing_ok=True)
+
+
+def confirm_healthy(root):
+    """Keeps a new version for good: True if this was its first good run.
+    A marker with no starts is an update still waiting for its restart: the
+    code running now isn't the new version."""
+    m = read_marker(root)
+    if m.get("phase") == "pending" and m.get("starts", "0") != "0":
+        clear_marker(root)
+        return True
+    return False
+
+
+def marker_notice(root):
+    """What to tell the driver about an update the guard took back, or ''."""
+    m = read_marker(root)
+    before, target = m.get("before", "")[:7], m.get("target", "")[:7]
+    if m.get("phase") == "fell-back":
+        return (f"The update to {target} didn't start properly, so Baja OS "
+                f"went back to {before}.")
+    if m.get("phase") == "cut-off":
+        return (f"An update was cut off before it finished, so Baja OS stayed "
+                f"on {before}. Check for updates to try again.")
+    return ""
+
+
+def _undo(root, before, target, error):
+    """Puts the tree back after a failed merge (tracked files were clean just
+    before it) and says what happened. If that fails too, the marker stays
+    and the next start tries again."""
+    what = str(error).rstrip(".")
+    try:
+        if "would be overwritten" in error.stderr.lower():
+            clear_marker(root)              # git looked first and touched nothing
+            return what + "."
+        git(root, "reset", "--hard", before, timeout=None)
+        # Files only the target has: the reset doesn't know them, and left
+        # there they'd be "in the way" of the next try.
+        for name in git(root, "diff", "--name-only", "-z", "--diff-filter=A", before, target).split("\0"):
+            if name:
+                (Path(root) / name).unlink(missing_ok=True)
+        clear_marker(root)
+    except (GitError, OSError) as e:
+        return f"{what}. Putting the old version back failed too ({e}): the next start tries again."
+    return f"{what}. The old version was put back."
+
+
 def update_to(root, target):
     """Fast-forwards to target (from check_for_updates), after making sure
     again that nothing's in the way. Returns a dict with state "updated"
@@ -216,26 +316,46 @@ def update_to(root, target):
         if blocker:
             return _result("failed", blocker[0].upper() + blocker[1:])
         before = git(root, "rev-parse", "HEAD").strip()
-        git(root, "merge", "--ff-only", target, timeout=None)
-        after = git(root, "rev-parse", "HEAD").strip()
+        write_marker(root, "merging", before, target)
+        try:
+            git(root, "merge", "--ff-only", target, timeout=None)
+        except GitError as e:
+            return _result("failed", _undo(root, before, target, e))
+        try:
+            after = git(root, "rev-parse", "HEAD").strip()
+        except GitError:
+            after = target                  # the merge said yes; only this was slow
         if after == before:
+            clear_marker(root)
             return _result("current", "Up to date.")
+        os.sync()                           # all of it on the card before "pending" says so
+        write_marker(root, "pending", before, after)
         return _result("updated", f"Updated to {after[:7]}. Restarting the dashboard.")
     except GitError as e:
         return _result("failed", str(e))
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         return _result("failed", f"Couldn't update: {e}")
 
 
-def driving_reason(car_mph, gps_ms, guiding):
+def moving(car_mph, gps_ms):
+    return (car_mph is not None and car_mph > MOVING_MPH) or \
+        (gps_ms is not None and gps_ms > MOVING_MPH * MPH_TO_MS)
+
+
+def driving_reason(car_mph, gps_ms, guiding, was_moving=False, ever_known=False):
     """'' when it's all right to update now, else why not. car_mph and
-    gps_ms are None unless they're real: the simulated drive must never
-    stop an update."""
+    gps_ms are None unless they're real: the simulated drive says nothing
+    either way. With neither, was_moving (the last real speed was above
+    walking pace) and ever_known (there's been a real speed at all) decide."""
     if guiding:
         return "Not while directions are on: tap End on the Maps page first."
-    if (car_mph is not None and car_mph > MOVING_MPH) or \
-            (gps_ms is not None and gps_ms > MOVING_MPH * MPH_TO_MS):
-        return "Not while driving: stop the truck first."
+    if moving(car_mph, gps_ms):
+        return DRIVING
+    if car_mph is None and gps_ms is None:
+        if was_moving:                      # a tunnel, OBD silent: still moving
+            return DRIVING
+        if not ever_known:
+            return NO_SPEED
     return ""
 
 
@@ -243,13 +363,16 @@ class Updater(QObject):
     """Check for updates and Update, for QML.
 
     vehicle, gps and routing are read on the UI thread to tell whether the
-    truck is moving. restart is called once the update is in
-    (SystemInfo.restartDashboard). root is the checkout.
+    truck is moving; every change of the first two is followed, so nothing
+    depends on being asked at the right moment. restart is called once the
+    update is in (SystemInfo.restartDashboard). root is the checkout.
 
     state: "idle", "checking", "current", "available", "updating",
     "updated" (restarting soon) or "failed"; message is a sentence for it;
     commits the new subjects and count how many in all; busy means the keys
-    do nothing; canUpdate something new with nothing in git's way.
+    do nothing; canUpdate something new with nothing in git's way; updating
+    that the merge is running; notice what the last start had to take back,
+    until dismissNotice().
     """
     changed = pyqtSignal()
     _done = pyqtSignal(dict)
@@ -263,18 +386,48 @@ class Updater(QObject):
         self._root = Path(root)
         self._v = _result("idle", "")
         self._seen_moving = False           # the last real speed was above walking pace
+        self._speed_known = False           # there's been a real speed since this start
+        self._moved = False                 # the truck moved since Update was pressed
+        self._notice = ""
         self._done.connect(self._apply)
+        vehicle.changed.connect(self._watch)
+        gps.changed.connect(self._watch)
+
+    def start(self):
+        """Once the dashboard is up: says what the guard took back, and
+        counts down to calling this version good."""
+        self._notice = marker_notice(self._root)
+        if self._notice:
+            print(f"Update: {self._notice}", flush=True)
+            self.changed.emit()
+        QTimer.singleShot(HEALTHY_AFTER_MS, self._healthy)
+
+    def _healthy(self):
+        if confirm_healthy(self._root):
+            print("Update: the new version is up, keeping it", flush=True)
+
+    def _speeds(self):
+        """The real speeds now (each None if there isn't one), after noting
+        what they say."""
+        car = self._vehicle.speed if self._vehicle.live else None
+        gps = self._gps.speed if self._gps.realFix else None
+        if car is not None or gps is not None:
+            self._speed_known = True
+            self._seen_moving = moving(car, gps)
+            if self._seen_moving and self._v["state"] in ("updating", "updated"):
+                self._moved = True
+        return car, gps
+
+    def _watch(self):
+        try:
+            self._speeds()
+        except Exception:                   # _why_not_now says so when it matters
+            pass
 
     def _why_not_now(self):
         try:
-            car = self._vehicle.speed if self._vehicle.live else None
-            gps = self._gps.speed if self._gps.realFix else None
-            why = driving_reason(car, gps, self._routing.active)
-            if car is not None or gps is not None:
-                self._seen_moving = "driving" in why
-            elif self._seen_moving:         # no speed any more (tunnel, OBD silent): still moving
-                return "Not while driving: stop the truck first."
-            return why
+            car, gps = self._speeds()
+            return driving_reason(car, gps, self._routing.active, self._seen_moving, self._speed_known)
         except Exception as e:              # can't tell: don't risk it
             return f"Couldn't tell whether the truck is moving ({e})."
 
@@ -300,7 +453,14 @@ class Updater(QObject):
             QTimer.singleShot(RESTART_DELAY_MS, self._restart_when_stopped)
 
     def _restart_when_stopped(self):
-        if self._why_not_now():
+        why = self._why_not_now()
+        if self._moved:
+            self._v = dict(self._v, message="Updated. The truck has moved, so the new "
+                                            "version starts the next time it's turned on.")
+            self.changed.emit()
+            print("Update: the truck moved; the new version waits for the next boot", flush=True)
+            return
+        if why:
             message = "Updated. The dashboard restarts once the truck has stopped and directions are off."
             if self._v["message"] != message:
                 self._v = dict(self._v, message=message)
@@ -327,6 +487,7 @@ class Updater(QObject):
             return
         root, target = self._root, self._v["target"]
         print(f"Update: moving to {target[:7]}", flush=True)
+        self._moved = False
         self._run(dict(self._v, state="updating", message="Updating", can_update=False),
                   lambda: update_to(root, target))
 
@@ -353,3 +514,18 @@ class Updater(QObject):
     @pyqtProperty(bool, notify=changed)
     def canUpdate(self):
         return self._v["state"] == "available" and self._v["can_update"]
+
+    @pyqtProperty(bool, notify=changed)
+    def updating(self):
+        return self._v["state"] == "updating"
+
+    @pyqtProperty(str, notify=changed)
+    def notice(self):
+        return self._notice
+
+    @pyqtSlot()
+    def dismissNotice(self):
+        if read_marker(self._root).get("phase") in ("cut-off", "fell-back"):
+            clear_marker(self._root)
+        self._notice = ""
+        self.changed.emit()

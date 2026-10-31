@@ -8,6 +8,12 @@
 
 cd "$(dirname "$0")" || exit 1
 
+# Before anything of the app runs: put right an update that was cut off, or
+# whose version won't start. 75 means it changed the code under this very
+# script, so begin again on what's there now.
+sh deploy/update-guard.sh
+[ $? -eq 75 ] && exec ./run.sh "$@"
+
 FULLSCREEN="--fullscreen"
 if [ "$1" = "--windowed" ]; then
     FULLSCREEN=""

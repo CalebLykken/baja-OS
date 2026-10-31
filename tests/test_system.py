@@ -12,6 +12,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
+from backend import system as system_module
 from backend.system import SystemInfo, can_power, power
 
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -57,6 +58,52 @@ class InlineThread:
 
 def logged(printed):
     return [c.args[0] for c in printed.call_args_list if c.args and "System" in str(c.args[0])]
+
+
+class HoldTest(unittest.TestCase):
+    """Reboot and shut down wait for an update's merge, but not for ever."""
+
+    def setUp(self):
+        self.busy = True
+        self.sys = SystemInfo()
+        self.sys.hold_power_while(lambda: self.busy)
+        self.asked = []
+        p = mock.patch("backend.system.power", side_effect=lambda a: self.asked.append(a) or "")
+        p.start()
+        self.addCleanup(p.stop)
+        t = mock.patch("backend.system.threading.Thread", InlineThread)
+        t.start()
+        self.addCleanup(t.stop)
+
+    def tick(self):
+        self.sys._held_tick()
+
+    def test_not_busy_goes_at_once(self):
+        self.busy = False
+        self.sys.powerOff()
+        self.assertEqual(self.asked, ["poweroff"])
+
+    def test_waits_for_the_merge(self):
+        self.sys.reboot()
+        self.tick()
+        self.assertEqual(self.asked, [])
+        self.busy = False
+        self.tick()
+        self.assertEqual(self.asked, ["reboot"])
+        self.assertFalse(self.sys._hold_timer.isActive())
+
+    def test_gives_up_in_bounded_time(self):
+        with mock.patch.object(system_module, "POWER_HOLD_S", 0):
+            self.sys.powerOff()
+        self.tick()                         # still merging: shuts down anyway
+        self.assertEqual(self.asked, ["poweroff"])
+
+    def test_asking_again_does_not_extend_the_wait(self):
+        self.sys.powerOff()
+        until = self.sys._held[1]
+        self.sys.powerOff()
+        self.assertEqual(self.sys._held[1], until)
+        self.sys._hold_timer.stop()
 
 
 class CanPowerTest(unittest.TestCase):

@@ -863,8 +863,8 @@ Item {
                 RowLayout {
                     spacing: 14
                     TextButton { icon: "refresh"; text: "Restart dashboard"; enabled: !updater.busy; onClicked: system.restartDashboard() }
-                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
-                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
+                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower && !updater.updating; onConfirmed: system.reboot() }
+                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower && !updater.updating; onConfirmed: system.powerOff() }
                 }
                 Label {
                     visible: system.powerError !== ""

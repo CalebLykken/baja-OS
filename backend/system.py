@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import traceback
 from glob import glob
 from pathlib import Path
@@ -21,6 +22,7 @@ from backend import errorlog, safe_emit
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
 POWER_TIMEOUT_S = 10    # systemctl answers at once, either way
+POWER_HOLD_S = 30       # an update's merge is seconds; the key-off relay holds for minutes
 
 
 def _read(path):
@@ -139,6 +141,9 @@ class SystemInfo(QObject):
         self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
         self._read_error = ""      # the error the last reading died of, while it keeps happening
         self._power_error = ""
+        self._hold = lambda: False  # True while reboot and shut down should wait
+        self._held = None           # (action, give up then) while one's waiting
+        self._hold_timer = QTimer(self, interval=500, timeout=self._held_tick)
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
@@ -248,11 +253,33 @@ class SystemInfo(QObject):
         """Why the last reboot or shut down didn't happen, else ''."""
         return self._power_error
 
+    def hold_power_while(self, busy):
+        """Reboot and shut down wait while busy() is True, for at most
+        POWER_HOLD_S: key-off has the relay's hold time to finish in, and
+        what's cut off is put right on the next start (deploy/update-guard.sh)."""
+        self._hold = busy
+
+    def _held_tick(self):
+        action, until = self._held
+        if not self._hold() or time.monotonic() >= until:
+            self._hold_timer.stop()
+            self._held = None
+            self._run_power(action)
+
     def _power(self, action):
-        # On a worker thread: logind can take a moment to say no.
         if self._power_error:
             self._power_error = ""
             self.changed.emit()
+        if self._hold():
+            until = self._held[1] if self._held else time.monotonic() + POWER_HOLD_S
+            self._held = (action, until)
+            self._hold_timer.start()
+            print(f"System: {action} waits for the update, {POWER_HOLD_S} s at most", flush=True)
+            return
+        self._run_power(action)
+
+    def _run_power(self, action):
+        # On a worker thread: logind can take a moment to say no.
         threading.Thread(target=lambda: safe_emit(self, "_power_done", power(action)),
                          daemon=True).start()
 

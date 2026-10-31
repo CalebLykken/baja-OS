@@ -200,6 +200,7 @@ def main():
     routing = Router(gps, settings)
     road = RoadInfo(gps)
     updater = Updater(vehicle, gps, routing, system.restartDashboard)
+    system.hold_power_while(lambda: updater.updating)
     voice = Voice(settings)
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops
@@ -262,6 +263,7 @@ def main():
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
+    updater.start()
     code = app.exec()
     errorlog.log.flush()          # repeats still being counted go to the journal now
     if scanner:

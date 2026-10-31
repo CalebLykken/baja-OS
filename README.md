@@ -192,8 +192,7 @@ parked.
 > The amp's outputs are bridged: never connect a speaker − wire to ground or
 > to another − wire. Note the order flips halfway along the terminal block.
 
-The sound board's 3.5 mm jack goes to the amp's **Audio input 1**: the
-plug's tip to `INL`, ring to `INR` and sleeve to `GND`. Set the channel
+The sound board's RCA outputs go to the amp's RCA inputs (**Audio input 1**). Set the channel
 switch so input 1 plays on all four speakers. Leave the factory FM antenna lead unplugged and taped.
 
 ### Car power and key-off shutdown

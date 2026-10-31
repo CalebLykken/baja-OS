@@ -479,12 +479,6 @@ class MediaHub(QObject):
         """The Pi's music folder is still being read for the first time."""
         return getattr(self._sources["local"], "scanning", False)
 
-    @pyqtSlot()
-    def rescan(self):
-        """Look for new music now."""
-        if hasattr(self._sources["local"], "rescan"):
-            self._sources["local"].rescan()
-
     @pyqtProperty(int, notify=queueChanged)
     def album(self):
         """The Pi album playing (an index into `albums`), or -1."""

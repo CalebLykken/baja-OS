@@ -164,7 +164,6 @@ def main():
         from backend.library import LibraryScanner
         scanner = LibraryScanner(args.music_dir)
         scanner.found.connect(local.set_tracks)
-        local.rescanRequested.connect(scanner.rescan)
     # It picks up where music was before a restart, and saves that as it goes.
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),

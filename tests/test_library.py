@@ -665,16 +665,13 @@ class ScannerTest(ScanBase):
         self.assertEqual(self.got, [3])
         self.assertIs(self.threads[0], app.thread())
 
-    def test_a_change_is_picked_up_and_rescan_forces_a_pass(self):
+    def test_a_change_is_picked_up(self):
         s = self.scanner(interval=0.05)
         s.start()
         self.wait_for(1)
         write_wav(self.top / "album 000" / "extra.wav", 0.001)
         self.wait_for(2)
         self.assertEqual(self.got, [3, 4])
-        s.rescan()
-        self.wait_for(3)
-        self.assertEqual(self.got, [3, 4, 4])
 
     def test_stops_cleanly_and_delivers_nothing_after(self):
         s = self.scanner(interval=0.05)

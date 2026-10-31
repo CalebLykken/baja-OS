@@ -240,12 +240,12 @@ def _reuse(entry, stamp, path, folder_art):
         return None
 
 
-def scan(folder, cache=True):
+def scan(folder):
     """Return a sorted list of track dicts for every audio file under folder.
-    With `cache`, a file whose time and size are as last time keeps the tags
-    read then (so a rescan reads only what changed), and the result is saved."""
+    A file whose time and size are as last time keeps the tags read then (so
+    a scan reads only what changed), and the result is saved."""
     root = Path(folder).expanduser()
-    old = _load_cache(root) if cache else {}
+    old = _load_cache(root)
     files, tracks = {}, []
     # Once per folder: listing the folder for every song made a big one O(n²).
     folder_art = functools.cache(_folder_art)
@@ -261,7 +261,7 @@ def scan(folder, cache=True):
         if entry["track"] is not None:
             tracks.append(entry["track"])
     # An empty result over a cache that had songs (a card that's gone) isn't saved over it.
-    if cache and files != old and (files or not old):
+    if files != old and (files or not old):
         _save_cache(root, files)
     return tracks
 
@@ -269,7 +269,7 @@ def scan(folder, cache=True):
 class LibraryScanner(QObject):
     """Reads the music folder on a worker thread: once as soon as it's
     started, then whenever the files' times or sizes differ from the last
-    pass (looked at every `interval` seconds, or at `rescan()`).
+    pass (looked at every `interval` seconds).
     `found(tracks)` is delivered on the thread this object lives in (the
     UI's). The worker touches no Qt objects but the signal."""
     found = pyqtSignal(list)
@@ -279,8 +279,6 @@ class LibraryScanner(QObject):
         self._folder = folder
         self._interval = interval
         self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._force = True              # the first pass is always in full
         self._thread = None
 
     def start(self):
@@ -288,16 +286,10 @@ class LibraryScanner(QObject):
             self._thread = threading.Thread(target=self._run, name="library-scan", daemon=True)
             self._thread.start()
 
-    def rescan(self):
-        """Look again now, whether or not the files seem to have changed."""
-        self._force = True
-        self._wake.set()
-
     def stop(self):
         """End the worker. A pass in the middle of a big folder is left to
         finish on its own (it's a daemon thread) and delivers nothing."""
         self._stop.set()
-        self._wake.set()
         if self._thread is not None:
             self._thread.join(2)
 
@@ -306,16 +298,14 @@ class LibraryScanner(QObject):
         while not self._stop.is_set():
             try:
                 now = signature(self._folder)
-                if self._force or now != last:
-                    self._force = False
+                if now != last:
                     tracks = scan(self._folder)
                     last = now
                     if not self._stop.is_set():
                         self.found.emit(tracks)
             except Exception as e:           # never fatal: try again next time
                 print(f"Music: scan failed ({e!r})")
-            self._wake.wait(self._interval)
-            self._wake.clear()
+            self._stop.wait(self._interval)
 
 
 def group_albums(tracks):
@@ -415,7 +405,6 @@ class LibraryPlayer(QObject):
     modesChanged = pyqtSignal()         # shuffle or repeat
     libraryChanged = pyqtSignal()       # the albums (a scan found other songs)
     scanningChanged = pyqtSignal()
-    rescanRequested = pyqtSignal()      # main points this at the LibraryScanner
 
     def __init__(self, tracks, parent=None, scanning=False):
         super().__init__(parent)
@@ -644,11 +633,6 @@ class LibraryPlayer(QObject):
     def scanning(self):
         """The first read of the music folder is still going."""
         return self._scanning
-
-    @pyqtSlot()
-    def rescan(self):
-        """Look at the folder again now (music just copied in)."""
-        self.rescanRequested.emit()
 
     @pyqtProperty(int, notify=queueChanged)
     def album(self):

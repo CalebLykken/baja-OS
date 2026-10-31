@@ -1,5 +1,5 @@
 """Off-Pi tests for the sun's position (backend/sun.py), which dims the
-screen after dark: sunrise and sunset in Seattle against published times,
+screen after dark: sunrise and sunset in Seattle against computed times,
 the sun's height at noon and midnight, and the far north where it doesn't
 rise or set.
 
@@ -15,7 +15,7 @@ SEATTLE = (47.6062, -122.3321)
 PDT = timezone(timedelta(hours=-7))
 PST = timezone(timedelta(hours=-8))
 TROMSO = (69.65, 18.96)
-TOLERANCE = timedelta(minutes=5)
+TOLERANCE = timedelta(minutes=3)
 
 
 def near(test, got, want):
@@ -35,8 +35,8 @@ class RiseSetTest(unittest.TestCase):
 
     def test_the_equinox(self):
         rise, sset = rise_set(*SEATTLE, day=date(2024, 3, 20))
-        near(self, rise, datetime(2024, 3, 20, 7, 12, tzinfo=PDT))
-        near(self, sset, datetime(2024, 3, 20, 19, 21, tzinfo=PDT))
+        near(self, rise, datetime(2024, 3, 20, 7, 11, tzinfo=PDT))
+        near(self, sset, datetime(2024, 3, 20, 19, 23, tzinfo=PDT))
 
     def test_the_answers_are_utc_and_the_evening_can_land_on_the_next_utc_day(self):
         rise, sset = rise_set(*SEATTLE, day=date(2024, 6, 20))
@@ -72,7 +72,7 @@ class AltitudeTest(unittest.TestCase):
         self.assertAlmostEqual(altitude(*SEATTLE, noon), 65.8, delta=1.0)
 
     def test_noon_on_the_winter_solstice(self):
-        noon = datetime(2024, 12, 21, 12, 15, tzinfo=PST)       # 90 - 47.6 - 23.4
+        noon = datetime(2024, 12, 21, 12, 7, tzinfo=PST)        # solar noon is about 12:07; 90 - 47.6 - 23.4
         self.assertAlmostEqual(altitude(*SEATTLE, noon), 19.0, delta=1.0)
 
     def test_midnight_is_well_below_the_horizon(self):

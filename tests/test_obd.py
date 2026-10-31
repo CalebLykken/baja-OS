@@ -326,7 +326,10 @@ class PidReplyTest(unittest.TestCase):
         self.assertEqual(self.pid(0x0C, "410C1AF8"), [0x1A, 0xF8])
 
     def test_a_header_before_the_answer(self):
-        # ATH1 style: CAN id and length first, or K-line header bytes.
+        # The adapter is set to ATH0, so headers shouldn't appear, but if a CAN id and
+        # length or K-line header bytes do, the answer is still found. (Real K-line
+        # frames end in a checksum, which ATH0 also strips; the byte after the
+        # data here is just more data.)
         self.assertEqual(self.pid(0x0C, "7E8 04 41 0C 1A F8"), [0x1A, 0xF8])
         self.assertEqual(self.pid(0x0D, "48 6B 10 41 0D 32 AB"), [0x32, 0xAB])
 

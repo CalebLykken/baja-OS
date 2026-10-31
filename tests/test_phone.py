@@ -234,7 +234,7 @@ class ParseMapUrlTest(unittest.TestCase):
                          (None, "Space Needle"))
 
     def test_apple_directions_to_a_position(self):
-        # phone.py:161 checks `destination` where it means `daddr`, so a daddr that is a position becomes the label.
+        # A daddr that is a position is the position, not the label.
         self.assertEqual(phone.parse_map_url("https://maps.apple.com/?daddr=47.6097,-122.3422"), (self.PIKE, ""))
 
     def test_google_place_page(self):
@@ -254,8 +254,14 @@ class ParseMapUrlTest(unittest.TestCase):
                          (None, "Space Needle"))
 
     def test_google_directions_end_at_the_last_stop(self):
+        # The @ is the map view, not the destination, so the name is left for offline search.
         ll, label = phone.parse_map_url("https://www.google.com/maps/dir/Current+Location/Space+Needle/@47.62,-122.35,14z")
-        self.assertEqual((ll, label), ((47.62, -122.35), "Space Needle"))
+        self.assertEqual((ll, label), (None, "Space Needle"))
+
+    def test_apple_view_centre_is_not_used_when_there_is_a_name(self):
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?q=Space%20Needle&center=47.62,-122.35"),
+                         (None, "Space Needle"))
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?center=47.62,-122.35"), ((47.62, -122.35), ""))
 
     def test_geo_with_a_position(self):
         self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422"), (self.PIKE, ""))
@@ -267,13 +273,12 @@ class ParseMapUrlTest(unittest.TestCase):
         self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422?q=Coffee"), (self.PIKE, "Coffee"))
 
     def test_geo_zero_zero_with_a_label_takes_the_position_from_the_query(self):
-        # phone.py:148 takes geo:0,0 as the position instead of looking in q.
         # The usual Android form: geo:0,0 means "look at q".
         self.assertEqual(phone.parse_map_url("geo:0,0?q=47.6097,-122.3422(Pike+Place+Market)"),
                          (self.PIKE, "Pike Place Market"))
 
     def test_geo_zero_zero_with_words_has_no_position(self):
-        # phone.py:148: (0, 0) is truthy, so resolve() says it's outside the map instead of searching the words.
+        # (0, 0) is not a position: the words in q are searched instead.
         self.assertEqual(phone.parse_map_url("geo:0,0?q=Space+Needle"), (None, "Space Needle"))
 
     def test_other_sites_and_junk(self):

@@ -156,23 +156,20 @@ def parse_map_url(url):
     path = urllib.parse.unquote_plus(parts.path)
     ll, label = None, ""
     if "apple" in host:
-        for key in ("coordinate", "ll", "destination", "daddr", "center", "sll"):
-            ll = ll or _latlon(qs.get(key))
         name, address = qs.get("name", ""), qs.get("address", "")
         label = f"{name}, {address}" if name and address else (name or address or qs.get("q") or "")
         dest = qs.get("daddr") or qs.get("destination") or ""
         if not label and not _latlon(dest):
             label = dest
+        # center and sll are only the map view: a named place is better found by name.
+        for key in ("coordinate", "ll", "destination", "daddr") + (() if label else ("center", "sll")):
+            ll = ll or _latlon(qs.get(key))
     elif "google" in host or "goo.gl" in host:
         m = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", url)
         if m:
             ll = (float(m[1]), float(m[2]))
         for key in ("q", "query", "destination", "daddr"):
             ll = ll or _latlon(qs.get(key))
-        if not ll:
-            m = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
-            if m:
-                ll = (float(m[1]), float(m[2]))
         m = re.search(r"/maps/place/([^/]+)", path)
         if m and not _latlon(m[1]):
             label = m[1]
@@ -183,6 +180,12 @@ def parse_map_url(url):
         for key in ("q", "query", "destination"):
             if not label and qs.get(key) and not _latlon(qs.get(key)):
                 label = qs[key]
+        # The @lat,lon is the map view: a place's own page is centred on it, but a route's
+        # is not its end, so a named destination is left to search.
+        if not ll and not (label and "/maps/dir/" in path):
+            m = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
+            if m:
+                ll = (float(m[1]), float(m[2]))
     return ll, label.strip()
 
 

@@ -15,7 +15,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.routing import ARRIVED_M, JUMP_FIXES, Route, Router, route_record, saved_route
+from backend.routing import ARRIVED_M, JUMP_FIXES, JUMP_S, Route, Router, route_record, saved_route
 from tests.test_routing import FakeGps, FakeSettings, answer, polyline6
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
@@ -127,6 +127,21 @@ class LocateTest(unittest.TestCase):
         self.assertFalse(back[0])                   # not on one fix
         self.assertTrue(all(back[JUMP_FIXES - 1:]), back)
         self.assertAlmostEqual(out[-1][1], 312 + 300 - 90, delta=1)
+
+    def test_a_hop_to_the_other_carriageway_needs_time_as_well_as_fixes(self):
+        # The same wander onto the way back, 2 m a fix: 5 Hz (10 m/s) gets
+        # JUMP_FIXES of them in well under JUMP_S, so it waits for the time.
+        fixes = [(0, n, 0) for n in range(10, 160, 2)] + [(6, 155, 90)]
+        back = [(12, n, 180) for n in range(150, 80, -2)]
+        _, out = self.follow(UTURN_ROUTE, fixes + back[:JUMP_FIXES + 2], every=0.2)
+        self.assertEqual([seg for seg, _ in out[len(fixes):]], [0] * (JUMP_FIXES + 2))
+        _, out = self.follow(UTURN_ROUTE, fixes + back, every=0.2)
+        segs = [seg == 2 for seg, _ in out[len(fixes):]]
+        self.assertFalse(segs[JUMP_FIXES - 1])
+        self.assertTrue(segs[-1])                   # but kept up for JUMP_S, it's there
+        first = segs.index(True)
+        self.assertGreaterEqual(first * 0.2, JUMP_S - 0.2)
+        self.assertLessEqual(first * 0.2, JUMP_S + 0.4)
 
     def test_loop_ramp_beside_the_road(self):
         # Up B with the GPS a little to the right, where the end of the
@@ -319,6 +334,8 @@ class StopsTest(unittest.TestCase):
         self.router.speak.connect(self.said.append)
         self.router._request = lambda *a, **k: self.asked.append(
             (list(self.router._stops), k.get("reroute", False)))
+        self.now = 0.0                # a second per fix from `at`, like a 1 Hz receiver
+        self.router._clock = lambda: self.now
 
     def driving(self):
         """Guiding along TWO_STOPS, nothing yet asked or said."""
@@ -329,7 +346,8 @@ class StopsTest(unittest.TestCase):
         self.said.clear()
         self.asked.clear()
 
-    def at(self, e, n):
+    def at(self, e, n, every=1.0):
+        self.now += every
         self.gps.lon, self.gps.lat = ll(e, n)
         self.router._on_fix()
 
@@ -443,6 +461,15 @@ class StopsTest(unittest.TestCase):
         self.assertEqual(self.router._route.leg, 2)
         self.router._request(*self.router._dest, reroute=True)
         self.assertEqual(self.asked[-1], ([], True))
+
+    def test_a_stop_gone_by_at_5_hz_needs_the_time_too(self):
+        self.driving()
+        for k in range(JUMP_FIXES + 1):             # 2 m a fix, 0.2 s apart: 0.8 s of it
+            self.at(0, 1200 + 2 * k, 0.2)
+        self.assertEqual(self.router._stops, [STOP_A, STOP_B])
+        for k in range(int(JUMP_S / 0.2) + 1):
+            self.at(0, 1210 + 2 * k, 0.2)
+        self.assertEqual(self.router._stops, [STOP_B])
 
     def test_several_stops_gone_by_at_once(self):
         self.driving()

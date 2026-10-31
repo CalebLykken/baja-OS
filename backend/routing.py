@@ -42,6 +42,7 @@ HEADING_MS = 2            # faster than this the GPS heading counts, and a part 
 WRONG_WAY_DEG = 60        # ... running further off it than this counts as
 WRONG_WAY_M = 40          # ... this much further away
 JUMP_M = 30               # a fix can move the truck along the route this much more than it could have driven ...
+JUMP_S = 1.5              # ... and for at least this long (5 Hz GPS makes 3 fixes only 0.4 s)
 JUMP_FIXES = 3            # ... or further once this many in a row, moving, put it there
 ARRIVED_M = 35
 FAST_MS = 20              # above ~45 mph, warn about turns from further out
@@ -352,7 +353,9 @@ class Route:
         self.to_end = math.inf        # metres from the end of the route, in a straight line
         self._p, self._at = None, None    # the last position it was located at, and when
         self._away = 0                # fixes in a row that put it further along (or back) than it could have got
+        self._away_since = None       # when the first of those fixes came
         self._past = 0                # fixes in a row driving on beyond the next stop
+        self._past_since = None
 
     def locate(self, lon, lat, heading=None, speed=None, now=None):
         """Snap the truck to the route, looking a little back and ahead.
@@ -398,8 +401,10 @@ class Route:
             if best[1] > OFF_ROUTE_M:
                 best = jump           # nowhere near where it could have got, but on the route there
             elif moving:
+                if not self._away:
+                    self._away_since = now
                 self._away += 1
-                if self._away >= JUMP_FIXES:
+                if self._away >= JUMP_FIXES and now - self._away_since >= JUMP_S:
                     best = jump
             else:
                 self._away = 0        # parked, the GPS wanders: it hasn't gone anywhere
@@ -445,12 +450,15 @@ class Route:
         """The truck has gone by the next stop without coming near it (a
         tunnel, a gap in the fixes). On a new route it can be put on the way
         back of an out-and-back to a stop, so it takes a few fixes in a row
-        on the line, moving the way the line goes."""
+        on the line, moving the way the line goes, over at least JUMP_S (by
+        the time of the last locate)."""
         if not self._gone_by(heading, speed, ARRIVED_M):
             self._past = 0
             return False
+        if not self._past:
+            self._past_since = self._at
         self._past += 1
-        return self._past >= JUMP_FIXES
+        return self._past >= JUMP_FIXES and (self._at is None or self._at - self._past_since >= JUMP_S)
 
     def passed_stop(self, heading, speed):
         """Before a reroute: the next stop is behind a truck that has since left
@@ -905,7 +913,8 @@ class Router(QObject):
                 self._off_count = 0
                 self.progressChanged.emit()
             return
-        r.locate(self._gps.lon, self._gps.lat, self._gps.heading, self._gps.speed)
+        now = self._clock()
+        r.locate(self._gps.lon, self._gps.lat, self._gps.heading, self._gps.speed, now)
         if r.remaining < ARRIVED_M and r.to_end < ARRIVED_M and not self._arrived:
             self._arrived = True
             self._forget()                          # shown a little longer, but done
@@ -921,7 +930,6 @@ class Router(QObject):
             if time.monotonic() - self._saved_at > RESAVE_S:
                 self._save()                        # still being driven
         if r.off > OFF_ROUTE_M and not self._arrived:
-            now = self._clock()
             if not self._off_count:
                 self._off_since = now
             self._off_count += 1

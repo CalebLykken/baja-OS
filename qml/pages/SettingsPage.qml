@@ -156,6 +156,19 @@ Item {
                     IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
                 }
                 SettingRow {
+                    label: "Screen"
+                    TextButton {
+                        icon: "power"
+                        text: "Screen off"
+                        onClicked: display.setScreenOff(true)
+                    }
+                    Label {
+                        text: "Touch to wake"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+                SettingRow {
                     label: "Dim after sunset"
                     SegmentedControl {
                         options: [{ label: "On", value: true }, { label: "Off", value: false }]

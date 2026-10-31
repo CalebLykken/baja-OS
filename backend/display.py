@@ -81,12 +81,14 @@ class DdcBrightness:
 class Display(QObject):
     brightnessChanged = pyqtSignal()
     nightChanged = pyqtSignal()
+    screenOffChanged = pyqtSignal()
 
     def __init__(self, settings=None, location=None, parent=None):
         super().__init__(parent)
         self._settings = settings
         self._location = location or (lambda: SEATTLE)
         self._night = False
+        self._screen_off = False  # never saved: the screen is on after a restart
         self._sun_down = False
         self._auto = settings is None or str(settings.get("autoNight", "true")) == "true"
         self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
@@ -179,6 +181,37 @@ class Display(QObject):
             with self._wake:
                 self._pending = value
                 self._wake.notify()
+
+    # ---- screen off -------------------------------------------------------------
+    @pyqtProperty(bool, notify=screenOffChanged)
+    def screenOff(self):
+        """True while the screen is blacked out (the QML shows a black layer)."""
+        return self._screen_off
+
+    @pyqtSlot(bool)
+    def setScreenOff(self, off):
+        off = bool(off)
+        if off == self._screen_off:
+            return
+        self._screen_off = off
+        self.screenOffChanged.emit()
+        try:
+            self._drive_panel(off)
+        except Exception as e:  # the screen state must never depend on hardware
+            print(f"Display: panel backlight control failed ({e})")
+
+    @pyqtSlot()
+    def wake(self):
+        self.setScreenOff(False)
+
+    def _drive_panel(self, off):
+        """Turn the panel's real backlight off or on. Does nothing yet.
+
+        How to do that on the Waveshare panel is not known: the candidates are
+        DDC/CI (after loading i2c-dev), the panel's USB HID interface, or
+        DPMS/KMS. It has to be tried on the Pi. Until then the QML only draws
+        a black layer and the backlight stays lit.
+        """
 
     # ---- day and night ----------------------------------------------------------
     @pyqtProperty(bool, notify=nightChanged)

@@ -81,6 +81,7 @@ Window {
     Connections {
         target: typeof phone !== "undefined" ? phone : null
         function onReceived(place) {
+            if (typeof display !== "undefined") display.wake()
             root.page = 2
             mapsPage.receive(place)
         }
@@ -232,6 +233,33 @@ Window {
         color: "black"
         opacity: (1 - display.brightness / 100) * 0.85
     }
+
+    // "Screen off": a black layer over the pages and the dim overlay (the
+    // backlight itself is not driven yet, see Display._drive_panel). The tap
+    // that wakes it is swallowed so it doesn't press anything underneath.
+    // The shutdown prompt below stays above it.
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+        visible: typeof display !== "undefined" && display.screenOff
+        MouseArea {
+            anchors.fill: parent
+            onPressed: (mouse) => { mouse.accepted = true; display.wake() }
+        }
+    }
+    Connections {
+        target: typeof keyOff !== "undefined" ? keyOff : null
+        function onChanged() {
+            if (typeof display !== "undefined" && (keyOff.countdown >= 0 || keyOff.error !== ""))
+                display.wake()
+        }
+    }
+
+    // An overheating or charging warning brings the screen back (once per
+    // warning, so it can be blanked again while the warning holds).
+    readonly property bool urgentWarning: typeof vehicle !== "undefined"
+        && (vehicle.warnings.indexOf("coolant") >= 0 || vehicle.warnings.indexOf("voltage") >= 0)
+    onUrgentWarningChanged: if (urgentWarning && typeof display !== "undefined") display.wake()
 
     // A phone wants to pair (backend/btagent.py): nothing pairs without a
     // tap here. Phones with no screen have no code to compare.

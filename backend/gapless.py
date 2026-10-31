@@ -15,8 +15,19 @@ audio queued ahead, you'd hear a crackle, right as a song starts.
 
 Pausing and skipping fade over 30 ms instead of cutting mid-wave, and
 while paused the stream plays silence rather than stopping, so nothing
-clicks. A decoded song is held in memory until it has played (about 10 MB
-a minute), at most the current one and the next.
+clicks.
+
+Decoded samples wait in memory until they've played (about 11 MB a minute),
+but only a fixed amount of them: AHEAD_S past what's playing, plus NEXT_S of
+the next song's start, so a 3-hour file costs what a short one does. There's
+one decoder at a time, and the next song only starts once the current one
+has decoded to its end. Reaching the limit, we stop reading: with Qt's FFmpeg
+backend (and GStreamer's bounded queue) a decoder makes no more until its
+buffer is read, so it simply waits there. That isn't promised by Qt, so a
+decoder that keeps on regardless is stopped instead and later started again
+from the top of the file, leaving out what it already gave us. That's also
+how seeking works: QAudioDecoder can't seek, so the time to get to a spot
+grows with how far into the file it is.
 """
 
 import os
@@ -34,6 +45,10 @@ FRAME = CHANNELS * SAMPLE_BYTES
 BYTES_PER_S = RATE * FRAME
 BUFFER_S = 0.3              # what the audio system holds ahead
 RAMP_FRAMES = RATE * 30 // 1000
+AHEAD_S = 60                # decoded ahead of what's playing, at most
+REFILL_S = 45               # decode more once this little is left
+NEXT_S = 15                 # how much of the next song waits ready
+STRAYS = 32                 # buffers from a decoder told to wait: it isn't waiting
 # Log stalls and starved reads: set BAJA_AUDIO_DEBUG, or create this file.
 DEBUG = bool(os.environ.get("BAJA_AUDIO_DEBUG")
              or os.path.exists(os.path.expanduser("~/.config/baja-os/audio-debug")))
@@ -57,6 +72,9 @@ class _Song:
         self.done = False           # decoding finished (or failed)
         self.skip = skip            # bytes still to leave out from its start (resuming partway)
         self.played = skip          # bytes into the song handed to the stream so far
+        self.end = 0                # bytes into the song the decoder has got to (main thread)
+        self.held = False           # at its limit: not decoded further until the feed says
+        self.strays = 0             # buffers that came while held
 
 
 class _Feed(QIODevice):
@@ -176,6 +194,12 @@ class _Output(QObject):
                     self.wantDecode.emit()
                 else:
                     break                       # decoding hasn't caught up
+            if e._songs:
+                song = e._songs[0]
+                if song.held and song.end - song.played < REFILL_S * BYTES_PER_S:
+                    song.held = False
+                    song.strays = 0     # strays count per hold, not per song
+                    self.wantDecode.emit()
             starved = len(out) < maxlen and e._gain == 1.0 and e._target == 1.0
         if DEBUG and starved:
             print(f"audio: starved, {(maxlen - len(out)) * 1000 // BYTES_PER_S} ms of silence", flush=True)
@@ -301,22 +325,25 @@ class GaplessEngine(QObject):
 
     # ---- decoding (main thread) ---------------------------------------------
     def _decode_more(self):
-        """Decode the first song not yet decoded; once the current song is
-        decoded, line up the next one too."""
+        """Decode the first song not yet decoded, as far as its limit allows;
+        once the current song is decoded, line up the next one too."""
         with self._lock:
             if self._closed:
                 return
             if self._decoding is not None and self._decoding not in self._songs:
                 self._stop_decoder()            # its song was skipped
-            if self._decoding is not None:
+            dec, song = self._decoder, self._decoding
+            if song is None:
+                if self._songs and self._songs[-1].done and len(self._songs) < 2:
+                    last = self._songs[-1]
+                    nxt = self._next(last.index)
+                    if nxt is not None:
+                        self._songs.append(_Song(nxt, last.gen))
+                song = next((s for s in self._songs if not s.done), None)
+            if song is None or song.held:       # held: until the feed has played some
                 return
-            if self._songs and self._songs[-1].done and len(self._songs) < 2:
-                last = self._songs[-1]
-                nxt = self._next(last.index)
-                if nxt is not None:
-                    self._songs.append(_Song(nxt, last.gen))
-            song = next((s for s in self._songs if not s.done), None)
-        if song is None:
+        if dec is not None:
+            self._decoded(dec, song)            # it's been waiting on us
             return
         dec = QAudioDecoder(self)
         dec.setAudioFormat(audio_format())
@@ -327,20 +354,37 @@ class GaplessEngine(QObject):
         self._decoder, self._decoding = dec, song
         dec.start()
 
-    def _decoded(self, dec, song):
+    def _limit(self, song):
+        current = self._songs and song is self._songs[0]
+        return (AHEAD_S if current else NEXT_S) * BYTES_PER_S
+
+    def _decoded(self, dec, song, drain=False):
+        """Take what the decoder has, up to the song's limit. Leaving a buffer
+        unread is what makes it wait. `drain`: it's finished, take the lot."""
         while dec.bufferAvailable():
+            with self._lock:
+                if not drain and (song.held or song.end - song.played >= self._limit(song)):
+                    if song.held:
+                        song.strays += 1
+                        if song.strays > STRAYS:        # it won't wait: stop it, and
+                            song.strays = 0             # start over when it's needed
+                            song.skip, song.end = song.end, 0
+                            self._stop_decoder()
+                    song.held = True
+                    return
             buf = dec.read()
-            if buf.byteCount():
-                data = buf.constData().asstring(buf.byteCount())
-                if song.skip:
-                    cut = min(song.skip, len(data))
-                    song.skip -= cut
-                    data = data[cut:]
-                if data:
-                    song.chunks.append(data)
+            size = buf.byteCount()
+            song.end += size
+            if size <= song.skip:                       # quick: no copy of what's left out
+                song.skip -= size
+            elif size:
+                data = buf.constData().asstring(size)
+                song.chunks.append(data[song.skip:] if song.skip else data)
+                song.skip = 0
 
     def _decode_done(self, dec, song):
-        self._decoded(dec, song)
+        self._decoded(dec, song, drain=True)
+        song.held = False
         song.done = True
         self._drop_decoder(dec)
         self._decode_more()
@@ -370,20 +414,42 @@ class GaplessEngine(QObject):
     def play_from(self, index, play=True, at=0):
         """Start song `index` now, `at` seconds in, fading out whatever is
         playing first. With play False it waits there, paused."""
-        skip = int(max(0, at) * RATE) * FRAME
         with self._lock:
             self._bad.clear()
             self._want_play = play
             self._gen += 1
-            if self._gain > 0.0:
-                self._pending = (index, skip)
-                self._target = 0.0
-                return                           # the feed switches once faded out
-            self._pending = None
-            self._songs.clear()
-            self._songs.append(_Song(index, self._gen, skip))
-            self._target = 1.0 if play else 0.0
-        self._decode_more()
+            now = self._switch(index, at)
+        if now:
+            self._decode_more()
+
+    def seek(self, seconds):
+        """Jump within the song being heard, playing or paused as it is. The
+        song hasn't changed, so unlike play_from the generation stays: a
+        trackStarted on its way still counts."""
+        with self._lock:
+            if self._pending is not None:
+                index = self._pending[0]
+            elif self._songs:
+                index = self._songs[0].index
+            else:
+                return
+            now = self._switch(index, seconds)
+        if now:
+            self._decode_more()
+
+    def _switch(self, index, at):
+        """Under the lock: restart from `at` seconds into song `index`. True
+        if that's done and needs decoding; if not, the feed does it once faded out."""
+        skip = int(max(0, at) * RATE) * FRAME
+        if self._gain > 0.0:
+            self._pending = (index, skip)
+            self._target = 0.0
+            return False
+        self._pending = None
+        self._songs.clear()
+        self._songs.append(_Song(index, self._gen, skip))
+        self._target = 1.0 if self._want_play else 0.0
+        return True
 
     def set_playing(self, on):
         with self._lock:

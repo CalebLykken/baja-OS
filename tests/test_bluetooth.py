@@ -271,6 +271,12 @@ class ParseObjectsTest(unittest.TestCase):
         state = parse_objects(objects)
         self.assertEqual((state["transport"], state["volume"]), ("/org/bluez/hci0/dev_AA/fd0", 0))
 
+class PhoneSeekTest(unittest.TestCase):
+    def test_the_real_phone_source_cant_seek(self):
+        phone = BluetoothAudio()
+        self.assertFalse(phone.canSeek)
+        phone.seek(30)                                # does nothing, doesn't raise
+
 
 if __name__ == "__main__":
     unittest.main()

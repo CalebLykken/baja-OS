@@ -272,6 +272,15 @@ class BluetoothAudio(QObject):
         dur = (self._player or {}).get("duration_ms", 0)
         return (min(ms, dur) if dur else ms) // 1000
 
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        """AVRCP has no seek: the progress bar isn't draggable on a phone."""
+        return False
+
+    @pyqtSlot(int)
+    def seek(self, seconds):
+        pass
+
     @pyqtProperty(bool, notify=playingChanged)
     def playing(self):
         return (self._player or {}).get("status") == "playing"

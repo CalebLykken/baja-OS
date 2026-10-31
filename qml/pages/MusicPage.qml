@@ -20,7 +20,19 @@ Item {
     property bool eqOpen: false
     property string tab: "next"                // "next", "albums" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
+    property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1 }
+    Connections {
+        target: media
+        function onAlbumsChanged() {
+            if (page.openAlbum < 0 || !page.openKey) return
+            var list = media.albums, found = -1
+            for (var i = 0; i < list.length; i++)
+                if (list[i].artist.toLowerCase() === page.openKey[0].toLowerCase()
+                        && list[i].title.toLowerCase() === page.openKey[1].toLowerCase()) { found = i; break }
+            page.openAlbum = found      // closed if it's gone
+        }
+    }
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
@@ -87,7 +99,7 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 18
-                    text: page.idle ? "Nothing playing" : media.title
+                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
                     color: page.idle ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
@@ -132,7 +144,7 @@ Item {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? seekArea.dragValue * media.duration : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                     Item { Layout.fillWidth: true }
                     Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                 }
@@ -271,7 +283,7 @@ Item {
                     Label {
                         visible: queue.count === 0
                         anchors { left: parent.left; top: parent.top; leftMargin: 10; topMargin: 10 }
-                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : "No songs in ~/Music on the Pi"
+                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : media.scanning ? "Reading your music..." : "No songs in ~/Music on the Pi"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -295,13 +307,13 @@ Item {
                         title: modelData.title
                         subtitle: modelData.artist
                         current: index === media.album
-                        onHit: page.openAlbum = index
+                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = index }
                     }
                     Label {
                         visible: albumGrid.count === 0
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        text: "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
+                        text: media.scanning ? "Reading your music..." : "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -313,7 +325,7 @@ Item {
                     visible: page.tab === "albums" && page.openAlbum >= 0 && !page.eqOpen
                     anchors { fill: parent; margins: 16 }
                     readonly property var album: page.openAlbum >= 0 ? page.albums[page.openAlbum] : null
-                    readonly property var tracks: page.openAlbum >= 0 ? media.albumTracks(page.openAlbum) : []
+                    readonly property var tracks: page.openAlbum >= 0 && page.albums ? media.albumTracks(page.openAlbum) : []   // page.albums: re-read when a rescan changes the songs
 
                     RowLayout {
                         id: albumHead

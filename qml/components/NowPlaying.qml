@@ -47,7 +47,7 @@ Card {
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 2
-                    text: np.idle ? "Nothing playing" : media.title
+                    text: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
                     color: np.idle ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold

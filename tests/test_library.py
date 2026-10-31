@@ -18,10 +18,11 @@ from unittest import mock
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 try:
-    from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSignal
+    from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QThread, QTimer, pyqtSignal
     from PyQt6.QtMultimedia import QAudio
     from backend import gapless, library
-    from backend.library import LibraryPlayer, _number, group_albums, play_order, resume_point, scan, step
+    from backend.library import (LibraryPlayer, LibraryScanner, _number, cached_tracks, group_albums,
+                                 play_order, resume_point, scan, signature, step)
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 or mutagen isn't installed ({e})")
 
@@ -77,11 +78,16 @@ def spin(ms):
     loop.exec()
 
 
-class ScanTest(unittest.TestCase):
+class ScanBase(unittest.TestCase):
+    """A temporary folder to make songs in, and a cache dir that isn't the real one."""
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        env = mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.root / "cache")})
+        env.start()
+        self.addCleanup(env.stop)
 
     def songs(self, count, per_folder):
         """`count` tiny songs, `per_folder` to a folder; returns the folder."""
@@ -92,6 +98,8 @@ class ScanTest(unittest.TestCase):
             write_wav(folder / f"{i:05}.wav", 0.001)
         return top
 
+
+class ScanTest(ScanBase):
     def test_folder_art_is_looked_up_once_per_folder(self):
         top = self.songs(60, 20)
         (top / "album 000" / "cover.jpg").write_bytes(b"jpeg")
@@ -113,6 +121,111 @@ class ScanTest(unittest.TestCase):
         albums = timed(self.songs(1000, 10))
         self.assertLess(one_folder, 3 * albums + 0.5,
                         f"one folder {one_folder:.2f} s, album folders {albums:.2f} s")
+
+
+class ScanCacheTest(ScanBase):
+    """The tag cache: unchanged files aren't read again."""
+
+    def setUp(self):
+        super().setUp()
+        self.top = self.songs(4, 2)
+        self.file = self.top / "album 000" / "00000.wav"
+
+    def reads(self):
+        """How many files a scan opens with mutagen."""
+        with mock.patch.object(library.mutagen, "File", wraps=library.mutagen.File) as read:
+            self.tracks = scan(self.top)
+        return read.call_count
+
+    def test_the_second_scan_reads_nothing(self):
+        self.assertEqual(self.reads(), 4)
+        first = self.tracks
+        self.assertEqual(self.reads(), 0)
+        self.assertEqual(self.tracks, first)
+
+    def test_a_changed_file_is_read_again_and_a_new_one_too(self):
+        self.reads()
+        write_wav(self.file, 0.002)              # other size and time
+        write_wav(self.top / "album 000" / "new.wav", 0.001)
+        self.assertEqual(self.reads(), 2)
+        self.assertEqual(len(self.tracks), 5)
+
+    def test_a_vanished_file_drops_out_for_good(self):
+        self.reads()
+        self.file.unlink()
+        self.assertEqual(self.reads(), 0)
+        self.assertEqual(len(self.tracks), 3)
+        self.assertEqual(len(cached_tracks(self.top)), 3)
+
+    def test_a_corrupt_cache_is_ignored_and_replaced(self):
+        self.reads()
+        library.cache_file().write_text("{not json")
+        self.assertEqual(cached_tracks(self.top), [])
+        self.assertEqual(self.reads(), 4)
+        self.assertEqual(len(cached_tracks(self.top)), 4)
+        library.cache_file().write_text('{"version": 99, "folder": "x", "files": 3}')
+        self.assertEqual(self.reads(), 4)
+
+    def test_the_cache_is_for_one_folder(self):
+        self.reads()
+        self.assertEqual(cached_tracks(self.root), [])
+        self.assertEqual(len(cached_tracks(self.top)), 4)
+
+    def test_a_missing_embedded_cover_is_extracted_again(self):
+        self.reads()
+        cover = self.root / "cache" / "baja-os" / "art" / "x.img"
+        cover.parent.mkdir(parents=True)
+        cover.write_bytes(b"img")
+        cache = library._load_cache(self.top)
+        entry = cache[str(self.file)]
+        entry["embedded"], entry["track"]["art"] = True, cover.as_uri()
+        library._save_cache(self.top, cache)
+        self.assertEqual(self.reads(), 0)        # picture still there: reused
+        cover.unlink()
+        self.assertEqual(self.reads(), 1)        # gone: this file is read again
+
+    def test_a_cover_added_later_reaches_cached_songs(self):
+        self.reads()
+        (self.top / "album 000" / "cover.jpg").write_bytes(b"jpeg")
+        self.assertEqual(self.reads(), 0)
+        self.assertTrue(self.tracks[0]["art"].endswith("/album 000/cover.jpg"))
+        self.assertTrue(cached_tracks(self.top)[0]["art"].endswith("/album 000/cover.jpg"))   # and saved
+
+    def test_an_empty_scan_doesnt_wipe_the_cache(self):
+        self.reads()
+        moved = self.root / "away"
+        self.top.rename(moved)                   # the card is gone
+        self.assertEqual(scan(self.top), [])
+        moved.rename(self.top)
+        self.assertEqual(len(cached_tracks(self.top)), 4)
+
+    def test_cached_tracks_need_the_folder_and_its_songs(self):
+        self.reads()
+        self.assertEqual(len(cached_tracks(self.top)), 4)
+        moved = self.root / "away"
+        self.top.rename(moved)
+        self.assertEqual(cached_tracks(self.top), [])         # not mounted: honestly empty
+        moved.rename(self.top)
+        for f in self.top.rglob("*.wav"):
+            f.unlink()
+        self.assertEqual(cached_tracks(self.top), [])         # mounted but no songs
+
+    def test_a_cached_entry_of_the_wrong_kind_is_dropped_and_read_again(self):
+        self.reads()
+        cache = library._load_cache(self.top)
+        entries = [cache[str(self.file)]["track"], cache[str(self.file.parent / "00001.wav")]["track"]]
+        entries[0]["duration"] = "3"
+        entries[1]["title"] = 7
+        library._save_cache(self.top, cache)
+        self.assertEqual(len(cached_tracks(self.top)), 2)
+        self.assertEqual(self.reads(), 2)
+        self.assertEqual(len(cached_tracks(self.top)), 4)
+
+    def test_signature_changes_with_the_files(self):
+        before = signature(self.top)
+        self.assertEqual(signature(self.top), before)
+        write_wav(self.file, 0.002)
+        self.assertNotEqual(signature(self.top), before)
 
 
 class TapAlbumAsSongEndsTest(unittest.TestCase):
@@ -353,6 +466,220 @@ class OrderTest(unittest.TestCase):
         self.assertIsNone(step(order, 2, -1, False))
         self.assertEqual(step(order, 7, 1, False), 2)                    # not in it: the first
         self.assertIsNone(step([], 0, 1, True))
+
+
+class SetTracksTest(unittest.TestCase):
+    """Swapping in a scan's songs while playing, and starting from nothing."""
+
+    def setUp(self):
+        patch = mock.patch.object(gapless, "QAudioSink", FakeSink)
+        patch.start()
+        self.addCleanup(patch.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tracks = []
+        for album in ("Blue", "Red"):
+            for n in range(1, 4):
+                path = Path(tmp.name) / f"{album}-{n}.wav"
+                write_wav(path, 1)
+                self.tracks.append(track(str(path), album, n))
+
+    def player(self, tracks, **kw):
+        player = LibraryPlayer(tracks, **kw)
+        self.addCleanup(player._engine._shutdown)
+        return player
+
+    def test_the_song_keeps_playing_when_songs_are_added_before_it(self):
+        player = self.player(self.tracks[3:])             # Red only
+        player.playAll()
+        player.playIndex(1)
+        path = player._queue[1]["path"]
+        seen = []
+        player.libraryChanged.connect(lambda: seen.append("albums"))
+        with mock.patch.object(player._engine, "play_from") as restart:
+            player.set_tracks(self.tracks)                # Blue arrives, sorts first
+        restart.assert_not_called()
+        self.assertEqual(seen, ["albums"])
+        self.assertEqual(player._queue[player.index]["path"], path)
+        self.assertEqual(len(player.queue), 6)
+        self.assertEqual(len(player.albums), 2)
+        self.assertEqual(player._engine._songs[0].index, player.index)
+        self.assertEqual(player._order, list(range(6)))
+
+    def test_an_album_stays_the_queue_and_its_index_follows(self):
+        player = self.player(self.tracks[3:])
+        player.playAlbum(0, 1)
+        path = player._queue[1]["path"]
+        player.set_tracks(self.tracks)
+        self.assertEqual(player.albums[player.album]["title"], "Red")
+        self.assertEqual(len(player.queue), 3)
+        self.assertEqual(player._queue[player.index]["path"], path)
+
+    def test_a_song_that_vanishes_but_isnt_playing_just_goes(self):
+        player = self.player(self.tracks)
+        player.playIndex(4)
+        path = player._queue[4]["path"]
+        player.set_tracks(self.tracks[:2] + self.tracks[3:])
+        self.assertEqual(player._queue[player.index]["path"], path)
+        self.assertEqual(len(player.queue), 5)
+
+    def test_when_the_song_playing_vanishes_the_queue_is_left_alone(self):
+        player = self.player(self.tracks)
+        player.playIndex(1)
+        player.set_tracks(self.tracks[3:])
+        self.assertEqual((player.index, len(player.queue)), (1, 6))
+        self.assertEqual(len(player.albums), 1)
+        self.assertEqual(player.title, "Blue 2")
+
+    def test_the_same_songs_or_none_change_nothing(self):
+        player = self.player(self.tracks)
+        seen = []
+        player.libraryChanged.connect(lambda: seen.append(1))
+        player.set_tracks(list(self.tracks))
+        player.set_tracks([])                              # the card went
+        self.assertEqual((seen, len(player.albums)), ([], 2))
+
+    def test_an_empty_player_starts_from_the_saved_state(self):
+        player = self.player([], scanning=True)
+        player.set_modes(True, "off")
+        state = {"album": ["Band", "Red"], "path": self.tracks[4]["path"], "index": 1, "position": 2}
+        player.restore(state, play=True)
+        player.start()                                     # nothing yet
+        self.assertEqual((player.index, player.state()["path"]), (-1, state["path"]))
+        seen = []
+        names = ("libraryChanged", "queueChanged", "trackChanged", "scanningChanged")
+        for name in names:
+            getattr(player, name).connect(lambda n=name: seen.append(n))
+        player.set_tracks(self.tracks)
+        self.assertFalse(player.scanning)
+        self.assertEqual(player.albums[player.album]["title"], "Red")
+        self.assertEqual((player.index, player.title, player.playing), (1, "Red 2", True))
+        self.assertEqual(player._engine._songs[0].index, 1)
+        self.assertEqual(player._order[0], 1)
+        for name in names:
+            self.assertIn(name, seen)
+
+    def test_songs_found_after_another_source_took_over_dont_play(self):
+        player = self.player([], scanning=True)
+        player.restore({"album": None, "path": self.tracks[1]["path"], "index": 1, "position": 0}, play=True)
+        player.cancel_autoplay()                           # the hub moved to Spotify or the phone
+        player.set_tracks(self.tracks)
+        self.assertEqual((player.index, player.playing), (1, False))
+
+    def test_a_retagged_playing_song_is_announced(self):
+        player = self.player(self.tracks)
+        player.playIndex(1)
+        seen = []
+        player.trackChanged.connect(lambda: seen.append(player.title))
+        changed = [dict(t) for t in self.tracks]
+        changed[1]["title"] = "Blue Two"
+        player.set_tracks(changed)
+        self.assertEqual((player.index, seen), (1, ["Blue Two"]))
+
+    def joined_after_swap(self, pending):
+        """A song's "now playing" is on its way (50 ms) when songs arrive
+        before it: the number it reports must be the new one."""
+        player = self.player(self.tracks[3:])
+        engine = player._engine
+        if pending:
+            engine._gain = 1.0                             # sounding: a switch waits for the fade
+        player.playIndex(1)
+        if pending:
+            self.assertIsNotNone(engine._pending)
+        started = []
+        engine.trackStarted.connect(started.append)
+        engine._joined(1, engine._gen, 50)
+        player.set_tracks(self.tracks)                     # Blue arrives first: song 1 is now 4
+        spin(200)
+        self.assertEqual(started, [4])
+        engine._gain = 0.0
+
+    def test_a_join_on_its_way_follows_the_renumbering(self):
+        self.joined_after_swap(pending=False)
+
+    def test_a_join_on_its_way_follows_a_pending_switch(self):
+        self.joined_after_swap(pending=True)
+
+    def test_the_new_list_is_swapped_in_under_the_engine_lock(self):
+        player = self.player(self.tracks[3:])
+        engine = player._engine
+        held = []
+        real = player._reorder
+        player._reorder = lambda: (held.append(engine._lock.locked()), real())
+        player.set_tracks(self.tracks)
+        self.assertEqual(held, [True])
+
+    def test_an_empty_player_with_no_saved_state_waits_paused(self):
+        player = self.player([], scanning=True)
+        player.set_tracks(self.tracks)
+        self.assertEqual((player.index, player.playing, len(player.queue)), (0, False, 6))
+
+    def test_scanning_ends_even_when_nothing_is_found(self):
+        player = self.player([], scanning=True)
+        player.set_tracks([])
+        self.assertFalse(player.scanning)
+        self.assertEqual(player.index, -1)
+
+
+class ScannerTest(ScanBase):
+    def setUp(self):
+        super().setUp()
+        self.top = self.songs(3, 3)
+        self.got = []
+        self.threads = []
+
+    def scanner(self, **kw):
+        s = LibraryScanner(self.top, **kw)
+
+        def got(tracks):
+            self.got.append(len(tracks))
+            self.threads.append(QThread.currentThread())
+        s.found.connect(got)
+        self.addCleanup(s.stop)
+        return s
+
+    def wait_for(self, count):
+        end = time.monotonic() + 5
+        while len(self.got) < count and time.monotonic() < end:
+            spin(20)
+
+    def test_delivers_once_on_the_ui_thread_and_not_again_while_nothing_changes(self):
+        s = self.scanner(interval=0.05)
+        s.start()
+        self.wait_for(1)
+        spin(300)                                          # several unchanged passes
+        self.assertEqual(self.got, [3])
+        self.assertIs(self.threads[0], app.thread())
+
+    def test_a_change_is_picked_up_and_rescan_forces_a_pass(self):
+        s = self.scanner(interval=0.05)
+        s.start()
+        self.wait_for(1)
+        write_wav(self.top / "album 000" / "extra.wav", 0.001)
+        self.wait_for(2)
+        self.assertEqual(self.got, [3, 4])
+        s.rescan()
+        self.wait_for(3)
+        self.assertEqual(self.got, [3, 4, 4])
+
+    def test_stops_cleanly_and_delivers_nothing_after(self):
+        s = self.scanner(interval=0.05)
+        s.start()
+        self.wait_for(1)
+        s.stop()
+        self.assertFalse(s._thread.is_alive())
+        write_wav(self.top / "album 000" / "late.wav", 0.001)
+        spin(300)
+        self.assertEqual(self.got, [3])
+
+    def test_a_failing_scan_is_logged_and_the_worker_goes_on(self):
+        s = self.scanner(interval=0.05)
+        with mock.patch.object(library, "scan", side_effect=[OSError("boom"), [{}]]), \
+                mock.patch("builtins.print") as log:
+            s.start()
+            self.wait_for(1)
+        self.assertEqual(self.got, [1])
+        self.assertTrue(any("scan failed" in str(c) for c in log.call_args_list))
 
 
 class ModesTest(unittest.TestCase):

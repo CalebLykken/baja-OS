@@ -249,6 +249,7 @@ class GaplessEngine(QObject):
         self._gain, self._target = 0.0, 0.0
         self._pending = None        # (song, bytes in) to switch to once faded out
         self._gen = 0               # counts play_from calls (the list may have changed)
+        self._epoch = 0             # counts rebase calls (song numbers were renumbered)
         self._latency = 0           # bytes queued in the stream (set by the feed)
         self._decoder = None
         self._decoding = None       # the _Song being decoded
@@ -294,7 +295,28 @@ class GaplessEngine(QObject):
         the index would be into a list that's gone."""
         if DEBUG:
             print(f"audio: song {index} joins in {ms} ms", flush=True)
-        QTimer.singleShot(ms, lambda: gen == self._gen and self.trackStarted.emit(index))
+        epoch = self._epoch
+
+        def heard():
+            if gen != self._gen:
+                return
+            if epoch != self._epoch:        # renumbered since: that song's number now
+                index_now = self._joined_now(gen)
+                if index_now is not None:
+                    self.trackStarted.emit(index_now)
+            else:
+                self.trackStarted.emit(index)
+        QTimer.singleShot(ms, heard)
+
+    def _joined_now(self, gen):
+        """The number of the song that joined (the first in line, or the one a
+        seek is switching to) after a rebase, or None."""
+        with self._lock:
+            if self._pending is not None:
+                return self._pending[0]
+            if self._songs and self._songs[0].gen == gen:
+                return self._songs[0].index
+        return None
 
     def _next(self, index):
         nxt = self._after(index, index in self._bad)
@@ -321,6 +343,25 @@ class GaplessEngine(QObject):
                 return
             while len(self._songs) > 1:
                 self._songs.pop()
+        self._decode_more()
+
+    def rebase(self, remap, apply=None):
+        """The list was rebuilt around the song playing: renumber the songs
+        in flight (`remap`: old index -> new) and line up the one after again.
+        `apply` swaps in the new list; it runs under the lock, so the audio
+        thread never sees the old list with the new numbers."""
+        with self._lock:
+            if apply:
+                apply()
+            self._epoch += 1
+            if self._pending is not None:
+                index, skip = self._pending
+                self._pending = (remap(index), skip)
+            while len(self._songs) > 1:
+                self._songs.pop()
+            if self._songs:
+                self._songs[0].index = remap(self._songs[0].index)
+            self._bad.clear()
         self._decode_more()
 
     # ---- decoding (main thread) ---------------------------------------------

@@ -8,14 +8,23 @@ here too. Songs are grouped into albums by their tags, and playing an
 album makes it the queue; "all songs" plays everything in folder order.
 After a restart it picks up the album, song and place in it that the hub
 saved (backend/hub.py), and it never starts playing by itself otherwise.
+Reading every file's tags is slow, so the folder is read off the UI thread
+by a `LibraryScanner`, and the tags are kept in a cache file: a start-up
+uses the cache at once, and `set_tracks` swaps in what the scan found
+without interrupting the song playing.
 With no songs (an empty folder, or the card not there yet) it's an honest
 empty player: nothing playing, every key does nothing, and the resume point
 it was given is kept for the next run that has music.
 """
 
 import functools
+import json
+import os
 import random
 import re
+import stat
+import tempfile
+import threading
 from pathlib import Path
 
 import mutagen
@@ -92,36 +101,221 @@ def _extract_art(path, audio):
     return QUrl.fromLocalFile(str(out)).toString()
 
 
-def scan(folder):
-    """Return a sorted list of track dicts for every audio file under folder."""
+CACHE_VERSION = 1
+TRACK_STRINGS = ("path", "title", "artist", "art", "album", "albumArtist")
+TRACK_INTS = ("duration", "disc", "track")
+TRACK_KEYS = set(TRACK_STRINGS + TRACK_INTS)
+
+
+def cache_file():
+    return artcache.cache_root() / "library.json"
+
+
+def _load_cache(root):
+    """{path: {"stamp": [mtime_ns, size], "embedded": bool, "track": dict or None}}
+    from the last scan of `root`; empty if there's none, it's for another
+    folder, or the file is damaged."""
+    try:
+        data = json.loads(cache_file().read_text())
+        if data["version"] != CACHE_VERSION or data["folder"] != str(root):
+            return {}
+        files = data["files"]
+        return files if isinstance(files, dict) else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def _save_cache(root, files):
+    """Written whole under a temporary name and moved into place, so a crash
+    never leaves half a file."""
+    path = cache_file()
+    tmp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=".tmp-", delete=False) as f:
+            tmp = f.name
+            json.dump({"version": CACHE_VERSION, "folder": str(root), "files": files}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"Music: couldn't save the library cache ({e!r})")
+        if tmp:
+            Path(tmp).unlink(missing_ok=True)
+
+
+def _valid_track(track):
+    """A cached track with every field the right kind (a hand-edited or
+    damaged cache must not reach the player)."""
+    return (isinstance(track, dict) and TRACK_KEYS <= track.keys()
+            and all(isinstance(track[k], str) for k in TRACK_STRINGS)
+            and all(type(track[k]) is int for k in TRACK_INTS))
+
+
+def cached_tracks(folder):
+    """The tracks the last scan found, straight from the cache: for an
+    instant start. Empty if there's no usable cache, or the folder isn't
+    there (or has no songs now), so the player stays honestly empty and its
+    resume point is kept."""
+    root = Path(folder).expanduser()
     tracks = []
+    for entry in _load_cache(root).values():
+        track = entry.get("track") if isinstance(entry, dict) else None
+        if _valid_track(track):
+            tracks.append(track)
+    return tracks if tracks and has_audio_files(root) else []
+
+
+def has_audio_files(folder):
+    """Is there any audio file under folder? By name only, no tags."""
+    return any(p.suffix.lower() in AUDIO_EXTENSIONS
+               for p in Path(folder).expanduser().rglob("*"))
+
+
+def _walk(root):
+    """(path, stat) for every audio file and cover picture under root, sorted."""
+    for path in sorted(root.rglob("*")):
+        suffix = path.suffix.lower()
+        if suffix not in AUDIO_EXTENSIONS and suffix not in COVER_TYPES:
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            yield path, st
+
+
+def signature(folder):
+    """{path: (mtime_ns, size)} of the folder's audio files and covers, from
+    stat alone: if it hasn't changed, neither has anything a scan would find."""
+    return {str(p): (st.st_mtime_ns, st.st_size) for p, st in _walk(Path(folder).expanduser())}
+
+
+def _read_track(path, folder_art):
+    """(track dict, whether its art came from the file itself) for one file,
+    or (None, False) if it can't be read."""
+    try:
+        audio = mutagen.File(path)
+    except Exception:
+        audio = None
+    if audio is None:
+        return None, False
+    tags = audio.tags or {}
+    try:
+        embedded = _extract_art(path, audio)
+        return {
+            "path": str(path),
+            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
+            "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
+            "duration": int(audio.info.length),
+            "art": embedded or folder_art(path.parent),
+            "album": _first_tag(tags, "TALB", "\xa9alb", "album") or path.parent.name,
+            "albumArtist": _first_tag(tags, "TPE2", "aART", "albumartist", "album artist"),
+            "disc": _number(tags, "TPOS", "disk", "discnumber"),
+            "track": _number(tags, "TRCK", "trkn", "tracknumber"),
+        }, bool(embedded)
+    except Exception as e:  # one odd file mustn't stop the dashboard starting
+        print(f"Music: skipped {path.name} ({e!r})")
+        return None, False
+
+
+def _reuse(entry, stamp, path, folder_art):
+    """The cached entry for a file that hasn't changed (a copy: the old
+    cache stays as it was to compare against), or None to read it again."""
+    try:
+        if entry["stamp"] != stamp or type(entry["embedded"]) is not bool:
+            return None
+        track = entry["track"]
+        if track is None:
+            return dict(entry)              # unreadable last time, and the same file
+        if not _valid_track(track):
+            return None
+        track = dict(track)
+        if entry["embedded"]:               # its picture is in the art cache: still there?
+            if not os.path.isfile(QUrl(track["art"]).toLocalFile()):
+                return None
+        else:                               # a cover.jpg beside it may have come or gone
+            track["art"] = folder_art(path.parent)
+        return {**entry, "track": track}
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def scan(folder, cache=True):
+    """Return a sorted list of track dicts for every audio file under folder.
+    With `cache`, a file whose time and size are as last time keeps the tags
+    read then (so a rescan reads only what changed), and the result is saved."""
+    root = Path(folder).expanduser()
+    old = _load_cache(root) if cache else {}
+    files, tracks = {}, []
     # Once per folder: listing the folder for every song made a big one O(n²).
     folder_art = functools.cache(_folder_art)
-    for path in sorted(Path(folder).expanduser().rglob("*")):
-        if path.suffix.lower() not in AUDIO_EXTENSIONS or not path.is_file():
+    for path, st in _walk(root):
+        if path.suffix.lower() not in AUDIO_EXTENSIONS:
             continue
-        try:
-            audio = mutagen.File(path)
-        except Exception:
-            audio = None
-        if audio is None:
-            continue
-        tags = audio.tags or {}
-        try:
-            tracks.append({
-                "path": str(path),
-                "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
-                "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
-                "duration": int(audio.info.length),
-                "art": _extract_art(path, audio) or folder_art(path.parent),
-                "album": _first_tag(tags, "TALB", "\xa9alb", "album") or path.parent.name,
-                "albumArtist": _first_tag(tags, "TPE2", "aART", "albumartist", "album artist"),
-                "disc": _number(tags, "TPOS", "disk", "discnumber"),
-                "track": _number(tags, "TRCK", "trkn", "tracknumber"),
-            })
-        except Exception as e:  # one odd file mustn't stop the dashboard starting
-            print(f"Music: skipped {path.name} ({e!r})")
+        key, stamp = str(path), [st.st_mtime_ns, st.st_size]
+        entry = _reuse(old.get(key), stamp, path, folder_art)
+        if entry is None:
+            track, embedded = _read_track(path, folder_art)
+            entry = {"stamp": stamp, "embedded": embedded, "track": track}
+        files[key] = entry
+        if entry["track"] is not None:
+            tracks.append(entry["track"])
+    # An empty result over a cache that had songs (a card that's gone) isn't saved over it.
+    if cache and files != old and (files or not old):
+        _save_cache(root, files)
     return tracks
+
+
+class LibraryScanner(QObject):
+    """Reads the music folder on a worker thread: once as soon as it's
+    started, then whenever the files' times or sizes differ from the last
+    pass (looked at every `interval` seconds, or at `rescan()`).
+    `found(tracks)` is delivered on the thread this object lives in (the
+    UI's). The worker touches no Qt objects but the signal."""
+    found = pyqtSignal(list)
+
+    def __init__(self, folder, interval=60, parent=None):
+        super().__init__(parent)
+        self._folder = folder
+        self._interval = interval
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._force = True              # the first pass is always in full
+        self._thread = None
+
+    def start(self):
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="library-scan", daemon=True)
+            self._thread.start()
+
+    def rescan(self):
+        """Look again now, whether or not the files seem to have changed."""
+        self._force = True
+        self._wake.set()
+
+    def stop(self):
+        """End the worker. A pass in the middle of a big folder is left to
+        finish on its own (it's a daemon thread) and delivers nothing."""
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(2)
+
+    def _run(self):
+        last = None
+        while not self._stop.is_set():
+            try:
+                now = signature(self._folder)
+                if self._force or now != last:
+                    self._force = False
+                    tracks = scan(self._folder)
+                    last = now
+                    if not self._stop.is_set():
+                        self.found.emit(tracks)
+            except Exception as e:           # never fatal: try again next time
+                print(f"Music: scan failed ({e!r})")
+            self._wake.wait(self._interval)
+            self._wake.clear()
 
 
 def group_albums(tracks):
@@ -219,9 +413,13 @@ class LibraryPlayer(QObject):
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()
     modesChanged = pyqtSignal()         # shuffle or repeat
+    libraryChanged = pyqtSignal()       # the albums (a scan found other songs)
+    scanningChanged = pyqtSignal()
+    rescanRequested = pyqtSignal()      # main points this at the LibraryScanner
 
-    def __init__(self, tracks, parent=None):
+    def __init__(self, tracks, parent=None, scanning=False):
         super().__init__(parent)
+        self._scanning = scanning       # the first scan hasn't reported yet
         self._all = tracks
         self._albums = group_albums(tracks)
         self._queue = list(tracks)      # what's playing through: an album, or all songs
@@ -260,6 +458,69 @@ class LibraryPlayer(QObject):
             self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
         self._album = album
         self._reorder()
+
+    def set_tracks(self, tracks):
+        """A scan found these songs (call on the UI thread). Swaps them in
+        without interrupting the song playing; with nothing in the player yet
+        it starts as a normal boot would, from the state restore() was given."""
+        if self._scanning:
+            self._scanning = False
+            self.scanningChanged.emit()
+        if tracks == self._all or (self._all and not tracks):
+            return                      # same songs; or the card went, which isn't "all deleted"
+        if not self._queue:
+            self._all = tracks
+            self._albums = group_albums(tracks)
+            self._queue, self._album, self._index, self._start_at = list(tracks), -1, 0, 0
+            self.restore(self._saved, self._start_playing)
+            self.libraryChanged.emit()
+            self.queueChanged.emit()
+            self.start()
+            return
+        old_queue, old_index = self._queue, self._index
+        was = old_queue[old_index]
+        playing = was["path"]
+        album = self._albums[self._album] if self._album >= 0 else None
+        self._all, self._albums = tracks, group_albums(tracks)
+        by_path = {t["path"]: i for i, t in enumerate(tracks)}
+        if album is not None:
+            key = (album["artist"].casefold(), album["title"].casefold())
+            self._album = next((i for i, a in enumerate(self._albums)
+                                if (a["artist"].casefold(), a["title"].casefold()) == key), -1)
+        if playing not in by_path:
+            self.libraryChanged.emit()  # the song playing is gone: let it finish, queue as it was
+            self.queueChanged.emit()
+            return
+        if self._album >= 0:
+            queue = [tracks[i] for i in self._albums[self._album]["tracks"]]
+        elif album is None:
+            queue = list(tracks)
+        else:                           # its album was retagged away: keep what's left of the queue
+            queue = [tracks[by_path[t["path"]]] for t in old_queue if t["path"] in by_path]
+        if playing not in [t["path"] for t in queue]:
+            queue = [tracks[by_path[t["path"]]] for t in old_queue if t["path"] in by_path]
+            self._album = -1
+        index = next(i for i, t in enumerate(queue) if t["path"] == playing)
+
+        def swap():
+            self._queue, self._index = queue, index
+            self._reorder()
+
+        if [t["path"] for t in queue] != [t["path"] for t in old_queue]:
+            position = {t["path"]: i for i, t in enumerate(queue)}
+            self._engine.rebase(lambda i: position.get(old_queue[i]["path"], index)
+                                if 0 <= i < len(old_queue) else index, apply=swap)
+        else:
+            self._queue = queue
+        self.libraryChanged.emit()
+        self.queueChanged.emit()
+        if index != old_index or queue[index] != was:    # moved, or retagged / a new cover
+            self.trackChanged.emit()
+
+    def cancel_autoplay(self):
+        """Another source has taken over: songs found later must not start
+        playing over it (they wait, paused)."""
+        self._start_playing = False
 
     def set_modes(self, shuffle, repeat):
         """Shuffle and repeat from the last run (before restore())."""
@@ -372,12 +633,22 @@ class LibraryPlayer(QObject):
     def queue(self):
         return [{"title": t["title"], "artist": t["artist"]} for t in self._queue]
 
-    @pyqtProperty("QVariantList", constant=True)
+    @pyqtProperty("QVariantList", notify=libraryChanged)
     def albums(self):
         return [{"title": a["title"], "artist": a["artist"], "art": a["art"],
                  "count": len(a["tracks"]),
                  "duration": sum(self._all[i]["duration"] for i in a["tracks"])}
                 for a in self._albums]
+
+    @pyqtProperty(bool, notify=scanningChanged)
+    def scanning(self):
+        """The first read of the music folder is still going."""
+        return self._scanning
+
+    @pyqtSlot()
+    def rescan(self):
+        """Look at the folder again now (music just copied in)."""
+        self.rescanRequested.emit()
 
     @pyqtProperty(int, notify=queueChanged)
     def album(self):

@@ -142,6 +142,8 @@ class MediaHub(QObject):
     modesChanged = pyqtSignal()
     mutedChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
+    albumsChanged = pyqtSignal()        # the Pi's music was rescanned
+    scanningChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
         super().__init__(parent)
@@ -194,6 +196,9 @@ class MediaHub(QObject):
         spotify.queueChanged.connect(self.queueChanged)
         local.queueChanged.connect(self.queueChanged)       # an album started
         local.modesChanged.connect(self.modesChanged)
+        if hasattr(local, "libraryChanged"):         # not the demo player
+            local.libraryChanged.connect(self.albumsChanged)
+            local.scanningChanged.connect(self.scanningChanged)
         self._recent_art = {}             # Spotify cover URL -> saved copy
         spotify.recentsChanged.connect(self._save_recent_art)
         spotify.recentsChanged.connect(self.recentsChanged)
@@ -246,6 +251,8 @@ class MediaHub(QObject):
     def _set_source(self, source):
         if source != self._source:
             self._source = source
+            if source != "local" and hasattr(self._sources["local"], "cancel_autoplay"):
+                self._sources["local"].cancel_autoplay()    # songs found later mustn't take over
             self._apply_volume()
             for sig in ("sourceChanged", "volumeChanged", "trackChanged",
                         "positionChanged", "playingChanged", "queueChanged", "modesChanged"):
@@ -462,10 +469,21 @@ class MediaHub(QObject):
         """The Pi's own songs playing through: an album, or all of them (tap to play)."""
         return self._sources["local"].queue
 
-    @pyqtProperty("QVariantList", constant=True)
+    @pyqtProperty("QVariantList", notify=albumsChanged)
     def albums(self):
         """Albums of the Pi's own songs: [{title, artist, art, count, duration}]."""
         return self._sources["local"].albums
+
+    @pyqtProperty(bool, notify=scanningChanged)
+    def scanning(self):
+        """The Pi's music folder is still being read for the first time."""
+        return getattr(self._sources["local"], "scanning", False)
+
+    @pyqtSlot()
+    def rescan(self):
+        """Look for new music now."""
+        if hasattr(self._sources["local"], "rescan"):
+            self._sources["local"].rescan()
 
     @pyqtProperty(int, notify=queueChanged)
     def album(self):

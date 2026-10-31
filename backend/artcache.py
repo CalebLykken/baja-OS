@@ -31,9 +31,13 @@ _TMP = ".tmp-"
 _prune_lock = threading.Lock()
 
 
+def cache_root():
+    """~/.cache/baja-os (not created): the library's tag cache lives here too."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or "~/.cache").expanduser() / "baja-os"
+
+
 def cache_dir():
-    base = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
-    d = Path(base).expanduser() / "baja-os" / "art"
+    d = cache_root() / "art"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

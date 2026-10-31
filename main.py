@@ -77,26 +77,25 @@ def make_media_player(music_dir, demo_flag=None, on_pi=None):
     """The player for the Pi's own music: a real one over the audio files in
     music_dir. With none, the made-up playlist where demo data is allowed (a
     Mac, or --demo), else an empty player that says nothing's playing (the
-    truck). demo_flag is args.demo; on_pi (default: ask) is for tests."""
+    truck). It never reads tags here: it starts from the library cache, or
+    empty and "scanning" until the LibraryScanner reports (main starts that).
+    demo_flag is args.demo; on_pi (default: ask) is for tests."""
     from backend import demo
     show_demo = demo.allowed(demo_flag, not (demo.on_pi() if on_pi is None else on_pi))
     try:
-        from backend.library import LibraryPlayer, scan
+        from backend.library import LibraryPlayer, cached_tracks, has_audio_files
     except ImportError as e:  # QtMultimedia or mutagen not installed
         if show_demo:
             print(f"Music: real playback unavailable ({e}); using demo playlist")
             return MediaPlayer()
         print(f"Music: real playback unavailable ({e}); nothing to play")
         return MediaPlayer([])
-    tracks = scan(music_dir)
-    if tracks:
-        print(f"Music: {len(tracks)} track(s) from {music_dir}")
-        return LibraryPlayer(tracks)
-    if show_demo:
+    if show_demo and not has_audio_files(music_dir):
         print(f"Music: no audio files in {music_dir}; using demo playlist")
         return MediaPlayer()
-    print(f"Music: no audio files in {music_dir}")
-    return LibraryPlayer([])
+    tracks = cached_tracks(music_dir)
+    print(f"Music: {len(tracks)} track(s) from the cache; reading {music_dir}")
+    return LibraryPlayer(tracks, scanning=not tracks)
 
 
 def log_exception(exc_type, exc, tb):
@@ -160,6 +159,12 @@ def main():
         pass
     spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
     local = make_media_player(args.music_dir, args.demo)
+    scanner = None                    # reads the music folder in the background
+    if hasattr(local, "set_tracks"):
+        from backend.library import LibraryScanner
+        scanner = LibraryScanner(args.music_dir)
+        scanner.found.connect(local.set_tracks)
+        local.rescanRequested.connect(scanner.rescan)
     # It picks up where music was before a restart, and saves that as it goes.
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),
@@ -233,6 +238,8 @@ def main():
 
     vehicle.start()
     media.start()
+    if scanner:
+        scanner.start()
     maps.start()
     eq.start()
     wifi.start()
@@ -251,9 +258,11 @@ def main():
     watchdog.start()
     code = app.exec()
     errorlog.log.flush()          # repeats still being counted go to the journal now
+    if scanner:
+        scanner.stop()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):
+    for obj in (vehicle, local, scanner or local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

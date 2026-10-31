@@ -97,6 +97,13 @@ class HubTest(unittest.TestCase):
         self.assertFalse(self.local.playing)
         self.assertEqual((hub.source, hub.index, hub.position), ("local", 3, 50))
 
+    def test_another_source_taking_over_stops_late_songs_autoplaying(self):
+        hub = self.make(music=saved("local", True))
+        self.local.cancel_autoplay = mock.Mock()
+        self.spotify.play()
+        self.assertEqual(hub.source, "spotify")
+        self.local.cancel_autoplay.assert_called_once_with()
+
     def test_after_the_phone_local_music_waits(self):
         self.make(music=saved("phone", True))
         self.assertFalse(self.local.playing)

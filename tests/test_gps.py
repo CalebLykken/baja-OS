@@ -223,7 +223,7 @@ class FakeGpsd:
         return False
 
     def sendall(self, data):
-        pass
+        self.sent = getattr(self, "sent", []) + [data]
 
     def settimeout(self, seconds):
         pass
@@ -710,3 +710,30 @@ class ReaderSurvivesTest(unittest.TestCase):
                 g._receiver_loop()
         self.assertEqual(calls, ["/dev/ttyACM0"])
         self.assertIn("lost the receiver", out.getvalue())
+
+
+class GpsdSetupTimingTest(unittest.TestCase):
+    def run_messages(self, messages):
+        g = Gps(demo=False)
+        sock = FakeGpsd(messages)
+        out = io.StringIO()
+        with mock.patch("backend.gps.socket.create_connection", lambda *a, **k: sock), redirect_stdout(out):
+            g._read_gpsd()
+        return getattr(sock, "sent", []), out.getvalue()
+
+    def test_nothing_is_sent_before_gpsd_names_a_driver(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0"}
+        with mock.patch("backend.gps.find_receiver", return_value="/dev/ttyACM0"), \
+                mock.patch("backend.gps.is_ublox", return_value=True):
+            sent, out = self.run_messages([dev])
+            self.assertEqual([x for x in sent if b"?DEVICE" in x], [])
+            self.assertNotIn("sent automotive", out)
+            sent, out = self.run_messages([dev, dict(dev, driver="u-blox")])
+        self.assertEqual(len([x for x in sent if b"?DEVICE" in x]), 1)
+
+    def test_an_error_reply_is_not_called_success_and_allows_a_retry(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox"}
+        err = {"class": "ERROR", "message": "Type of /dev/ttyACM0 is unknown."}
+        sent, out = self.run_messages([dev, err, dev])
+        self.assertIn("refused", out)
+        self.assertEqual(len([x for x in sent if b"?DEVICE" in x]), 2)

@@ -190,11 +190,9 @@ def gpsd_setup(device):
     u-blox, else None. gpsd gives no ACK to check."""
     if not isinstance(device, dict) or not isinstance(device.get("path"), str):
         return None
-    # gpsd names the device by its driver once it has recognised it; before
-    # that, the by-id name of the same device tells.
-    found = find_receiver()
-    byid = bool(found) and is_ublox(found) and os.path.realpath(found) == os.path.realpath(device["path"])
-    if "u-blox" not in str(device.get("driver") or "").lower() and not byid:
+    # gpsd only writes to a device whose type it knows ("Type of %s is unknown"
+    # otherwise), and names the driver once it has: wait for that.
+    if "u-blox" not in str(device.get("driver") or "").lower():
         return None
     cmd = {"path": device["path"], "hexdata": setup_frames().hex()}
     return ("?DEVICE=" + json.dumps(cmd) + ";\n").encode()
@@ -413,6 +411,7 @@ class Gps(QObject):
             safe_emit(self, "_report", {"gpsd": True})
             talking = False
             configured = set()            # device paths already sent the setup
+            last_sent = None              # the path an ERROR reply would be about
             for line in s.makefile("r", encoding="utf-8", errors="replace"):
                 try:
                     msg = json.loads(line)
@@ -431,12 +430,18 @@ class Gps(QObject):
                         cmd = gpsd_setup(device)
                         if cmd and device["path"] not in configured:
                             configured.add(device["path"])      # once per appearance
+                            last_sent = device["path"]
                             try:
                                 s.sendall(cmd)
                                 print(f"GPS: sent automotive mode and {RATE_HZ} Hz to {device['path']} "
                                       "through gpsd (unverified: gpsd gives no ack)", flush=True)
                             except OSError as e:
                                 print(f"GPS: couldn't set the receiver up through gpsd ({e})", flush=True)
+                if kind == "ERROR":
+                    # gpsd refused the setup (or something else): don't claim it went through
+                    print(f"GPS: gpsd refused a command ({msg.get('message')})", flush=True)
+                    configured.discard(last_sent)         # try again at the next DEVICE message
+                    continue
                 if kind == "SKY":
                     report = sky_report(msg)
                     if report:

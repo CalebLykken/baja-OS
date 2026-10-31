@@ -7,13 +7,16 @@ the truck still moves along, and arrival only near the destination.
     python3 -m unittest tests.test_route_following
 """
 
+import json
 import math
+import time
 import unittest
+from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.routing import JUMP_FIXES, Route, Router
-from tests.test_routing import FakeGps, answer, polyline6
+from backend.routing import ARRIVED_M, JUMP_FIXES, Route, Router, route_record, saved_route
+from tests.test_routing import FakeGps, FakeSettings, answer, polyline6
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -236,6 +239,348 @@ class FollowingTest(unittest.TestCase):
         self.assertFalse(self.router.arrived)
         self.fix(3, 492, 0, 3.0)
         self.assertTrue(self.router.arrived)
+
+
+# North past two stops to the shop, a leg each, with a turn to take after
+# the first stop. Every maneuver is numbered from its own leg's start.
+def timed(type, begin, end, words, seconds):
+    return dict(step(type, begin, words), end_shape_index=end, time=seconds)
+
+
+A, B, SHOP = (0, 1000), (0, 2000), (500, 2000)
+STOP_A, STOP_B = ("Gas", *ll(*A)), ("Cafe", *ll(*B))
+TWO_STOPS = {"trip": {"summary": {"time": 300.0}, "legs": [
+    {"shape": polyline6([ll(0, 0), ll(0, 500), ll(*A)]),
+     "maneuvers": [timed(1, 0, 2, "Drive north.", 100.0),
+                   timed(5, 2, 2, "You have arrived at your destination.", 0.0)]},
+    {"shape": polyline6([ll(*A), ll(0, 1500), ll(*B)]),
+     "maneuvers": [timed(1, 0, 2, "Carry on north.", 100.0),
+                   timed(4, 2, 2, "You have arrived at your stop.", 0.0)]},
+    {"shape": polyline6([ll(*B), ll(*SHOP)]),
+     "maneuvers": [timed(10, 0, 1, "Turn right.", 100.0), timed(4, 1, 1, "You have arrived.", 0.0)]},
+]}}
+ONE_STOP = {"trip": {"summary": {"time": 200.0}, "legs": TWO_STOPS["trip"]["legs"][1:]}}
+NO_STOPS = {"trip": {"summary": {"time": 100.0}, "legs": TWO_STOPS["trip"]["legs"][2:]}}
+TWO_STOPS_AND_ONE = {"trip": {"summary": {"time": 400.0},
+                              "legs": TWO_STOPS["trip"]["legs"] + TWO_STOPS["trip"]["legs"][2:]}}
+
+
+class MultiLegRouteTest(unittest.TestCase):
+    def setUp(self):
+        self.route = Route(TWO_STOPS, "Shop", [STOP_A, STOP_B])
+
+    def test_the_legs_join_up(self):
+        r = self.route
+        self.assertEqual(len(r.shape), 6)           # 3 + 3 + 2, less the two shared points
+        self.assertEqual(len(r.maneuvers), 6)
+        self.assertEqual(r.leg_ends, [2, 4])
+        self.assertAlmostEqual(r.length, 2500, delta=1)
+        self.assertEqual(r.time, 300.0)
+        self.assertEqual([m["begin_shape_index"] for m in r.maneuvers], [0, 2, 2, 4, 4, 5])
+        self.assertEqual([m["end_shape_index"] for m in r.maneuvers], [2, 2, 4, 4, 5, 5])
+
+    def test_the_answer_is_left_alone(self):
+        self.assertEqual(TWO_STOPS["trip"]["legs"][1]["maneuvers"][0]["begin_shape_index"], 0)
+        self.assertNotIn("Arrive", TWO_STOPS["trip"]["legs"][0]["maneuvers"][1]["instruction"])
+
+    def test_a_stop_is_called_by_its_name(self):
+        r = self.route
+        self.assertEqual(r.maneuvers[1]["instruction"], "Arrive at Gas")
+        self.assertEqual(r.maneuvers[3]["instruction"], "Arrive at Cafe")
+        self.assertEqual(r.maneuvers[5]["instruction"], "You have arrived.")
+
+    def test_time_left_covers_every_leg(self):
+        self.assertAlmostEqual(self.route.time_left(), 300.0)
+
+    def test_nothing_is_shown_after_a_stop_arrival(self):
+        self.route.locate(*ll(0, 900))
+        self.assertEqual(self.route.next_maneuver()["instruction"], "Arrive at Gas")
+        self.assertIsNone(self.route.then_maneuver())
+
+    def test_a_ferry_on_a_later_leg_is_seen(self):
+        data = json.loads(json.dumps(ONE_STOP))
+        data["trip"]["legs"][1]["maneuvers"][0].update(type=28, ferry=True, time=600)
+        self.assertEqual([f["time"] for f in Route(data, "Shop", [STOP_B]).ferries], [600.0])
+
+    def test_a_leg_missing_for_a_stop_is_not_a_route(self):
+        with self.assertRaises(ValueError):
+            Route(NO_STOPS, "Shop", [STOP_A])
+
+
+class StopsTest(unittest.TestCase):
+    """The router on a fake GPS with stops added along the way."""
+
+    def setUp(self):
+        self.gps = FakeGps()
+        self.gps.lon, self.gps.lat = ll(0, 0)
+        self.settings = FakeSettings()
+        self.router = Router(self.gps, self.settings)
+        self.said, self.asked = [], []
+        self.router.speak.connect(self.said.append)
+        self.router._request = lambda *a, **k: self.asked.append(
+            (list(self.router._stops), k.get("reroute", False)))
+
+    def driving(self):
+        """Guiding along TWO_STOPS, nothing yet asked or said."""
+        self.router.routeTo("Shop", *ll(*SHOP))
+        self.router._stops = [STOP_A, STOP_B]
+        answer(self.router, TWO_STOPS, "", "Shop", False)
+        self.router.go()
+        self.said.clear()
+        self.asked.clear()
+
+    def at(self, e, n):
+        self.gps.lon, self.gps.lat = ll(e, n)
+        self.router._on_fix()
+
+    def test_added_before_the_destination_and_the_old_line_stays(self):
+        self.router.routeTo("Shop", *ll(*SHOP))
+        answer(self.router, NO_STOPS, "", "Shop", False)
+        old = self.router._route
+        self.router.addStop(*STOP_B)
+        self.router.addStop(*STOP_A)
+        self.assertEqual(self.asked[-1], ([STOP_B, STOP_A], True))
+        self.assertIs(self.router._route, old)
+        self.assertEqual(self.router.stopCount, 2)
+        self.assertEqual([s["name"] for s in self.router.stops], ["Cafe", "Gas"])
+        self.assertEqual(self.router.nextStopName, "Cafe")
+        self.assertEqual(self.router.stops[0]["lon"], STOP_B[1])
+
+    def test_no_route_no_stop(self):
+        self.router.addStop(*STOP_A)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.router.stopCount, 0)
+
+    def test_after_arriving_no_stop(self):
+        self.router.routeTo("Shop", *ll(*SHOP))
+        answer(self.router, NO_STOPS, "", "Shop", False)
+        self.router._arrived = True
+        self.asked.clear()
+        self.router.addStop(*STOP_A)
+        self.assertEqual(self.asked, [])
+
+    def test_a_new_place_or_the_end_clears_them(self):
+        self.driving()
+        self.router.routeTo("Elsewhere", *ll(*SHOP))
+        self.assertEqual(self.router.stopCount, 0)
+        self.driving()
+        self.router.stop()
+        self.assertEqual(self.router.stopCount, 0)
+        self.assertEqual(self.router.nextStopName, "")
+
+    def test_removing_one(self):
+        self.driving()
+        self.router.removeStop(0)
+        self.assertEqual(self.asked, [([STOP_B], True)])
+        for index in (-1, 1):
+            self.router.removeStop(index)
+        self.assertEqual(len(self.asked), 1)
+
+    def test_a_stop_with_no_road_to_it_goes_back_off(self):
+        self.driving()
+        self.router.addStop("Island", *ll(9000, 9000))
+        answer(self.router, None, "No path could be found", "Shop", True)
+        self.assertEqual(self.router.error, "No road route to there")
+        self.assertEqual(self.router._stops, [STOP_A, STOP_B])
+        self.assertTrue(self.router.active)
+        saved = saved_route(self.settings.values["route"], time.time())
+        self.assertEqual(saved["stops"], [STOP_A, STOP_B])
+
+    def test_each_arrival_is_announced_once_and_guidance_carries_on(self):
+        self.driving()
+        self.assertEqual(self.router.instruction, "Arrive at Gas")
+        self.assertEqual(self.router.maneuverIcon, "place")
+        self.at(0, 980)
+        self.at(0, 985)
+        self.at(0, 990)
+        self.assertEqual(self.said.count("You have arrived at Gas. Continuing to Cafe."), 1)
+        self.assertTrue(self.router.active)
+        self.assertFalse(self.router.arrived)
+        self.assertEqual(self.router._stops, [STOP_B])
+        self.assertEqual(self.router.nextStopName, "Cafe")
+        self.assertEqual(self.router.instruction, "Carry on north")      # not back to the stop
+        self.at(0, 1100)
+        self.assertEqual(self.router.instruction, "Arrive at Cafe")
+        self.assertAlmostEqual(self.router.distanceToTurn, 900, delta=2)
+        self.at(0, 1990)
+        self.assertEqual(self.said[-1], "You have arrived at Cafe. Continuing to Shop.")
+        self.assertEqual(self.router.stopCount, 0)
+        self.assertEqual(self.router.nextStopName, "")
+        self.at(495, 2000)
+        self.assertTrue(self.router.arrived)
+        self.assertEqual(self.said[-1], "You have arrived at Shop.")
+
+    def test_not_there_until_arrived_m_away(self):
+        self.driving()
+        self.at(0, 1000 - ARRIVED_M - 5)
+        self.assertEqual(self.router.stopCount, 2)
+        self.at(ARRIVED_M + 5, 1000)                # level with it, but across a field
+        self.assertEqual(self.router.stopCount, 2)
+
+    def test_a_stop_gone_by_unseen_goes_quietly_and_the_next_still_counts(self):
+        self.driving()
+        for n in (1200, 1210, 1220):
+            self.at(0, n)
+        self.assertEqual(self.router._stops, [STOP_B])
+        self.assertEqual(self.router._route.leg, 1)
+        self.assertEqual(self.said, [])
+        self.assertEqual(saved_route(self.settings.values["route"], time.time())["stops"], [STOP_B])
+        self.at(0, 1990)
+        self.assertEqual(self.said[-1], "You have arrived at Cafe. Continuing to Shop.")
+        self.assertEqual(self.router._route.leg, 2)
+        self.router._request(*self.router._dest, reroute=True)
+        self.assertEqual(self.asked[-1], ([], True))
+
+    def test_several_stops_gone_by_at_once(self):
+        self.driving()
+        for e in (100, 110, 120):
+            self.at(e, 2000)
+            self.gps.heading = 90.0
+        self.at(130, 2000)
+        self.assertEqual(self.router._stops, [])
+
+    def test_one_fix_past_a_stop_isnt_enough(self):
+        self.driving()
+        self.at(0, 1200)
+        self.at(0, 1210)
+        self.assertEqual(self.router.stopCount, 2)
+
+    def test_past_a_stop_only_going_the_way_of_the_line(self):
+        self.driving()
+        self.gps.heading = 180.0
+        for n in (1200, 1190, 1180, 1170):
+            self.at(0, n)
+        self.assertEqual(self.router.stopCount, 2)
+
+    def test_past_a_stop_only_when_moving(self):
+        self.driving()
+        self.gps.speed = 0.0
+        for n in (1200, 1200.5, 1201, 1201.5):
+            self.at(0, n)
+        self.assertEqual(self.router.stopCount, 2)
+
+    def test_past_a_stop_waits_for_a_new_route_on_its_way(self):
+        self.driving()
+        self.router._computing = True
+        for n in (1200, 1210, 1220, 1230):
+            self.at(0, n)
+        self.assertEqual(self.router.stopCount, 2)
+
+    def test_adding_says_if_it_was_taken(self):
+        failed = []
+        self.router.stopsFailed.connect(failed.append)
+        self.assertFalse(self.router.addStop(*STOP_A))              # no route
+        self.assertEqual(failed, ["Couldn't add Gas"])
+        self.driving()
+        self.gps.hasFix = False
+        self.assertFalse(self.router.addStop("Diner", 1.0, 2.0))
+        self.assertFalse(self.router.removeStop(0))
+        self.assertEqual(failed[1:], ["Couldn't add Diner", "Couldn't skip Gas"])
+        self.assertEqual(self.router.stopCount, 2)
+        self.gps.hasFix = True
+        self.assertFalse(self.router.removeStop(5))
+        self.assertEqual(len(failed), 3)
+        self.assertTrue(self.router.addStop("Diner", 1.0, 2.0))
+        self.assertTrue(self.router.removeStop(0))
+
+    def test_no_route_for_a_change_of_stops_is_told(self):
+        failed = []
+        self.router.stopsFailed.connect(failed.append)
+        self.driving()
+        self.router.addStop("Island", *ll(9000, 9000))
+        answer(self.router, None, "No path could be found", "Shop", True)
+        self.assertEqual(failed, ["Couldn't add Island"])
+        self.router.removeStop(0)
+        answer(self.router, None, "Routing isn't running", "Shop", True)
+        self.assertEqual(failed[1:], ["Couldn't skip Gas"])
+        self.assertEqual(self.router._stops, [STOP_A, STOP_B])
+
+    def test_other_reroutes_failing_tell_nothing(self):
+        failed = []
+        self.router.stopsFailed.connect(failed.append)
+        self.driving()
+        self.router.addStop("Diner", 1.0, 2.0)
+        answer(self.router, TWO_STOPS_AND_ONE, "", "Shop", True)
+        self.router._request(*self.router._dest, reroute=True)
+        answer(self.router, None, "Routing isn't running", "Shop", True)
+        self.assertEqual(failed, [])
+
+    def test_a_failed_change_after_arriving_saves_nothing(self):
+        failed = []
+        self.router.stopsFailed.connect(failed.append)
+        self.driving()
+        self.router.addStop("Island", *ll(9000, 9000))
+        self.router._arrived = True
+        self.settings.values["route"] = ""
+        answer(self.router, None, "No path could be found", "Shop", True)
+        self.assertEqual(self.settings.values["route"], "")
+        self.assertEqual(failed, [])
+
+    def test_a_reroute_after_a_stop_leaves_it_out(self):
+        self.driving()
+        self.at(0, 990)
+        self.router._request(*self.router._dest, reroute=True)
+        self.assertEqual(self.asked[-1], ([STOP_B], True))
+
+    def test_a_reroute_on_its_way_at_a_stop_is_asked_again_without_it(self):
+        self.driving()
+        self.router._computing = True
+        self.at(0, 990)
+        self.assertEqual(self.asked[-1], ([STOP_B], True))
+
+    def test_a_saved_route_keeps_the_stops_left(self):
+        self.driving()
+        saved = saved_route(self.settings.values["route"], time.time())
+        self.assertEqual(saved["stops"], [STOP_A, STOP_B])
+        self.at(0, 990)
+        saved = saved_route(self.settings.values["route"], time.time())
+        self.assertEqual(saved["stops"], [STOP_B])
+
+    def test_old_saves_have_none(self):
+        text = route_record("Shop", 1.0, 2.0, True, 1000.0)
+        self.assertNotIn("stops", saved_route(text, 1000.0))
+        old = json.dumps({"name": "Shop", "lon": 1.0, "lat": 2.0, "started": True, "at": 1000.0})
+        self.assertEqual(saved_route(old, 1000.0),
+                         {"name": "Shop", "lon": 1.0, "lat": 2.0, "started": True})
+
+    def test_odd_saved_stops_are_no_route(self):
+        text = json.dumps({"name": "Shop", "lon": 1.0, "lat": 2.0, "at": 1000.0, "stops": [["Gas"]]})
+        self.assertIsNone(saved_route(text, 1000.0))
+
+    def resumed_router(self, here, stops):
+        self.gps.lon, self.gps.lat = ll(*here)
+        self.settings.values["route"] = route_record("Shop", *ll(*SHOP), True, time.time(), stops)
+        router = Router(self.gps, self.settings)
+        router.speak.connect(self.said.append)
+        asked = []
+        router._request = lambda *a, **k: asked.append(list(router._stops))
+        router._on_status(True)
+        return router, asked
+
+    def test_resuming_brings_the_stops_back(self):
+        router, asked = self.resumed_router((0, 500), [STOP_A, STOP_B])
+        self.assertEqual(asked, [[STOP_A, STOP_B]])
+        answer(router, TWO_STOPS, "", "Shop", False)
+        self.assertTrue(router.active)
+        self.assertTrue(self.said[0].startswith("Continuing to Gas. "))
+
+    def test_near_the_destination_with_a_stop_left_still_resumes(self):
+        router, asked = self.resumed_router((480, 2000), [STOP_B])
+        self.assertEqual(asked, [[STOP_B]])
+
+    def test_a_new_route_option_carries_the_stops(self):
+        self.driving()
+        self.router.setAvoid("avoidTolls", True)
+        self.assertEqual(self.asked[-1], ([STOP_A, STOP_B], True))
+
+    def test_off_the_line_carries_the_stops(self):
+        self.driving()
+        self.router._last_reroute = float("-inf")
+        self.router._clock = mock.Mock(side_effect=[0.0, 1.0, 2.0, 3.0])
+        for n in (300, 305, 310):
+            self.gps.at(*ll(200, n))
+            self.router._on_fix()
+        self.assertEqual(self.asked[-1], ([STOP_A, STOP_B], True))
 
 
 if __name__ == "__main__":

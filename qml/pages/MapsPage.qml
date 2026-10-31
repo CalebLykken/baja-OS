@@ -172,7 +172,7 @@ Item {
         else pending = p
     }
     property var pending: null
-    property var offered: null          // a phone place waiting for "Go there instead" or dismiss
+    property var offered: null          // a phone place waiting for an answer on its card
     function takeOffer() {
         var p = offered
         offered = null
@@ -182,6 +182,11 @@ Item {
         if (mapReady) choose(p)
         else pending = p
     }
+    function addOfferAsStop() {
+        if (routing.addStop(offered.name, offered.lon, offered.lat)) offered = null
+    }
+    property string stopMessage: ""     // why a stop couldn't be added or skipped, for a few seconds
+    Timer { id: stopMessageHide; interval: 4000; onTriggered: page.stopMessage = "" }
     onNavigatingChanged: if (!navigating && offered) {
         // The route ended meanwhile: the place is previewed as it would have been.
         var p = offered
@@ -199,6 +204,10 @@ Item {
             page.typing = false
             page.panel = "place"
             if (page.mapReady) page.map.call("showPlace(" + lon + "," + lat + ")")
+        }
+        function onStopsFailed(text) {
+            page.stopMessage = text
+            stopMessageHide.restart()
         }
     }
     function cancelPlace() {
@@ -607,6 +616,14 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing && routing.stopCount > 0
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: page.hasRouting ? "Stops: " + routing.stops.map(s => s.name).join(", ") : ""
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
                     // A ferry on the way, one row per crossing.
                     Repeater {
                         model: page.hasRouting && routing.previewing ? routing.ferries : []
@@ -775,11 +792,45 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 200 } }
             anchors { bottom: parent.bottom; bottomMargin: 16 }
             width: page.panelWidth
-            height: 132
+            height: 132 + (nextStop.visible ? nextStop.height + 8 : 0)
+            Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
             readonly property real timeLeft: page.hasRouting ? routing.remainingTime : 0
             readonly property string distance: page.hasRouting ? Units.distanceText(routing.remainingDistance) : ""
+            Item {
+                id: nextStop
+                readonly property string stopName: page.hasRouting ? routing.nextStopName : ""
+                visible: stopName !== "" || page.stopMessage !== ""
+                anchors { left: parent.left; right: parent.right; top: parent.top
+                          leftMargin: 28; rightMargin: 16; topMargin: 8 }
+                height: 60
+                MapLabel {
+                    anchors { left: parent.left; right: skip.visible ? skip.left : parent.right
+                              rightMargin: 12; verticalCenter: parent.verticalCenter }
+                    elide: Text.ElideRight
+                    text: page.stopMessage !== "" ? page.stopMessage : "Next stop: " + nextStop.stopName
+                    color: page.cDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Rectangle {
+                    id: skip
+                    visible: nextStop.stopName !== ""
+                    anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
+                    width: 104
+                    radius: 18
+                    color: skipTap.pressed ? page.cLine : page.cPanelHi
+                    MapLabel {
+                        anchors.centerIn: parent
+                        text: "Skip"
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    TapHandler { id: skipTap; onTapped: routing.removeStop(0) }
+                }
+            }
             RowLayout {
-                anchors { fill: parent; leftMargin: 14; rightMargin: 16 }
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                          leftMargin: 14; rightMargin: 16 }
+                height: 132
                 spacing: 0
                 TripStat {
                     Layout.preferredWidth: 130
@@ -900,7 +951,7 @@ Item {
             }
         }
 
-        // A place sent from the phone while guiding: switch to it, or keep going.
+        // A place sent from the phone while guiding: switch to it, add it, or keep going.
         Sheet {
             visible: page.offered !== null && page.navigating
             anchors { left: parent.left; leftMargin: page.panelWidth + 32      // between the turn card and the keys
@@ -927,7 +978,11 @@ Item {
                         radius: 22
                         color: thereTap.pressed ? Qt.darker(page.cBlue, 1.2) : page.cBlue
                         MapLabel {
-                            anchors.centerIn: parent
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
                             text: "Go there instead"
                             color: "white"
                             font.pixelSize: Theme.fontBody
@@ -936,12 +991,33 @@ Item {
                         TapHandler { id: thereTap; onTapped: page.takeOffer() }
                     }
                     Rectangle {
-                        Layout.preferredWidth: 200
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: stopTap.pressed ? page.cLine : page.cPanelHi
+                        MapLabel {
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
+                            text: "Add as a stop"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        TapHandler { id: stopTap; onTapped: page.addOfferAsStop() }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
                         Layout.fillHeight: true
                         radius: 22
                         color: keepTap.pressed ? page.cLine : page.cPanelHi
                         MapLabel {
-                            anchors.centerIn: parent
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
                             text: "Keep going"
                             font.pixelSize: Theme.fontBody
                             font.weight: Font.DemiBold

@@ -6,15 +6,18 @@ and a new route when the truck leaves this one.
 Picking a place previews the route (line, distance, time, arrival) and
 guidance starts with go(), like Start in other car maps.
 
+A route can have stops on the way (addStop): each is a leg of Valhalla's
+answer, the arrival is announced and guidance carries straight on.
+
 Valhalla runs as its own local service on 127.0.0.1:8002, so a crash
 there can't take the dashboard down; requests go over plain HTTP on a
 worker thread.
 
-The route is saved in settings, so a restart (a gas stop is a fresh boot
-once the key-off shutdown is on) doesn't lose it: once there's a position
-and the service answers, it's worked out again, and guidance carries on by
-itself if it had started. A route that ended, arrived, or wasn't driven for
-a few hours stays gone.
+The route and its stops are saved in settings, so a restart (a gas stop is
+a fresh boot once the key-off shutdown is on) doesn't lose it: once there's
+a position and the service answers, it's worked out again, and guidance
+carries on by itself if it had started. A route that ended, arrived, or
+wasn't driven for a few hours stays gone.
 """
 
 import json
@@ -63,6 +66,8 @@ MANEUVER_ICONS = {
     25: "merge", 26: "roundabout_right", 27: "roundabout_right", 28: "ferry", 29: "ferry",
     37: "merge", 38: "merge",
 }
+
+ARRIVE_TYPES = (4, 5, 6)              # Valhalla maneuver types: the end of a leg
 
 
 # Settings > Map > Route options: setting key -> Valhalla's auto costing option
@@ -147,26 +152,63 @@ def decode_polyline6(encoded):
     return coords
 
 
-def route_record(name, lon, lat, started, now):
+def route_record(name, lon, lat, started, now, stops=()):
     """What's saved in settings for a route: JSON."""
-    return json.dumps({"name": name, "lon": lon, "lat": lat, "started": started, "at": now})
+    return json.dumps({"name": name, "lon": lon, "lat": lat, "started": started, "at": now,
+                       "stops": [list(s) for s in stops]})
 
 
 def saved_route(text, now):
     """The route to pick up again after a restart, from what was saved:
-    {name, lon, lat, started}, or None if there's none or it's too old.
-    Without its battery the Pi's clock can be behind after a restart, so a
-    save that looks a little in the future still counts."""
+    {name, lon, lat, started}, plus stops [(name, lon, lat)] if it has any,
+    or None if there's none or it's too old. Without its battery the Pi's
+    clock can be behind after a restart, so a save that looks a little in
+    the future still counts."""
     try:
         r = json.loads(text) if text else None
         if not isinstance(r, dict) or not isinstance(r.get("name"), str):
             return None
         if abs(now - float(r["at"])) > RESUME_S:
             return None
-        return {"name": r["name"], "lon": float(r["lon"]), "lat": float(r["lat"]),
-                "started": r.get("started") is True}
+        out = {"name": r["name"], "lon": float(r["lon"]), "lat": float(r["lat"]),
+               "started": r.get("started") is True}
+        stops = [(str(n), float(lon), float(lat)) for n, lon, lat in r.get("stops") or []]
+        if stops:
+            out["stops"] = stops
+        return out
     except (ValueError, TypeError, KeyError):
         return None
+
+
+def join_legs(legs, stops):
+    """Valhalla's legs as one line: (shape, maneuvers, the shape index of
+    each stop, the index of each leg's first maneuver). Each leg's shape
+    starts where the last one ended, and maneuvers count from their own
+    leg's start. A stop's arrive maneuver says the stop's name."""
+    if len(legs) != len(stops) + 1:
+        raise ValueError("a leg for each stop")
+    if len(legs) == 1:
+        return decode_polyline6(legs[0]["shape"]), legs[0]["maneuvers"], [], [0]
+    shape, maneuvers, ends, firsts = [], [], [], []
+    for k, leg in enumerate(legs):
+        points = decode_polyline6(leg["shape"])
+        by = max(0, len(shape) - 1)
+        shape += points[1:] if k else points
+        firsts.append(len(maneuvers))
+        for m in leg["maneuvers"]:
+            m = dict(m)
+            for key in ("begin_shape_index", "end_shape_index"):
+                if key in m:
+                    m[key] += by
+            maneuvers.append(m)
+        if k < len(stops):
+            ends.append(len(shape) - 1)
+            last = maneuvers[-1]
+            if last.get("type") in ARRIVE_TYPES:
+                last["instruction"] = f"Arrive at {stops[k][0]}"
+                last.pop("verbal_pre_transition_instruction", None)
+                last.pop("verbal_transition_alert_instruction", None)
+    return shape, maneuvers, ends, firsts
 
 
 def _xy(p, lat0):
@@ -195,10 +237,11 @@ def _project(p, a, b, lat0):
 class Route:
     """One computed route and where the truck is along it."""
 
-    def __init__(self, data, name):
-        leg = data["trip"]["legs"][0]
+    def __init__(self, data, name, stops=()):
         self.name = name
-        self.shape = decode_polyline6(leg["shape"])
+        self.stops = list(stops)      # (name, lon, lat) on the way, in order
+        self.shape, self.maneuvers, self.leg_ends, self._firsts = join_legs(data["trip"]["legs"], self.stops)
+        self.leg = 0                  # the leg the truck is on: this many stops are behind it
         self.lat0 = self.shape[0][1]
         self.cum = [0.0]
         self.bearing = []             # each segment's compass bearing (None if it has no length)
@@ -210,7 +253,6 @@ class Route:
                                 if (bx, by) != (ax, ay) else None)
         self.length = self.cum[-1]
         self.time = float(data["trip"]["summary"]["time"])
-        self.maneuvers = leg["maneuvers"]
         self.ferries = ferry_legs(self.maneuvers) if isinstance(self.maneuvers, list) else []
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
@@ -218,6 +260,7 @@ class Route:
         self.to_end = math.inf        # metres from the end of the route, in a straight line
         self._p, self._at = None, None    # the last position it was located at, and when
         self._away = 0                # fixes in a row that put it further along (or back) than it could have got
+        self._past = 0                # fixes in a row driving on beyond the next stop
 
     def locate(self, lon, lat, heading=None, speed=None, now=None):
         """Snap the truck to the route, looking a little back and ahead.
@@ -283,8 +326,31 @@ class Route:
         b = self.bearing[i]
         return b is not None and abs((heading - b + 180) % 360 - 180) > WRONG_WAY_DEG
 
+    def at_stop(self):
+        """The truck has reached the next stop."""
+        if self.leg >= len(self.leg_ends) or self._p is None:
+            return False
+        end = self.leg_ends[self.leg]
+        return abs(self.along - self.cum[end]) < ARRIVED_M and _metres(self._p, self.shape[end]) < ARRIVED_M
+
+    def past_stop(self, heading, speed):
+        """The truck has gone by the next stop without coming near it (a
+        tunnel, a gap in the fixes). On a new route it can be put on the way
+        back of an out-and-back to a stop, so it takes a few fixes in a row
+        on the line, moving the way the line goes."""
+        if (self.leg >= len(self.leg_ends) or self.along <= self.cum[self.leg_ends[self.leg]] + ARRIVED_M
+                or self.off > ARRIVED_M or speed <= HEADING_MS or self._wrong_way(self.seg, heading)):
+            self._past = 0
+            return False
+        self._past += 1
+        return self._past >= JUMP_FIXES
+
+    def stops_left(self):
+        return self.stops[self.leg:]
+
     def next_maneuver(self):
-        for m in self.maneuvers:
+        # Not back at a stop just reached: its arrival is over.
+        for m in self.maneuvers[self._firsts[self.leg]:]:
             if self.cum[m["begin_shape_index"]] > self.along + 5:
                 return m
         return self.maneuvers[-1]
@@ -293,8 +359,8 @@ class Route:
         """The maneuver after the next one, when it comes right after it."""
         nxt = self.next_maneuver()
         i = self.maneuvers.index(nxt)
-        if i + 1 >= len(self.maneuvers):
-            return None
+        if i + 1 >= len(self.maneuvers) or nxt.get("type") in ARRIVE_TYPES:
+            return None                 # after a stop, the way on is for after the stop
         m = self.maneuvers[i + 1]
         gap = self.cum[m["begin_shape_index"]] - self.cum[nxt["begin_shape_index"]]
         return m if gap < THEN_M else None
@@ -325,6 +391,8 @@ class Router(QObject):
     changed = pyqtSignal()          # route started/ended, computing, availability
     progressChanged = pyqtSignal()  # where the truck is along the route
     optionsChanged = pyqtSignal()   # an avoid-ferries/highways/tolls setting
+    stopsChanged = pyqtSignal()     # a stop added, removed or reached
+    stopsFailed = pyqtSignal(str)   # a stop couldn't be added or taken off: why, to show
     speak = pyqtSignal(str)         # a spoken direction (connected to Voice.say)
     resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
     _got = pyqtSignal(object, str, str, bool, int)   # response, error, destination name, reroute, request number
@@ -340,6 +408,8 @@ class Router(QObject):
         self._available = False
         self._route = None
         self._dest = None             # (name, lon, lat)
+        self._stops = []              # (name, lon, lat) not reached yet, in order, before _dest
+        self._stops_failed = ""       # what to show if the route asked for with changed stops doesn't come
         self._computing = False
         self._gen = 0                 # number of the latest request; older answers are dropped
         self._error = ""
@@ -382,10 +452,10 @@ class Router(QObject):
 
     # ---- kept between runs ----------------------------------------------------------
     def _save(self):
-        """Save the destination and whether guidance is on, with the time."""
+        """Save the destination, its stops and whether guidance is on, with the time."""
         if self._settings and self._dest:
             name, lon, lat = self._dest
-            self._settings.set("route", route_record(name, lon, lat, self._started, time.time()))
+            self._settings.set("route", route_record(name, lon, lat, self._started, time.time(), self._stops))
             self._saved_at = time.monotonic()
 
     def _forget(self):
@@ -402,12 +472,13 @@ class Router(QObject):
         self._resume = None
         if self._dest:
             return                                  # a new place was picked meanwhile
-        if _metres((self._gps.lon, self._gps.lat), (r["lon"], r["lat"])) < HERE_M:
+        stops = r.get("stops", [])
+        if not stops and _metres((self._gps.lon, self._gps.lat), (r["lon"], r["lat"])) < HERE_M:
             print(f"Maps: already at {r['name']}; not resuming the route")
             self._forget()
             return
         print(f"Maps: resuming the route to {r['name']}")
-        self._route_to(r["name"], r["lon"], r["lat"])    # saved as it was, time and all
+        self._route_to(r["name"], r["lon"], r["lat"], stops)    # saved as it was, time and all
         self._resuming = r
 
     # ---- asking for a route ---------------------------------------------------------
@@ -423,8 +494,9 @@ class Router(QObject):
         if self._gps.speed > 2:
             # Leave in the direction the truck is already going.
             start.update(heading=round(self._gps.heading), heading_tolerance=45)
+        places = [(s[1], s[2]) for s in self._stops] + [(lon, lat)]
         request = {
-            "locations": [start, {"lon": lon, "lat": lat, "type": "break"}],
+            "locations": [start] + [{"lon": x, "lat": y, "type": "break"} for x, y in places],
             "costing": "auto",
             "directions_options": {"units": "kilometers", "language": "en-US"},
         }
@@ -468,7 +540,7 @@ class Router(QObject):
         route = None
         if not error:
             try:
-                route = Route(data, name)
+                route = Route(data, name, self._stops)
                 if not isinstance(route.maneuvers, list) or not route.maneuvers:
                     raise ValueError("no maneuvers")
             except (KeyError, IndexError, TypeError, ValueError, AttributeError):
@@ -485,8 +557,17 @@ class Router(QObject):
                 return
             if not reroute:
                 self._route = None
+            elif self._route and not self._arrived:
+                # The old line stays, so the stops it goes to do too: one
+                # with no road to it mustn't stop every later reroute.
+                self._set_stops(self._route.stops_left())
+                self._save()
+                if self._stops_failed:
+                    self.stopsFailed.emit(self._stops_failed)
+            self._stops_failed = ""
             self.changed.emit()
             return
+        self._stops_failed = ""
         self._route = route
         self._arrived = False
         self._off_count = 0
@@ -495,7 +576,7 @@ class Router(QObject):
         if reroute and self._started and not self._gps.stale:
             self._begin("Rerouting. ")
         if resumed and resumed["started"]:
-            self._go(f"Continuing to {name}. ")
+            self._go(f"Continuing to {self._stops[0][0] if self._stops else name}. ")
         elif resumed:
             self.resumed.emit(name, resumed["lon"], resumed["lat"])
         self.changed.emit()
@@ -546,7 +627,7 @@ class Router(QObject):
         """Say the next turn twice: an early warning, then just before it."""
         m = r.next_maneuver()
         i = r.maneuvers.index(m)
-        if m.get("type") in (4, 5, 6):
+        if m.get("type") in ARRIVE_TYPES:
             return                                  # arrival is announced on its own
         dist = max(0.0, r.cum[m["begin_shape_index"]] - r.along)
         speed = self._gps.speed
@@ -595,6 +676,57 @@ class Router(QObject):
         if self._dest and not self._arrived:
             self._request(*self._dest, reroute=self._route is not None)
 
+    # ---- stops on the way ------------------------------------------------------------
+    def _set_stops(self, stops):
+        stops = list(stops)
+        if stops != self._stops:
+            self._stops = stops
+            self.stopsChanged.emit()
+
+    def _change_stops(self, stops, failed):
+        """Ask for the route with these stops; True if it was asked for. The
+        old line stays until the new one arrives, and stays with its stops
+        if none can be found, which stopsFailed tells with `failed`."""
+        if not self._route or self._arrived or not self._gps.hasFix:
+            self.stopsFailed.emit(failed)
+            return False
+        self._set_stops(stops)
+        self._request(*self._dest, reroute=True)
+        self._stops_failed = failed
+        self._save()
+        return True
+
+    @pyqtSlot(str, float, float, result=bool)
+    def addStop(self, name, lon, lat):
+        """A stop after the others, before the destination of the route shown."""
+        return self._change_stops(self._stops + [(name, lon, lat)], f"Couldn't add {name}")
+
+    @pyqtSlot(int, result=bool)
+    def removeStop(self, index):
+        if not 0 <= index < len(self._stops):
+            return False
+        return self._change_stops(self._stops[:index] + self._stops[index + 1:],
+                                  f"Couldn't skip {self._stops[index][0]}")
+
+    def _leave_stop(self, r):
+        """The next stop is behind the truck: it's off the list, the rest
+        stay. Returns the stop."""
+        stop = r.stops[r.leg]
+        r.leg += 1
+        stops = list(self._stops)
+        if stop in stops:                           # unless taken off a moment ago
+            stops.remove(stop)
+        self._set_stops(stops)
+        self._save()
+        return stop
+
+    def _reach_stop(self, r):
+        """Arrived at a stop: say so and carry on, no Go needed."""
+        stop = self._leave_stop(r)
+        self._say(f"You have arrived at {stop[0]}. Continuing to {(self._stops or [self._dest])[0][0]}.")
+        if self._computing:
+            self._request(*self._dest, reroute=True)    # that answer would come back to this stop
+
     @pyqtSlot(str, float, float)
     def routeTo(self, name, lon, lat):
         """Work out a route to preview (a new place replaces any route)."""
@@ -602,13 +734,15 @@ class Router(QObject):
         self._route_to(name, lon, lat)
         self._save()
 
-    def _route_to(self, name, lon, lat):
+    def _route_to(self, name, lon, lat, stops=()):
         if self._started:
             self._gps.clearPath()
         self._started = False
         self._route = None
         self._last_said = ""
         self._dest = (name, lon, lat)
+        self._set_stops(stops)
+        self._stops_failed = ""
         self._request(name, lon, lat)
 
     @pyqtSlot()
@@ -618,6 +752,8 @@ class Router(QObject):
         self._route = None
         self._last_said = ""
         self._dest = None
+        self._set_stops([])
+        self._stops_failed = ""
         self._error = ""
         self._computing = False
         self._gen += 1              # an answer still on its way is for a route nobody wants
@@ -655,7 +791,12 @@ class Router(QObject):
             self._say(f"You have arrived at {r.name}.")
             QTimer.singleShot(20000, lambda: self.stop() if self._arrived else None)
         elif not self._arrived:
-            self._prompt(r)
+            while not self._computing and r.past_stop(self._gps.heading, self._gps.speed):
+                self._leave_stop(r)                 # nothing to announce: it wasn't reached
+            if r.at_stop():
+                self._reach_stop(r)
+            else:
+                self._prompt(r)
             if time.monotonic() - self._saved_at > RESAVE_S:
                 self._save()                        # still being driven
         if r.off > OFF_ROUTE_M and not self._arrived:
@@ -713,6 +854,20 @@ class Router(QObject):
             return []
         return [{"name": f["name"], "minutes": max(1, round(f["time"] / 60)) if f["time"] > 0 else 0}
                 for f in self._route.ferries]
+
+    @pyqtProperty("QVariantList", notify=stopsChanged)
+    def stops(self):
+        """The stops still ahead, in order: [{name, lon, lat}]."""
+        return [{"name": n, "lon": x, "lat": y} for n, x, y in self._stops]
+
+    @pyqtProperty(int, notify=stopsChanged)
+    def stopCount(self):
+        return len(self._stops)
+
+    @pyqtProperty(str, notify=stopsChanged)
+    def nextStopName(self):
+        """The stop the truck is heading to, "" if it's the destination."""
+        return self._stops[0][0] if self._stops else ""
 
     @pyqtProperty(bool, notify=progressChanged)
     def arrived(self):

@@ -18,7 +18,6 @@ installs; until then `canControl` is False and the page says so. Passwords
 go to nmcli on stdin, never on its command line.
 """
 
-import re
 import shutil
 import subprocess
 import threading
@@ -52,8 +51,19 @@ def nmcli(*args, input=None, timeout=10):
 
 def split_terse(line):
     """Split one line of `nmcli -t` output on unescaped colons."""
-    parts = re.split(r"(?<!\\):", line)
-    return [p.replace("\\:", ":").replace("\\\\", "\\") for p in parts]
+    # A backslash escapes the next character, so `\\` then `:` is a backslash
+    # and a real separator; a regex lookbehind can't tell those apart.
+    parts, cur, chars = [], [], iter(line)
+    for ch in chars:
+        if ch == "\\":
+            cur.append(next(chars, "\\"))
+        elif ch == ":":
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
 
 
 def valid_ssid(ssid):

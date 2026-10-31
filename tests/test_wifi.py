@@ -512,7 +512,6 @@ class SplitTerseTest(unittest.TestCase):
     def test_an_escaped_backslash_is_one_backslash(self):
         self.assertEqual(split_terse(r"C\\D:1"), ["C\\D", "1"])
 
-    @unittest.expectedFailure
     def test_a_name_ending_in_a_backslash_still_ends(self):
         # nmcli writes the name "ab\" as ab\\ and then the separator: the
         # colon after an escaped backslash is a real one, but split_terse

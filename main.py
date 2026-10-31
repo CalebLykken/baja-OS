@@ -47,6 +47,7 @@ from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
+from backend.updater import Updater
 from backend.vehicle import VehicleData
 from backend.wifi import Wifi
 
@@ -198,6 +199,7 @@ def main():
     vehicle.set_gps(gps)          # its speed shows when the car isn't answering
     routing = Router(gps, settings)
     road = RoadInfo(gps)
+    updater = Updater(vehicle, gps, routing, system.restartDashboard)
     voice = Voice(settings)
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops
@@ -218,6 +220,7 @@ def main():
     ctx.setContextProperty("wifi", wifi)
     ctx.setContextProperty("dataUse", datause)
     ctx.setContextProperty("system", system)
+    ctx.setContextProperty("updater", updater)
     ctx.setContextProperty("keyOff", key_off)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
@@ -265,7 +268,7 @@ def main():
         scanner.stop()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, scanner or local, bluetooth, spotify, media, display, network, maps, eq, wifi, datause, system, gps, routing, voice, phone, road, knob, obd, key_off):
+    for obj in (vehicle, local, scanner or local, bluetooth, spotify, media, display, network, maps, eq, wifi, datause, system, updater, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

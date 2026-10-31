@@ -862,7 +862,7 @@ Item {
                 heading: "Restart and power"
                 RowLayout {
                     spacing: 14
-                    TextButton { icon: "refresh"; text: "Restart dashboard"; onClicked: system.restartDashboard() }
+                    TextButton { icon: "refresh"; text: "Restart dashboard"; enabled: !updater.busy; onClicked: system.restartDashboard() }
                     ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
                     ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
                 }
@@ -894,6 +894,41 @@ Item {
                           ? "When the truck is turned off (it stops answering the OBD adapter), the Pi counts down 25 s and shuts down, inside the power relay's hold time. Keep on stops it."
                           : "Turn this on once the Pi runs through the power relay. On any other power, a shut-down Pi stays off until it's unplugged and plugged back in."
                 }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Software update"
+                RowLayout {
+                    spacing: 14
+                    TextButton { icon: "refresh"; text: "Check for updates"; enabled: !updater.busy; onClicked: updater.check() }
+                    TextButton { text: "Update"; enabled: updater.canUpdate; onClicked: updater.update() }
+                }
+                Label {
+                    visible: updater.message !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontBody
+                    color: updater.state === "failed" ? Theme.warn : Theme.textDim
+                    text: updater.message
+                }
+                Repeater {
+                    model: updater.commits
+                    Label {
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        font.pixelSize: Theme.fontSmall
+                        color: Theme.textDim
+                        text: "· " + modelData
+                    }
+                }
+                Label {
+                    visible: updater.count > updater.commits.length
+                    font.pixelSize: Theme.fontSmall
+                    color: Theme.textDim
+                    text: "and " + (updater.count - updater.commits.length) + " more"
+                }
+                Note { text: "Update pulls what Check found and restarts the dashboard. It won't run while driving, while directions are on, or if files here were changed over SSH." }
             }
 
             Section {

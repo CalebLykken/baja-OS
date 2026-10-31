@@ -437,7 +437,9 @@ From the Mac:
 ./deploy/push.sh        # copies to baja.local, stamps the version, restarts
 ```
 
-Or on the Pi: `git pull && sudo systemctl restart baja-os`.
+Or on the Pi: `git pull && sudo systemctl restart baja-os`, or Settings > System > Check for updates
+(needs a real `git clone` that can reach GitHub, not a push.sh copy; it doesn't re-run `setup-pi.sh`,
+so run that over SSH when a release changes `deploy/` or the packages).
 
 ## Next steps
 

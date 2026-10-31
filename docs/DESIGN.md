@@ -27,8 +27,8 @@ No colour is extracted from album art to drive the UI. Outside the map, no
 brand colours are used; sources are named in text ("Spotify").
 
 **Day:** the same roles in a light set, switched by the sun where the truck is
-(or Settings > Appearance), for the whole dashboard and the map together:
-Basin `#e8e3d4`, panels `#f6f2e7` (hover `#e5dfcc`), Contour `#c8bfa4`, text
+(or Settings > Display > Appearance), for the whole dashboard and the map together:
+Basin `#e8e3d4`, Olive `#f6f2e7`, Moss `#e5dfcc`, Contour `#c8bfa4`, text
 `#23261b`, Lichen `#696450`, Blaze `#e2650c`, Ember `#c4321f`, Sage `#4c7c29`.
 
 ## Type (URW Gothic; Overpass on the map)
@@ -36,7 +36,7 @@ Basin `#e8e3d4`, panels `#f6f2e7` (hover `#e5dfcc`), Contour `#c8bfa4`, text
 | Token | Size / weight | Used for |
 |---|---|---|
 | Gauge numeral | auto, Bold | Gauge centres |
-| Readout | 56 Bold | Readouts and the status-bar numbers |
+| Readout | 56 Bold | Readouts (Truck and Home), the speed on the map |
 | Huge | 88 DemiBold | Distance to the next turn (Maps) |
 | Hero | 56 DemiBold | Place names (Maps), the Baja OS title in Settings |
 | Title | 40 DemiBold | Page titles, track titles (Home and Music), card titles |
@@ -84,7 +84,7 @@ with the rest of the dashboard.
   white streets with amber highways; night is charcoal land, deep-blue water,
   dark-green parks, grey streets with dim amber highways.
 - **The route is blue** (`#1a7cf5` day, `#2f8cff` night, with a darker casing);
-  the destination pin is red. Nothing else on the map is blue.
+  the destination pin is red. Nothing else on the map is that colour.
 - **Labels in Overpass,** scaled 1.1 to 1.35x the stock size (roads largest) so
   they read at arm's length. Roads are drawn 1.25x wider.
 - **No coloured POI icons;** POI names only, in grey.
@@ -123,10 +123,11 @@ Music (full screen, no status bar)
 │     cover (print)      │ │ Up next on Spotify               │
 │ make it to the end     │ │ would you like to go on a date…  │
 │ Forrest Nolan          │ │ …                                │
-│ ▬▬▬▬▬▬▬▬▬▬▬▬▭▭▭▭ 2:43 3:31 │ │                                  │
+│ ▬▬▬▬▬▬▬▬▭▭▭▭ 2:43 3:31 │ │                                  │
 │   [⏮]   [  ⏸  ]   [⏭]   │ │                                  │
 │ [−] ▮▮▮▮▮▮▮▯▯▯▯▯ 40 [+] │ │                                  │
 └────────────────────────┘ └──────────────────────────────────┘
+```
 
 Truck: the page title is the truck's name; the readouts sit in the same card
 strip as Home.

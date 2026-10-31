@@ -78,6 +78,9 @@ backend/voice.py     spoken directions with Piper, music dipping underneath
 backend/phone.py     "Send to Baja": a destination from the phone
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
+backend/dbus.py      D-Bus signal subscriptions, so Bluetooth and network refresh on change
+backend/retry.py     retry with back-off for online requests (worker threads)
+backend/datause.py   Wi-Fi and tether data use this month
 backend/system.py    temperature, fan, power warnings, restart and power
 backend/ignition.py  shuts the Pi down once the truck is off (the car goes quiet on the OBD adapter)
 backend/display.py   screen brightness over DDC/CI (software dim fallback)

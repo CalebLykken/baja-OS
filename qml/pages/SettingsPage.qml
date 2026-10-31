@@ -354,6 +354,16 @@ Item {
                           : network.ssid ? "On " + network.ssid + (network.ip ? ", " + network.ip : "")
                           : "Not on Wi-Fi"
                 }
+                Label {
+                    visible: dataUse.available
+                    font.pixelSize: Theme.fontBody
+                    color: Theme.textDim
+                    text: "Data this month: " + dataUse.text
+                }
+                Note {
+                    visible: dataUse.available
+                    text: "Counts all Wi-Fi and Bluetooth tether use, not only the phone's hotspot."
+                }
             }
 
             Section {

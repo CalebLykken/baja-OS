@@ -409,6 +409,78 @@ class VoiceTest(unittest.TestCase):
                 mock.patch.object(voice, "_set_volumes", return_value=set()):
             self.assertFalse(v._put_back_output(0.8, 0.5))         # run() then doesn't release
 
+    def stuck_output(self, retry_s=0.05):
+        """A first line whose output won't come down: the output raised 0.1 to
+        0.7, stream 7 at 1.0 ducked. Set self.wedged False to free it."""
+        self.mixer[self.SINK] = 0.1
+        self.mixer[7] = 1.0
+        self.wedged = True
+        self.tries = 0
+        real = voice._set_volumes
+
+        def set_volumes(volumes):
+            if self.SINK in volumes and volumes[self.SINK] < 0.7 and self.wedged:
+                self.tries += 1
+                return set()
+            return real(volumes)
+        for p in (mock.patch.object(voice, "_set_volumes", side_effect=set_volumes),
+                  mock.patch.object(voice, "_output_streams", return_value={7: 1.0}),
+                  mock.patch.object(voice, "_stream_names", return_value={7: "app"}),
+                  mock.patch.object(voice, "RETRY_S", retry_s)):
+            p.start()
+            self.addCleanup(p.stop)
+        v = self.start("ok")
+        v._level = 70
+        v.say("turn left")
+        self.next_spoken()
+        self.wait_until(lambda: self.tries >= 2)    # both tries at the end of the line
+        self.assertEqual(self.mixer[self.SINK], 0.7)
+        self.assertLess(self.mixer[7], 0.1)
+        return v
+
+    def wait_until(self, done, timeout=3):
+        end = time.monotonic() + timeout
+        while not done() and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertTrue(done())
+
+    def test_music_stays_down_until_the_output_does_with_no_further_line(self):
+        v = self.stuck_output()
+        v.say("then left")                          # still stuck: no release for this line
+        self.next_spoken()
+        tries = self.tries
+        self.wait_until(lambda: self.tries > tries + 2)
+        self.assertEqual(self.mixer[self.SINK], 0.7)
+        self.assertLess(self.mixer[7], 0.1)
+        self.wedged = False                         # with nothing further said
+        self.wait_until(lambda: self.mixer[7] == 1.0)
+        self.assertAlmostEqual(self.mixer[self.SINK], 0.1, places=2)    # raised * scale, not lost
+        self.assertIsNone(v._stuck)
+        self.assertFalse(v._ducker.pending)
+
+    def test_a_later_line_puts_the_output_back_first_and_raises_it_again(self):
+        v = self.stuck_output(retry_s=30)           # no timed tries in this test
+        self.wedged = False
+        v.say("then left")
+        self.next_spoken()
+        self.wait_until(lambda: self.mixer[7] == 1.0)
+        self.assertEqual([round(x, 2) for x in self.sink_sets()], [0.7, 0.1, 0.7, 0.1])
+
+    def test_an_output_that_never_comes_down_stops_being_tried_and_the_music_stays_down(self):
+        with mock.patch.object(voice, "GIVE_UP_S", 0.1):
+            v = self.stuck_output()
+            self.wait_until(lambda: v._stuck is not None and v._stuck_until is None)
+        tries = self.tries
+        time.sleep(0.2)
+        self.assertEqual(self.tries, tries)         # bounded
+        self.assertLess(self.mixer[7], 0.1)         # never full music on a raised output
+        self.assertIn("gave up lowering", self.log.getvalue())
+        self.wedged = False                         # a later line still frees it
+        v.say("then left")
+        self.next_spoken()
+        self.wait_until(lambda: self.mixer[7] == 1.0)
+        self.assertIsNone(v._stuck)
+
     def sink_sets(self):
         return [v for n, v in self.sets if n == self.SINK]
 

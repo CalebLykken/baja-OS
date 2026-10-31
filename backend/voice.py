@@ -349,7 +349,8 @@ class Voice(QObject):
         self._enabled = str(settings.get("voice", "false")) == "true"
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
-        self._owed = 0                  # releases held back while the output was stuck high
+        self._stuck = None              # (raised, scale) of an output that wouldn't come down
+        self._stuck_until = None        # keep trying without a line until then
         self._piper = None
         self._ducker = Ducker()
         self._level = clamp_level(settings.get("voiceVolume", VOICE_LEVEL_DEFAULT))
@@ -426,13 +427,18 @@ class Voice(QObject):
             print(f"Voice: couldn't put back volumes from a last run ({e!r})", flush=True)
         while True:
             try:
-                text, queued_at, ceiling = self._jobs.get(timeout=RETRY_S if self._ducker.pending else None)
+                job = self._jobs.get(timeout=RETRY_S if self._owing else None)
             except queue.Empty:
-                try:
+                job = None
+            try:
+                self._retry_output()                # first: a line needs the output's true level
+                if job is None:
                     self._ducker.retry()
-                except Exception as e:
-                    print(f"Voice: couldn't put volumes back ({e!r})", flush=True)
+            except Exception as e:
+                print(f"Voice: couldn't put volumes back ({e!r})", flush=True)
+            if job is None:
                 continue
+            text, queued_at, ceiling = job
             if time.monotonic() - queued_at > STALE_S:
                 continue                            # the moment has passed
             try:
@@ -441,6 +447,8 @@ class Voice(QObject):
                 if not self._synthesize(text, out):
                     continue
                 gain, raise_to, scale = self._plan_levels(ceiling)
+                if self._stuck is not None:         # already raised: a stream that's new
+                    raise_to, scale = None, self._stuck[1]      # is ducked to match
                 raised = None
                 try:
                     ducked = self._ducker.duck(scale)
@@ -453,18 +461,35 @@ class Voice(QObject):
                                    capture_output=True, timeout=30)
                 finally:
                     # The output first, while the music is still ducked, then the music.
-                    if self._put_back_output(raised, scale):
+                    if raised is None or self._put_back_output(raised, scale):
                         self._ducker.release()
-                        while self._owed:           # lines whose output was stuck high
-                            self._owed -= 1
-                            self._ducker.release()
                     else:
-                        # Still raised: the music stays ducked (blasting it would
-                        # be worse); the next line that puts the output back frees it.
-                        self._owed += 1
+                        # Still raised: this line's release is held back, so the music
+                        # stays ducked (blasting it would be worse) until it comes down.
+                        self._stuck = raised, scale
+                        self._stuck_until = time.monotonic() + GIVE_UP_S
                         print("Voice: couldn't lower the output; music stays down", flush=True)
             except Exception as e:                  # never end this thread
                 print(f"Voice: couldn't speak a line ({e!r}); on to the next", flush=True)
+
+    @property
+    def _owing(self):
+        """Something to try again without waiting for a line."""
+        return self._ducker.pending or self._stuck_until is not None
+
+    def _retry_output(self):
+        """Another go at an output that wouldn't come down; the music follows it.
+        After GIVE_UP_S only a new line tries again: the music stays ducked,
+        since full music on a raised output is the worse way to be wrong, until
+        one gets the output down, the knob moves it, or the next start recovers."""
+        if self._stuck is None:
+            return
+        if self._put_back_output(*self._stuck):
+            self._stuck = self._stuck_until = None
+            self._ducker.release()
+        elif self._stuck_until is not None and time.monotonic() > self._stuck_until:
+            self._stuck_until = None
+            print("Voice: gave up lowering the output for now; music stays down", flush=True)
 
     def _put_back_output(self, raised, scale):
         """Lower the output again, unless something (the knob) moved it meanwhile.

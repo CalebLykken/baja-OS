@@ -88,6 +88,7 @@ class FakeDecoder(QObject):
     songs = {}                  # path: (first sample value, bytes long)
     pattern = True
     size = 19200                # 100 ms
+    failing = set()             # paths that report an error instead of sound
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,6 +111,9 @@ class FakeDecoder(QObject):
     def stop(self):
         self.live = False
 
+    def errorString(self):
+        return "no good"
+
     def bufferAvailable(self):
         return bool(self.queue)
 
@@ -125,6 +129,10 @@ class FakeDecoder(QObject):
     def pump(self):
         if not self.live or (self.waits and self.permits <= 0):
             return False
+        if self.path in self.failing:
+            self.live = False
+            self.error.emit(0)
+            return True
         self.permits -= 1
         n = min(self.size, self.length - self.at)
         if n <= 0:
@@ -146,6 +154,7 @@ class Base(unittest.TestCase):
         FakeDecoder.made = []
         FakeDecoder.waits, FakeDecoder.pattern, FakeDecoder.size = True, True, 19200
         FakeDecoder.songs = {}
+        FakeDecoder.failing = set()
 
     def engine(self, *songs):
         """An engine playing `songs`, each (first sample value, seconds long)."""
@@ -248,6 +257,36 @@ class GaplessTest(Base):
         _, heard = self.play(engine, 120, step=0.5)
         ramp = gapless.RAMP_FRAMES * gapless.FRAME
         self.assert_counts_up(heard[ramp:], gapless.RAMP_FRAMES)
+
+
+class BadSongTest(Base):
+    def on_repeat(self, *bad):
+        """Three one-second songs going round, the `bad` ones undecodable."""
+        engine = self.engine((0, 1), (0, 1), (0, 1))
+        engine._after = lambda i, failed=False: (i + 1) % 3
+        FakeDecoder.failing = {f"/music/{i}.flac" for i in bad}
+        with mock.patch("builtins.print"):
+            engine.play_from(0)
+            self.play(engine, 8, step=0.25)
+        return engine
+
+    def test_two_bad_songs_dont_stop_a_good_one_going_round(self):
+        engine = self.on_repeat(1, 2)
+        self.assertTrue(engine._songs)              # still going on lap 8
+        self.assertGreaterEqual(sum(d.path == "/music/0.flac" for d in FakeDecoder.made), 7)
+
+    def test_a_queue_of_nothing_but_bad_songs_still_stops(self):
+        engine = self.on_repeat(0, 1, 2)
+        self.assertFalse(engine._songs)
+
+    def test_a_song_that_decodes_to_nothing_doesnt_end_a_run_of_bad_ones(self):
+        engine = self.engine((0, 1), (0, 1), (0, 0))        # the third is empty
+        engine._after = lambda i, failed=False: (i + 1) % 3
+        FakeDecoder.failing = {"/music/0.flac", "/music/1.flac"}
+        with mock.patch("builtins.print"):
+            engine.play_from(0)
+            self.play(engine, 3, step=0.25)
+        self.assertFalse(engine._songs)
 
 
 class RestartTest(Base):

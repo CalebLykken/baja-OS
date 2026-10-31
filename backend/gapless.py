@@ -242,7 +242,7 @@ class GaplessEngine(QObject):
         self._path_of, self._count = path_of, count
         self._after = after or (lambda i, failed=False: (i + 1) % count() if count() else None)
         self._closed = False
-        self._bad = set()           # songs that wouldn't decode since the last play_from
+        self._bad = set()           # songs that wouldn't decode, in a row (a good one clears it)
         self._lock = threading.Lock()
         self._songs = deque()
         self._want_play = False
@@ -425,6 +425,9 @@ class GaplessEngine(QObject):
 
     def _decode_done(self, dec, song):
         self._decoded(dec, song, drain=True)
+        if song.end:                             # gave us sound: the run of bad songs is over
+            with self._lock:
+                self._bad.clear()
         song.held = False
         song.done = True
         self._drop_decoder(dec)

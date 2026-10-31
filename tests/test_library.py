@@ -846,7 +846,6 @@ class ModesTest(unittest.TestCase):
                              "index": 1, "position": 0}, play=True)
         self.player.start()
         spin(800)
-        self.assertIn(1, self.engine._bad)
         self.assertNotIn(self.queued()[-1], (1,))             # not lined up after itself
         self.assertEqual(self.queued()[-1], 2)
 

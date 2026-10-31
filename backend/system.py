@@ -113,13 +113,14 @@ def power(action):
 
 
 def can_power():
+    """Whether logind will reboot for us, or None if it didn't answer."""
     try:
         out = subprocess.run(["busctl", "--system", "call", "org.freedesktop.login1",
                               "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
                               "CanReboot"], capture_output=True, text=True, timeout=2).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
-    return '"yes"' in out
+        return None
+    return '"yes"' in out if out else None
 
 
 class SystemInfo(QObject):
@@ -135,6 +136,7 @@ class SystemInfo(QObject):
                    "errors": 0}
         self._version = version_text()
         self._busy = False
+        self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
         self._read_error = ""      # the error the last reading died of, while it keeps happening
         self._power_error = ""
         self._read_done.connect(self._apply)
@@ -154,12 +156,14 @@ class SystemInfo(QObject):
             v = {}       # stays empty if a reading crashes, and _apply keeps the old values
             try:
                 used, total = memory_mb()
+                if self._can_power is None:
+                    self._can_power = can_power()
                 disk = shutil.disk_usage("/")
                 v = {
                     "temp": cpu_temp(), "fan": fan_rpm(), "power": power_state(),
                     "memUsed": used, "memTotal": total,
                     "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,
-                    "uptime": uptime_text(), "canPower": can_power(),
+                    "uptime": uptime_text(), "canPower": bool(self._can_power),
                     "errors": errorlog.log.count(),
                 }
                 self._logged()

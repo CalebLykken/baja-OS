@@ -11,7 +11,9 @@ it), and drops it again once Wi-Fi is back, to spare the phone's battery.
 The radio only scans while the Wi-Fi settings are open (and right after a
 join or forget there): a scan takes the one radio off the hotspot's channel,
 which hurts a stream running over the phone. The backup's watchdog just reads
-NetworkManager's connection list, which never scans.
+NetworkManager's connection list, which never scans; NetworkManager's signals
+say when to, and it otherwise wakes up only for a tethering deadline or a slow
+safety check (or every few seconds without those signals).
 
 Changing networks from a service needs a polkit rule, which setup-pi.sh
 installs; until then `canControl` is False and the page says so. Passwords
@@ -27,9 +29,11 @@ import traceback
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit
+from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
 
 SCAN_EVERY_MS = 15000
 WATCH_EVERY_MS = 10000
+SAFETY_WATCH_MS = 60000      # while NetworkManager's signals are coming through
 TETHER_AFTER_S = 45          # this long with no Wi-Fi before trying the phone
 TETHER_RETRY_S = 120
 UNTETHER_AFTER_S = 60        # Wi-Fi back this long before letting the phone go
@@ -148,6 +152,8 @@ class Wifi(QObject):
         self._ask_password = ""      # set by a join worker that hit a wrong saved password
         self._scanning = False
         self._polling = False
+        self._again = False          # a signal came during a poll, which may have read too early
+        self._tether_due = None      # monotonic time the backup has something to decide, if any
         self._tether = str(settings.get("tethering", "true")) == "true"
         self._no_wifi_since = None
         self._wifi_since = None
@@ -159,10 +165,12 @@ class Wifi(QObject):
         self._finished.connect(self._on_finished)
         self._scan_timer = QTimer(self, interval=SCAN_EVERY_MS, timeout=self.refresh)
         self._watch_timer = QTimer(self, interval=WATCH_EVERY_MS, timeout=self._watch)
+        self._nm = BusWatch(NM_SERVICE, NM_SIGNALS, self._signalled, self, debounce_ms=NM_DEBOUNCE_MS)
 
     def start(self):
         if not self._available:
             return
+        self._nm.start()
         self._watch()                # no scan: the list waits for Settings to open
         self._watch_timer.start()
 
@@ -364,9 +372,25 @@ class Wifi(QObject):
     def _tether_conn(self):
         return next((c for c in self._saved if c["type"] == "bluetooth"), None)
 
+    def _signalled(self):
+        if self._polling:
+            self._again = True
+        else:
+            self._watch()
+
+    def _watch_interval(self):
+        """Ms to the next poll. Signals say when Wi-Fi comes or goes, but the
+        backup's waits end with no signal, so wake up for those."""
+        if not self._nm.live():
+            return WATCH_EVERY_MS
+        if self._tether_due is None:
+            return SAFETY_WATCH_MS
+        wait = int((self._tether_due - time.monotonic() + 1) * 1000)     # its checks are strict: just past it
+        return max(WATCH_EVERY_MS, min(SAFETY_WATCH_MS, wait))
+
     def _watch(self):
-        """Every few seconds: one cheap read of the connection list (never a
-        scan), then decide about the backup in _on_polled."""
+        """One cheap read of the connection list (never a scan), then decide
+        about the backup in _on_polled."""
         if not self._available or self._polling:
             return
         self._polling = True
@@ -387,7 +411,11 @@ class Wifi(QObject):
 
     def _on_polled(self, result):
         self._polling = False
+        if self._again:
+            self._again = False
+            self._nm.poke()
         if result is None:
+            self._watch_timer.setInterval(WATCH_EVERY_MS)
             return
         conns, control = result
         ssids = {c["uuid"]: c["ssid"] for c in self._saved}     # the poll doesn't look these up
@@ -400,6 +428,7 @@ class Wifi(QObject):
         if control and wifi and wifi["name"] not in self._hotspot_done:
             threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
         self._tether_step(wifi is not None)
+        self._watch_timer.setInterval(self._watch_interval())
 
     def _tether_step(self, on_wifi):
         now = time.monotonic()
@@ -409,6 +438,7 @@ class Wifi(QObject):
         else:
             self._wifi_since = None
             self._no_wifi_since = self._no_wifi_since or now
+        self._tether_due = None
         conn = self._tether_conn()
         if not (self._control and conn):
             return
@@ -422,6 +452,10 @@ class Wifi(QObject):
         elif tethered and (not self._tether or (on_wifi and now - self._wifi_since > UNTETHER_AFTER_S)):
             threading.Thread(target=lambda: nmcli("connection", "down", "uuid", conn["uuid"]),
                              daemon=True).start()
+        if self._tether and not on_wifi and not tethered:
+            self._tether_due = max(self._no_wifi_since + TETHER_AFTER_S, self._last_tether_try + TETHER_RETRY_S)
+        elif tethered and on_wifi:
+            self._tether_due = self._wifi_since + UNTETHER_AFTER_S
 
     @pyqtSlot(bool)
     def setTethering(self, on):
@@ -429,6 +463,7 @@ class Wifi(QObject):
             self._tether = on
             self._settings.set("tethering", "true" if on else "false")
             self.changed.emit()
+            self._nm.poke()          # the backup may have a decision to make now
 
     # ---- what QML sees ------------------------------------------------------
     @pyqtProperty(bool, constant=True)

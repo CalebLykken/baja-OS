@@ -12,7 +12,9 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.network import Network, internet_state, wifi_name
+from backend.dbus import NM_DEBOUNCE_MS
+from backend.network import CHECK_EVERY_MS, SAFETY_CHECK_MS, Network, internet_state, wifi_name
+from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -127,6 +129,77 @@ class InternetStateTest(unittest.TestCase):
         net._apply(("10.0.0.5", "Cafe", False, True))
         self.assertTrue(net.portal)
         self.assertFalse(net.online)
+
+
+class SignalsTest(unittest.TestCase):
+    """NetworkManager's signals drive the check, faked at the bus; polling is
+    the fallback, and the TCP probe needs it."""
+
+    def setUp(self):
+        self.net = Network()
+        INLINE.start()
+        self.lookup = mock.patch("backend.network.wifi_name", return_value="Phone").start()
+        mock.patch("backend.network.local_ip", return_value="10.0.0.5").start()
+        mock.patch("backend.network.internet_state", return_value=(True, False)).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(self.net._timer.stop)
+        self.addCleanup(mock.patch.stopall)
+
+    def started(self, bus):
+        with on_bus(bus):
+            self.net.start()
+        self.lookup.reset_mock()
+
+    def test_subscribes_to_network_manager(self):
+        bus = FakeBus()
+        self.started(bus)
+        names = {(s[1], s[2], s[3]) for s in bus.subscribed}
+        root = "/org/freedesktop/NetworkManager"
+        self.assertIn((root, "org.freedesktop.NetworkManager", "StateChanged"), names)
+        self.assertIn((root, "org.freedesktop.DBus.Properties", "PropertiesChanged"), names)
+        self.assertIn(("", "org.freedesktop.NetworkManager.Connection.Active", "StateChanged"), names)
+        self.assertNotIn(("", "org.freedesktop.DBus.Properties", "PropertiesChanged"), names)    # signal strength
+
+    def test_a_signal_checks_after_the_debounce(self):
+        bus = FakeBus()
+        self.started(bus)
+        for _ in range(5):
+            bus.slot()
+        self.lookup.assert_not_called()
+        self.assertTrue(self.net._nm._timer.isActive())
+        self.assertEqual(self.net._nm._timer.interval(), NM_DEBOUNCE_MS)
+        self.net._nm._timer.stop()
+        self.net._nm._fire()
+        self.lookup.assert_called_once()
+
+    def test_a_signal_during_a_check_checks_again_after_it(self):
+        self.started(FakeBus())
+        self.net._busy = True
+        self.net._signalled()
+        self.lookup.assert_not_called()
+        self.net._apply(None)
+        self.assertTrue(self.net._nm._timer.isActive())
+        self.net._nm._timer.stop()
+
+    def test_without_a_bus_it_checks_as_often_as_ever(self):
+        self.started(None)
+        self.assertEqual(self.net._timer.interval(), CHECK_EVERY_MS)
+        self.assertTrue(self.net._timer.isActive())
+
+    def test_with_signals_it_relaxes(self):
+        self.started(FakeBus())
+        self.assertEqual(self.net._timer.interval(), SAFETY_CHECK_MS)
+        self.assertTrue(self.net._timer.isActive())
+
+    def test_network_manager_stopped_means_the_quick_checks(self):
+        bus = FakeBus()
+        self.started(bus)
+        bus.running = False
+        self.net._check()
+        self.assertEqual(self.net._timer.interval(), CHECK_EVERY_MS)
+        bus.running = True
+        self.net._check()
+        self.assertEqual(self.net._timer.interval(), SAFETY_CHECK_MS)
 
 
 if __name__ == "__main__":

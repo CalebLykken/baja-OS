@@ -1,7 +1,9 @@
 """Network status for the Settings page: IP address, Wi-Fi name, online.
 
-Checks run on a background thread every few seconds, because looking up the
-Wi-Fi name and testing the internet connection can each take a moment.
+Checks run on a background thread, because looking up the Wi-Fi name and
+testing the internet connection can each take a moment. NetworkManager's
+signals say when to check, with a slow safety check; without them (the Mac) it
+checks every few seconds, since the TCP probe has nothing else to go on.
 """
 
 import getpass
@@ -14,8 +16,10 @@ import traceback
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
 from backend import safe_emit
+from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
 
 CHECK_EVERY_MS = 5000
+SAFETY_CHECK_MS = 30000     # while NetworkManager's signals are coming through
 PROBE_HOST = ("1.1.1.1", 53)  # Cloudflare DNS: answers quickly when online
 
 
@@ -92,17 +96,27 @@ class Network(QObject):
         self._portal = False
         self._checked = False
         self._busy = False
+        self._again = False        # a signal came during a check, which may have looked too early
         self._check_error = ""     # the error the last check died of, while it keeps happening
         self._result.connect(self._apply)  # queued back onto the UI thread
         self._timer = QTimer(self)
         self._timer.setInterval(CHECK_EVERY_MS)
         self._timer.timeout.connect(self._check)
+        self._nm = BusWatch(NM_SERVICE, NM_SIGNALS, self._signalled, self, debounce_ms=NM_DEBOUNCE_MS)
 
     def start(self):
+        self._nm.start()
         self._check()
         self._timer.start()
 
+    def _signalled(self):
+        if self._busy:
+            self._again = True
+        else:
+            self._check()
+
     def _check(self):
+        self._timer.setInterval(SAFETY_CHECK_MS if self._nm.live() else CHECK_EVERY_MS)
         if self._busy:
             return
         self._busy = True
@@ -131,6 +145,9 @@ class Network(QObject):
 
     def _apply(self, result):
         self._busy = False
+        if self._again:
+            self._again = False
+            self._nm.poke()
         if result is None:
             return                        # the check crashed: keep what we had
         ip, ssid, online, portal = result

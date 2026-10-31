@@ -16,7 +16,9 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan, split_terse, valid_ssid
+from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
+                          WATCH_EVERY_MS, Wifi, scan, split_terse, valid_ssid)
+from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -180,6 +182,117 @@ class FakeNM:
 
     def ran(self, *words):
         return [a for a in self.calls if all(w in a for w in words)]
+
+
+class SignalsTest(unittest.TestCase):
+    """NetworkManager's signals drive the watchdog, faked at the bus: it polls
+    as before without them, and the tethering deadlines still hold with them."""
+
+    def setUp(self):
+        self.nm = FakeNM()
+        self.clock = 1000.0
+        self.wifi = Wifi({})
+        self.wifi._available = True
+        self.wifi._settings = mock.Mock()
+        INLINE.start()
+        mock.patch("backend.wifi.nmcli", self.nm).start()
+        mock.patch("backend.wifi.time", SimpleNamespace(monotonic=lambda: self.clock)).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+        self.addCleanup(self.wifi._watch_timer.stop)
+
+    def started(self, bus):
+        with on_bus(bus):
+            self.wifi.start()
+        self.nm.calls.clear()
+
+    def interval(self):
+        return self.wifi._watch_timer.interval()
+
+    def wait(self):
+        """Sit out the timer as it's set, on the fake clock."""
+        self.clock += self.interval() / 1000
+        self.wifi._watch()
+
+    def test_a_signal_reads_the_list(self):
+        self.started(FakeBus())
+        self.wifi._nm._on_signal()
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+        self.wifi._nm._fire()
+        self.assertEqual(self.nm.ran("UUID,NAME,TYPE,DEVICE,STATE"), [("-t", "-f", "UUID,NAME,TYPE,DEVICE,STATE",
+                                                                      "connection", "show")])
+        self.assertEqual(self.nm.rescans(), [])
+
+    def test_a_signal_during_a_poll_reads_again_after_it(self):
+        self.started(FakeBus())
+        self.wifi._polling = True
+        self.wifi._signalled()
+        self.assertEqual(self.nm.calls, [])
+        self.wifi._on_polled(None)
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+
+    def test_without_a_bus_it_polls_as_often_as_ever(self):
+        self.started(None)
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+        self.assertTrue(self.wifi._watch_timer.isActive())
+
+    def test_with_signals_and_nothing_to_decide_it_relaxes(self):
+        self.started(FakeBus())
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+        self.assertTrue(self.wifi._watch_timer.isActive())
+
+    def test_a_failed_read_goes_back_to_the_quick_poll(self):
+        self.started(FakeBus())
+        self.wifi._on_polled(None)
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+
+    def test_network_manager_stopped_means_the_quick_poll(self):
+        bus = FakeBus()
+        self.started(bus)
+        bus.running = False
+        self.wifi._watch()
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+
+    def test_no_wifi_and_no_phone_is_nothing_to_wait_for(self):
+        self.nm.wifi_up = False
+        self.started(FakeBus())
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+
+    def test_the_phone_comes_up_on_time_with_no_signal_to_prompt_it(self):
+        self.nm.tether, self.nm.wifi_up = True, False
+        self.started(FakeBus())
+        self.wifi._watch()                                 # learns the permission
+        started = self.clock
+        while not self.nm.ran("connection", "up"):
+            self.wait()
+            self.assertLess(self.clock - started, TETHER_AFTER_S + WATCH_EVERY_MS / 1000 + 2)
+
+    def test_the_phone_is_let_go_on_time_with_no_signal_to_prompt_it(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, True, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        started = self.clock
+        while self.nm.tether_up:
+            self.wait()
+            self.assertLess(self.clock - started, UNTETHER_AFTER_S + WATCH_EVERY_MS / 1000 + 2)
+
+    def test_once_tethered_with_no_wifi_it_relaxes(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, False, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+
+    def test_switching_tethering_off_acts_without_waiting_for_the_safety_poll(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, False, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        self.wifi.setTethering(False)
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+        self.wifi._nm._fire()
+        self.assertFalse(self.nm.tether_up)
 
 
 class RadioTest(unittest.TestCase):

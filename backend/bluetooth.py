@@ -5,10 +5,11 @@ touching this code. This class watches BlueZ for a connected phone's
 AVRCP media player (org.bluez.MediaPlayer1) to show its track and send
 commands, and can make the Pi discoverable for pairing.
 
-BlueZ is polled once a second with `busctl` (JSON output) on a worker
-thread rather than through D-Bus signals: simple, robust across BlueZ
-versions, and a negligible load on the Pi 5. Off a Pi (no busctl/BlueZ)
-everything reports "unavailable" and the UI hides the Bluetooth bits.
+BlueZ's state is read with `busctl` (JSON output) on a worker thread. Its
+D-Bus signals say when to read it, so a track change shows at once; a slow
+safety poll catches anything missed, and without the bus or BlueZ's signals it
+polls once a second. Off a Pi (no busctl/BlueZ) everything reports
+"unavailable" and the UI hides the Bluetooth bits.
 """
 
 import json
@@ -21,9 +22,16 @@ import traceback
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit
+from backend.dbus import PROPERTIES, BusWatch
 
 POLL_MS = 1000
+SAFETY_TICKS = 60       # seconds between polls while BlueZ's signals are coming through
 PAIRING_SECONDS = 120
+VOLUME_SETTLE_MS = 1600     # just past the 1.5 s that _apply ignores after a change we sent
+OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
+BLUEZ_SIGNALS = [("/", OBJECT_MANAGER, "InterfacesAdded"),
+                 ("/", OBJECT_MANAGER, "InterfacesRemoved"),
+                 ("", PROPERTIES, "PropertiesChanged")]      # any object: players, transports, devices
 
 
 def _v(variant):
@@ -122,14 +130,21 @@ class BluetoothAudio(QObject):
         self._pairing_until = 0.0
         self._volume_sent_at = 0.0
         self._busy = False
+        self._again = False        # a signal came during a poll, which may have read too early
+        self._ticks_left = 0       # until the next poll
         self._poll_error = ""      # the error the last poll died of, while it keeps happening
         self._polled.connect(self._apply)
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self._tick)
+        self._bluez = BusWatch("org.bluez", BLUEZ_SIGNALS, self._signalled, self)
+        # What the phone made of a volume we sent, which _apply ignores until then.
+        self._volume_settle = QTimer(self, singleShot=True, interval=VOLUME_SETTLE_MS,
+                                     timeout=self._bluez.poke)
 
     def start(self):
         if self._available:
+            self._bluez.start()
             self._tick()
             self._timer.start()
 
@@ -140,9 +155,21 @@ class BluetoothAudio(QObject):
         if self._pairing_until and time.monotonic() >= self._pairing_until:
             self._pairing_until = 0.0
             self.changed.emit()
+        self._ticks_left -= 1
+        if self._ticks_left <= 0:
+            self._refresh()
+
+    def _refresh(self):
+        self._ticks_left = SAFETY_TICKS if self._bluez.live() else 1
         if not self._busy:
             self._busy = True
             threading.Thread(target=self._poll, daemon=True).start()
+
+    def _signalled(self):
+        if self._busy:
+            self._again = True
+        else:
+            self._refresh()
 
     def _poll(self):
         state = None     # stays None if the poll crashes, and _apply keeps the old state
@@ -179,6 +206,9 @@ class BluetoothAudio(QObject):
 
     def _apply(self, state):
         self._busy = False
+        if self._again:
+            self._again = False
+            self._bluez.poke()
         if state is None:
             return
         old, old_player = self._state, self._player
@@ -326,6 +356,7 @@ class BluetoothAudio(QObject):
         raw = max(0, min(127, round(int(value) * 127 / 100)))
         self._state["volume"] = raw
         self._volume_sent_at = time.monotonic()
+        self._volume_settle.start()
         threading.Thread(target=lambda: _busctl(
             "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
             "Volume", "q", str(raw)), daemon=True).start()

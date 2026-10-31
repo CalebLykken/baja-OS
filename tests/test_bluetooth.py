@@ -13,7 +13,8 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.bluetooth import BluetoothAudio, parse_objects
+from backend.bluetooth import SAFETY_TICKS, BluetoothAudio, parse_objects
+from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -270,6 +271,129 @@ class ParseObjectsTest(unittest.TestCase):
         objects["/org/bluez/hci0/dev_AA/fd0"]["org.bluez.MediaTransport1"]["Volume"]["data"] = 0
         state = parse_objects(objects)
         self.assertEqual((state["transport"], state["volume"]), ("/org/bluez/hci0/dev_AA/fd0", 0))
+
+class SignalsTest(unittest.TestCase):
+    """BlueZ's signals drive the poll, faked at the bus; polling is the fallback."""
+
+    def setUp(self):
+        self.bt = BluetoothAudio()
+        self.bt._available = True
+        INLINE.start()
+        self.busctl = mock.patch("backend.bluetooth._busctl",
+                                 side_effect=lambda *a, **k: busctl_says(phone("Pixel"))).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(self.bt._timer.stop)
+        self.addCleanup(mock.patch.stopall)
+
+    def started(self, bus):
+        with on_bus(bus):
+            self.bt.start()
+        self.busctl.reset_mock()
+
+    def signal(self, bus):
+        bus.slot()
+        self.bt._bluez._timer.stop()     # stands in for the debounce running out
+        self.bt._bluez._fire()
+
+    def test_subscribes_to_what_bluez_sends(self):
+        bus = FakeBus()
+        self.started(bus)
+        names = {(s[0], s[1], s[3]) for s in bus.subscribed}
+        self.assertEqual(names, {("org.bluez", "/", "InterfacesAdded"), ("org.bluez", "/", "InterfacesRemoved"),
+                                 ("org.bluez", "", "PropertiesChanged")})
+
+    def test_a_signal_reads_bluez_at_once(self):
+        bus = FakeBus()
+        self.started(bus)
+        self.signal(bus)
+        self.busctl.assert_called_once()
+        self.assertEqual(self.busctl.call_args.args[-1], "GetManagedObjects")
+
+    def test_signals_in_a_burst_read_it_once(self):
+        bus = FakeBus()
+        self.started(bus)
+        for _ in range(5):
+            bus.slot()
+        self.assertTrue(self.bt._bluez._timer.isActive())
+        self.signal(bus)
+        self.busctl.assert_called_once()
+
+    def test_a_signal_during_a_poll_reads_again_after_it(self):
+        """That poll may have read just before the change."""
+        bus = FakeBus()
+        self.started(bus)
+        self.bt._busy = True
+        self.bt._bluez._fire()
+        self.busctl.assert_not_called()
+        self.bt._apply(None)
+        self.assertTrue(self.bt._bluez._timer.isActive())
+        self.signal(bus)
+        self.busctl.assert_called_once()
+
+    def test_without_a_bus_it_polls_every_tick(self):
+        self.started(None)
+        for _ in range(3):
+            self.bt._tick()
+        self.assertEqual(self.busctl.call_count, 3)
+
+    def test_with_signals_it_polls_only_now_and_then(self):
+        self.started(FakeBus())
+        for _ in range(SAFETY_TICKS - 1):
+            self.bt._tick()
+        self.busctl.assert_not_called()
+        self.bt._tick()
+        self.busctl.assert_called_once()
+
+    def test_a_signal_puts_the_safety_poll_off(self):
+        bus = FakeBus()
+        self.started(bus)
+        for _ in range(SAFETY_TICKS - 1):
+            self.bt._tick()
+        self.signal(bus)
+        self.busctl.reset_mock()
+        self.bt._tick()
+        self.busctl.assert_not_called()
+
+    def test_with_bluez_down_it_polls_every_tick(self):
+        self.started(FakeBus(running=False))
+        for _ in range(3):
+            self.bt._tick()
+        self.assertEqual(self.busctl.call_count, 3)
+
+    def test_bluez_going_away_falls_back_to_the_fast_poll(self):
+        bus = FakeBus()
+        self.started(bus)
+        bus.running = False
+        for _ in range(SAFETY_TICKS):
+            self.bt._tick()                            # the safety poll notices
+        self.busctl.reset_mock()
+        for _ in range(3):
+            self.bt._tick()
+        self.assertEqual(self.busctl.call_count, 3)
+
+    def test_the_position_clock_keeps_ticking_between_polls(self):
+        self.started(FakeBus())
+        self.bt._player = {"status": "playing"}
+        ticks = mock.Mock()
+        self.bt.positionChanged.connect(ticks)
+        for _ in range(3):
+            self.bt._tick()
+        self.assertEqual(ticks.call_count, 3)
+        self.busctl.assert_not_called()
+
+    def test_pairing_still_times_out_between_polls(self):
+        self.started(FakeBus())
+        self.bt._pairing_until = 1.0                  # long past
+        self.bt._tick()
+        self.assertEqual(self.bt._pairing_until, 0.0)
+
+    def test_a_volume_we_set_is_read_back_after_the_ignored_window(self):
+        self.bt._state["transport"] = "/org/bluez/hci0/dev_AA/fd0"
+        self.bt.setVolume(50)
+        self.assertTrue(self.bt._volume_settle.isActive())
+        self.assertGreater(self.bt._volume_settle.interval(), 1500)
+        self.bt._volume_settle.stop()
+
 
 class PhoneSeekTest(unittest.TestCase):
     def test_the_real_phone_source_cant_seek(self):

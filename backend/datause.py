@@ -72,18 +72,23 @@ class DataUse(QObject):
         try:
             names = [n for n in os.listdir(self._root) if counted(n)]
         except OSError:
-            names = []
+            names = None
         month = time.strftime("%Y-%m", time.localtime(self._clock()))
         if month > self._month:     # an earlier month is a clock not yet set: keep counting
             self._month, self._bytes = month, 0
-        readings = {n: t for n in names if (t := read_total(self._root, n)) is not None}
+        readings = {n: t for n in names or [] if (t := read_total(self._root, n)) is not None}
         for n, t in readings.items():
             last = self._last.get(n)
             # No earlier reading: it's all new since boot. A lower one: the counter restarted.
             self._bytes += t if last is None or t < last else t - last
         self._last.update(readings)
+        # An interface that's gone comes back a new one, its counter from zero.
+        # (Unreadable for a moment is different: it keeps its place.)
+        gone = [] if names is None else [n for n in self._last if n not in names]
+        for n in gone:
+            del self._last[n]
         self._present = bool(readings)
-        if self._present:        # nothing to save on a Mac
+        if self._present or gone:        # nothing to save on a Mac
             self._settings.set(SETTING, json.dumps({"month": self._month, "bytes": self._bytes, "last": self._last}))
         self.changed.emit()
 

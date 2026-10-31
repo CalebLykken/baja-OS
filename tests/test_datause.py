@@ -4,6 +4,7 @@
 """
 
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -77,6 +78,38 @@ class DataUseTests(unittest.TestCase):
         self.iface("wlan0", 30, 20)         # rebooted
         du.sample()
         self.assertEqual(du.bytesThisMonth, 2050)
+
+    def test_a_tether_that_went_away_counts_from_zero_when_it_is_back(self):
+        self.iface("bnep0", 900, 100)
+        du = self.make()
+        du.sample()
+        shutil.rmtree(os.path.join(self.root, "bnep0"))
+        self.iface("wlan0", 10, 0)
+        du.sample()
+        self.assertNotIn("bnep0", du._last)
+        self.iface("bnep0", 1500, 0)        # a new connection, already past the old count
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 1000 + 10 + 1500)
+
+    def test_the_last_interface_going_away_is_saved_too(self):
+        self.iface("bnep0", 900, 100)
+        du = self.make()
+        du.sample()
+        shutil.rmtree(os.path.join(self.root, "bnep0"))
+        du.sample()
+        again = self.make()
+        self.assertEqual(again._last, {})
+
+    def test_an_unreadable_interface_keeps_its_place(self):
+        self.iface("wlan0", 500, 0)
+        du = self.make()
+        du.sample()
+        with open(os.path.join(self.root, "wlan0", "statistics", "rx_bytes"), "w") as f:
+            f.write("garbage")
+        du.sample()
+        self.iface("wlan0", 600, 0)
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 600)    # not 500 + 600
 
     def test_month_rollover(self):
         self.iface("wlan0", 100, 0)

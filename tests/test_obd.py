@@ -14,7 +14,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend import obd
-from backend.obd import BARO_DEFAULT, Elm, ObdReader, pid_supported
+from backend.obd import BARO_DEFAULT, Elm, ObdReader, convert, pid_supported
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -286,6 +286,73 @@ class StoppedEngineTest(unittest.TestCase):
     def test_a_reading_that_isnt_steady_never_counts(self):
         reader, kept = self.stopped([90, 92, 94, 96, 98])
         self.assertEqual((reader._baro, kept), (95.0, []))
+
+
+class ConvertTest(unittest.TestCase):
+    def test_rpm_is_quarters(self):
+        self.assertEqual(convert(0x0C, [0x0C, 0x80]), ("rpm", 800.0))
+        self.assertEqual(convert(0x0C, [0x1A, 0xF8]), ("rpm", 1726.0))
+        self.assertEqual(convert(0x0C, [0, 0]), ("rpm", 0.0))
+
+    def test_manifold_pressure_is_kpa_as_is(self):
+        self.assertEqual(convert(0x0B, [40]), ("map", 40))
+
+    def test_speed_is_mph(self):
+        self.assertEqual(convert(0x0D, [0]), ("speed", 0.0))
+        name, mph = convert(0x0D, [100])
+        self.assertEqual(name, "speed")
+        self.assertAlmostEqual(mph, 62.1371, places=3)
+
+    def test_temperatures_are_fahrenheit_from_an_offset_celsius(self):
+        for pid, name in ((0x05, "coolant"), (0x0F, "intake")):
+            self.assertEqual(convert(pid, [40]), (name, 32.0))          # 0 C
+            self.assertEqual(convert(pid, [140]), (name, 212.0))        # 100 C
+            self.assertEqual(convert(pid, [0]), (name, -40.0))          # -40 C is -40 F
+
+    def test_a_pid_it_doesnt_know(self):
+        self.assertEqual(convert(0x33, [100]), (None, None))
+
+
+class PidReplyTest(unittest.TestCase):
+    """Elm.pid finds the data bytes in whatever the adapter sends back."""
+
+    def pid(self, pid, reply):
+        return CannedElm({f"01{pid:02X}": reply}).pid(pid)
+
+    def test_with_spaces(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F8"), [0x1A, 0xF8])
+
+    def test_without_spaces(self):
+        self.assertEqual(self.pid(0x0C, "410C1AF8"), [0x1A, 0xF8])
+
+    def test_a_header_before_the_answer(self):
+        # ATH1 style: CAN id and length first, or K-line header bytes.
+        self.assertEqual(self.pid(0x0C, "7E8 04 41 0C 1A F8"), [0x1A, 0xF8])
+        self.assertEqual(self.pid(0x0D, "48 6B 10 41 0D 32 AB"), [0x32, 0xAB])
+
+    def test_a_search_banner_before_the_answer(self):
+        self.assertEqual(self.pid(0x0B, "SEARCHING... 41 0B 28"), [0x28])
+
+    def test_no_answer(self):
+        for reply in ("NO DATA", "UNABLE TO CONNECT", "?", "", "BUS INIT: ERROR"):
+            self.assertIsNone(self.pid(0x0C, reply), reply)
+
+    def test_the_answer_to_another_pid(self):
+        self.assertIsNone(self.pid(0x0C, "41 0D 32"))
+
+    def test_a_head_with_no_data(self):
+        self.assertIsNone(self.pid(0x0C, "41 0C"))
+
+    def test_junk_after_the_data_ends_it(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F8 ZZ"), [0x1A, 0xF8])
+
+    def test_an_odd_nibble_at_the_end_is_ignored(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F"), [0x1A])
+
+    def test_a_single_digit_pid_is_padded_in_the_request(self):
+        elm = CannedElm({"0105": "41 05 5F"})
+        self.assertEqual(elm.pid(0x05), [0x5F])
+        self.assertEqual(elm.asked, ["0105"])
 
 
 if __name__ == "__main__":

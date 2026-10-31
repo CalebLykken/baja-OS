@@ -16,7 +16,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan, valid_ssid
+from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan, split_terse, valid_ssid
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -493,6 +493,31 @@ class HiddenNetworkTest(unittest.TestCase):
     def test_valid_ssid_counts_bytes(self):
         self.assertTrue(valid_ssid("é" * 16))
         self.assertFalse(valid_ssid("é" * 17))
+
+
+class SplitTerseTest(unittest.TestCase):
+    def test_plain_fields(self):
+        self.assertEqual(split_terse("*:Home:80:WPA2"), ["*", "Home", "80", "WPA2"])
+
+    def test_an_escaped_colon_stays_in_the_field(self):
+        self.assertEqual(split_terse(r"AA\:BB\:CC:Cafe\: Free:55"), ["AA:BB:CC", "Cafe: Free", "55"])
+
+    def test_empty_fields_are_kept(self):
+        self.assertEqual(split_terse(":Home::"), ["", "Home", "", ""])
+        self.assertEqual(split_terse(""), [""])
+
+    def test_a_colon_at_either_end_of_a_name(self):
+        self.assertEqual(split_terse(r"\:a\::1"), [":a:", "1"])
+
+    def test_an_escaped_backslash_is_one_backslash(self):
+        self.assertEqual(split_terse(r"C\\D:1"), ["C\\D", "1"])
+
+    @unittest.expectedFailure
+    def test_a_name_ending_in_a_backslash_still_ends(self):
+        # nmcli writes the name "ab\" as ab\\ and then the separator: the
+        # colon after an escaped backslash is a real one, but split_terse
+        # sees a backslash in front of it and keeps the two fields as one.
+        self.assertEqual(split_terse("ab\\\\:70"), ["ab\\", "70"])
 
 
 if __name__ == "__main__":

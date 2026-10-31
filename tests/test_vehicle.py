@@ -10,7 +10,7 @@ import unittest
 from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
 from backend.gps import Gps
-from backend.vehicle import LIMITS, VOLTS_MS, VehicleData, estimate_gear, warnings
+from backend.vehicle import GEARS, LIMITS, VOLTS_MS, VehicleData, estimate_gear, warnings
 
 # apply_obd restarts a QTimer, which wants an application object (no event loop).
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -460,6 +460,37 @@ class BatteryTest(unittest.TestCase):
         self.assertEqual(v.warnings, ["voltage"])
         v._volts_aged()
         self.assertEqual(v.warnings, [])
+
+
+class EstimateGearTest(unittest.TestCase):
+    def test_each_gear_at_its_own_ratio(self):
+        for gear, per_k in enumerate(GEARS, start=1):
+            self.assertEqual(estimate_gear(per_k * 2.5, 2500), gear)
+
+    def test_a_little_off_a_ratio_is_still_that_gear(self):
+        self.assertEqual(estimate_gear(GEARS[2] * 0.95 * 3, 3000), 3)
+        self.assertEqual(estimate_gear(GEARS[2] * 1.05 * 3, 3000), 3)
+
+    def test_between_gears_is_none(self):
+        # Halfway between 2nd (11.5) and 3rd (17.0) mph per 1000 rpm: a slipping clutch.
+        self.assertEqual(estimate_gear(14.25 * 2, 2000), 0)
+
+    def test_stopped_or_engine_off_is_none(self):
+        self.assertEqual(estimate_gear(0.0, 800), 0)
+        self.assertEqual(estimate_gear(2.9, 2000), 0)
+        self.assertEqual(estimate_gear(40.0, 0), 0)
+        self.assertEqual(estimate_gear(40.0, 499), 0)
+
+    def test_the_least_that_counts(self):
+        self.assertEqual(estimate_gear(3.0, 500), 1)
+        self.assertEqual(estimate_gear(2.99, 500), 0)
+        self.assertEqual(estimate_gear(3.0, 499), 0)
+
+    def test_past_top_gear_is_none(self):
+        self.assertEqual(estimate_gear(100.0, 2000), 0)      # 50 mph per 1000 rpm
+
+    def test_the_same_speed_in_a_lower_gear_takes_more_revs(self):
+        self.assertLess(estimate_gear(30.0, 4500), estimate_gear(30.0, 1100))
 
 
 if __name__ == "__main__":

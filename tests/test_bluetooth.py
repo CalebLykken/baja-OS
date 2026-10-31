@@ -187,5 +187,90 @@ class PollFailureTest(unittest.TestCase):
         self.assertEqual(logged(self.printed), [])
 
 
+class ParseObjectsTest(unittest.TestCase):
+    """The rest of what parse_objects reduces BlueZ's answer to."""
+
+    def test_no_adapter_and_nothing_else(self):
+        state = parse_objects({})
+        self.assertEqual((state["adapter"], state["device"], state["paired"], state["to_trust"]), (None, None, [], []))
+        self.assertEqual((state["transport"], state["volume"], state["discoverable"]), (None, None, False))
+
+    def test_a_phone_without_a_player_still_names_the_device(self):
+        state = parse_objects(phone("Driver"))
+        self.assertEqual((state["adapter"], state["device"], state["player"]), ("/org/bluez/hci0", "Driver", None))
+        self.assertEqual(state["paired"], [{"path": "/org/bluez/hci0/dev_AA", "name": "Driver", "connected": True}])
+
+    def test_a_paired_phone_not_yet_trusted_is_to_be_trusted(self):
+        self.assertEqual(parse_objects(phone("Driver", trusted=False))["to_trust"], ["/org/bluez/hci0/dev_AA"])
+        self.assertEqual(parse_objects(phone("Driver", trusted=True))["to_trust"], [])
+
+    def test_an_unpaired_phone_is_not_listed(self):
+        state = parse_objects(phone("Stranger", paired=False))
+        self.assertEqual((state["paired"], state["to_trust"]), ([], []))
+
+    def test_connected_phones_first_then_by_name(self):
+        objects = two_phones("paused", "paused")
+        objects["/org/bluez/hci0/dev_CC"] = {"org.bluez.Device1": {
+            "Alias": "alpha", "Paired": True, "Trusted": True, "Connected": False}}      # plain values, not variants
+        objects["/org/bluez/hci0/dev_DD"] = {"org.bluez.Device1": {
+            "Name": "Zed", "Paired": True, "Trusted": True, "Connected": False}}
+        self.assertEqual([(d["name"], d["connected"]) for d in parse_objects(objects)["paired"]],
+                         [("Driver", True), ("Passenger", True), ("alpha", False), ("Zed", False)])
+
+    def test_the_name_falls_back_to_the_address(self):
+        objects = {"/org/bluez/hci0/dev_AA": {"org.bluez.Device1": {
+            "Address": "AA:BB", "Paired": True, "Trusted": True, "Connected": True}},
+            "/org/bluez/hci0/dev_BB": {"org.bluez.Device1": {"Paired": True, "Trusted": True, "Connected": False}}}
+        self.assertEqual([d["name"] for d in parse_objects(objects)["paired"]], ["AA:BB", "Device"])
+
+    def test_discoverable_while_pairing(self):
+        objects = phone("Driver")
+        objects["/org/bluez/hci0"]["org.bluez.Adapter1"]["Discoverable"] = {"type": "b", "data": True}
+        self.assertTrue(parse_objects(objects)["discoverable"])
+
+    def test_a_track_with_nothing_filled_in(self):
+        objects = phone("Driver")
+        objects["/org/bluez/hci0/dev_AA/player0"] = {"org.bluez.MediaPlayer1": {
+            "Device": {"type": "o", "data": "/org/bluez/hci0/dev_AA"}}}
+        player = parse_objects(objects)["player"]
+        self.assertEqual((player["status"], player["title"], player["artist"], player["album"]),
+                         ("stopped", "", "", ""))
+        self.assertEqual((player["position_ms"], player["duration_ms"]), (0, 0))
+
+    def test_a_tracks_details(self):
+        def v(kind, data):
+            return {"type": kind, "data": data}
+        objects = phone("Driver")
+        objects["/org/bluez/hci0/dev_AA/player0"] = {"org.bluez.MediaPlayer1": {
+            "Device": v("o", "/org/bluez/hci0/dev_AA"), "Status": v("s", "playing"), "Position": v("u", 12345),
+            "Track": v("a{sv}", {"Title": v("s", "Song"), "Artist": v("s", "Band"), "Album": v("s", "LP"),
+                                 "Duration": v("u", 200000)})}}
+        self.assertEqual(parse_objects(objects)["player"],
+                         {"path": "/org/bluez/hci0/dev_AA/player0", "device": "/org/bluez/hci0/dev_AA",
+                          "status": "playing", "position_ms": 12345, "title": "Song", "artist": "Band",
+                          "album": "LP", "duration_ms": 200000})
+
+    def test_a_transport_with_no_player_gives_its_volume(self):
+        objects = two_phones("paused", "paused")
+        for path in [p for p in objects if p.endswith("/player0")]:
+            del objects[path]
+        state = parse_objects(objects)
+        self.assertIsNone(state["player"])
+        self.assertIn(state["volume"], (10, 90))
+
+    def test_a_transport_without_a_volume_is_not_one(self):
+        objects = phone("Driver")
+        objects["/org/bluez/hci0/dev_AA/fd0"] = {"org.bluez.MediaTransport1": {
+            "Device": {"type": "o", "data": "/org/bluez/hci0/dev_AA"}}}
+        state = parse_objects(objects)
+        self.assertEqual((state["transport"], state["volume"]), (None, None))
+
+    def test_a_volume_of_zero_is_a_volume(self):
+        objects = two_phones("playing", "paused")
+        objects["/org/bluez/hci0/dev_AA/fd0"]["org.bluez.MediaTransport1"]["Volume"]["data"] = 0
+        state = parse_objects(objects)
+        self.assertEqual((state["transport"], state["volume"]), ("/org/bluez/hci0/dev_AA/fd0", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

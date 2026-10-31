@@ -11,6 +11,7 @@ import time
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 # Qt's FFmpeg backend prints every file's tags (main.py does the same).
@@ -20,7 +21,7 @@ try:
     from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSignal
     from PyQt6.QtMultimedia import QAudio, QMediaDevices
     from backend import gapless, library
-    from backend.library import LibraryPlayer, group_albums, play_order, resume_point, scan, step
+    from backend.library import LibraryPlayer, _number, group_albums, play_order, resume_point, scan, step
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 or mutagen isn't installed ({e})")
 
@@ -500,6 +501,114 @@ class ModesTest(unittest.TestCase):
     def test_set_modes_ignores_junk(self):
         self.player.set_modes(True, "sideways")
         self.assertEqual((self.player.shuffle, self.player.repeat), (True, "all"))
+
+
+def song(path, album="Album", track=0, disc=0, artist="Artist", album_artist="", art=""):
+    return {"path": path, "title": path, "artist": artist, "album": album, "albumArtist": album_artist,
+            "disc": disc, "track": track, "duration": 3, "art": art}
+
+
+def order(songs):
+    """The paths of the first album, in its play order."""
+    album = group_albums(songs)[0]
+    return [songs[i]["path"] for i in album["tracks"]]
+
+
+class GroupAlbumsTest(unittest.TestCase):
+    def test_numbered_songs_play_in_track_order(self):
+        songs = [song("/m/a.mp3", track=3), song("/m/b.mp3", track=1), song("/m/c.mp3", track=2)]
+        self.assertEqual(order(songs), ["/m/b.mp3", "/m/c.mp3", "/m/a.mp3"])
+
+    def test_discs_come_before_track_numbers(self):
+        songs = [song("/m/a.mp3", disc=2, track=1), song("/m/b.mp3", disc=1, track=2),
+                 song("/m/c.mp3", disc=1, track=1), song("/m/d.mp3", disc=2, track=2)]
+        self.assertEqual(order(songs), ["/m/c.mp3", "/m/b.mp3", "/m/a.mp3", "/m/d.mp3"])
+
+    def test_no_disc_numbers_is_one_disc(self):
+        songs = [song("/m/a.mp3", track=2), song("/m/b.mp3", track=1)]
+        self.assertEqual(order(songs), ["/m/b.mp3", "/m/a.mp3"])
+
+    def test_a_missing_track_number_means_the_file_names(self):
+        songs = [song("/m/03 c.mp3", track=3), song("/m/01 a.mp3", track=0), song("/m/02 b.mp3", track=2)]
+        self.assertEqual(order(songs), ["/m/01 a.mp3", "/m/02 b.mp3", "/m/03 c.mp3"])
+
+    def test_no_numbers_at_all_means_the_file_names(self):
+        songs = [song("/m/b.mp3"), song("/m/c.mp3"), song("/m/a.mp3")]
+        self.assertEqual(order(songs), ["/m/a.mp3", "/m/b.mp3", "/m/c.mp3"])
+
+    def test_repeated_numbers_mean_the_file_names(self):
+        # A deluxe edition whose bonus songs start again at 1, with no disc number.
+        songs = [song("/m/1.mp3", track=1), song("/m/2.mp3", track=2), song("/m/3.mp3", track=3),
+                 song("/m/4 bonus.mp3", track=1), song("/m/5 bonus.mp3", track=2)]
+        songs.reverse()
+        self.assertEqual(order(songs), ["/m/1.mp3", "/m/2.mp3", "/m/3.mp3", "/m/4 bonus.mp3", "/m/5 bonus.mp3"])
+
+    def test_the_same_track_numbers_on_two_discs_are_not_a_repeat(self):
+        songs = [song("/m/a.mp3", disc=2, track=1), song("/m/b.mp3", disc=1, track=1),
+                 song("/m/c.mp3", disc=2, track=2), song("/m/d.mp3", disc=1, track=2)]
+        self.assertEqual(order(songs), ["/m/b.mp3", "/m/d.mp3", "/m/a.mp3", "/m/c.mp3"])
+
+    def test_the_same_number_on_the_same_disc_twice_means_the_file_names(self):
+        songs = [song("/m/b.mp3", disc=1, track=1), song("/m/a.mp3", disc=1, track=1)]
+        self.assertEqual(order(songs), ["/m/a.mp3", "/m/b.mp3"])
+
+    def test_equal_numbers_never_lose_a_song(self):
+        songs = [song(f"/m/{n}.mp3", track=1) for n in "cab"]
+        self.assertEqual(sorted(group_albums(songs)[0]["tracks"]), [0, 1, 2])
+
+    def test_albums_are_sorted_by_artist_then_title_ignoring_case(self):
+        songs = [song("/m/1.mp3", album="Zed", artist="bob"), song("/m/2.mp3", album="Alpha", artist="Bob"),
+                 song("/m/3.mp3", album="Zed", artist="Al")]
+        self.assertEqual([(a["artist"], a["title"]) for a in group_albums(songs)],
+                         [("Al", "Zed"), ("Bob", "Alpha"), ("bob", "Zed")])
+
+    def test_the_album_artist_groups_a_compilation(self):
+        songs = [song("/m/1.mp3", album="Hits", artist="One", album_artist="Various"),
+                 song("/m/2.mp3", album="Hits", artist="Two", album_artist="Various")]
+        albums = group_albums(songs)
+        self.assertEqual(len(albums), 1)
+        self.assertEqual((albums[0]["artist"], albums[0]["tracks"]), ("Various", [0, 1]))
+
+    def test_albums_with_the_same_name_by_different_artists_stay_apart(self):
+        songs = [song("/m/1.mp3", album="Greatest Hits", artist="A"), song("/m/2.mp3", album="Greatest Hits", artist="B")]
+        self.assertEqual(len(group_albums(songs)), 2)
+
+    def test_the_cover_is_the_first_one_found(self):
+        songs = [song("/m/1.mp3", art=""), song("/m/2.mp3", art="b.jpg"), song("/m/3.mp3", art="c.jpg")]
+        self.assertEqual(group_albums(songs)[0]["art"], "b.jpg")
+
+    def test_no_songs_no_albums(self):
+        self.assertEqual(group_albums([]), [])
+
+
+class NumberTest(unittest.TestCase):
+    def test_plain_and_padded(self):
+        self.assertEqual(_number({"TRCK": ["3"]}, "TRCK"), 3)
+        self.assertEqual(_number({"TRCK": ["03"]}, "TRCK"), 3)
+        self.assertEqual(_number({"TRCK": " 7"}, "TRCK"), 7)
+
+    def test_of_a_total(self):
+        self.assertEqual(_number({"track": ["3/12"]}, "track"), 3)
+
+    def test_an_mp4_pair(self):
+        self.assertEqual(_number({"trkn": [(3, 12)]}, "trkn"), 3)
+
+    def test_an_id3_frame(self):
+        self.assertEqual(_number({"TRCK": SimpleNamespace(text=["5/9"])}, "TRCK"), 5)
+
+    def test_the_first_key_that_has_a_number(self):
+        tags = {"tracknumber": [], "TRCK": ["4"]}
+        self.assertEqual(_number(tags, "tracknumber", "TRCK"), 4)
+
+    def test_no_number(self):
+        for tags in ({}, {"TRCK": []}, {"TRCK": [""]}, {"TRCK": ["A1"]}, {"TRCK": ["/12"]}, {"TRCK": None}):
+            self.assertEqual(_number(tags, "TRCK"), 0, tags)
+
+    def test_a_key_the_tags_refuse(self):
+        class Strict(dict):
+            def get(self, key, default=None):
+                raise ValueError(key)
+        self.assertEqual(_number(Strict(), "TRCK"), 0)
 
 
 if __name__ == "__main__":

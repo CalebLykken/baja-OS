@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.gps import DemoRoute, Gps, Position, sky_report
+from backend.gps import DemoRoute, Gps, Position, nmea_coord, nmea_fields, sky_report
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -283,6 +283,94 @@ class GpsdSatellitesTest(unittest.TestCase):
             g._apply(r)
         g._apply({"gpsd": False})
         self.assertEqual((g.satellites, g.satellitesInView), (0, 0))
+
+
+def sentence(body):
+    """'$body*hh' with the right checksum."""
+    total = 0
+    for ch in body:
+        total ^= ord(ch)
+    return f"${body}*{total:02X}"
+
+
+class NmeaTest(unittest.TestCase):
+    RMC = "GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W"
+
+    def test_a_checked_sentence_splits_into_fields(self):
+        f = nmea_fields("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n")
+        self.assertEqual(f, self.RMC.split(","))
+
+    def test_a_bad_checksum_is_dropped(self):
+        self.assertIsNone(nmea_fields("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6B"))
+        self.assertIsNone(nmea_fields(sentence(self.RMC)[:-2] + "00"))
+
+    def test_no_dollar_no_star_or_a_garbled_checksum_is_dropped(self):
+        good = sentence(self.RMC)
+        for line in (good[1:], good.split("*")[0], good.split("*")[0] + "*ZZ", good.split("*")[0] + "*", ""):
+            self.assertIsNone(nmea_fields(line), line)
+
+    def test_the_checksum_may_be_lower_case(self):
+        line = sentence("GNGGA,1,2")
+        self.assertEqual(nmea_fields(line[:-2] + line[-2:].lower()), ["GNGGA", "1", "2"])
+
+    def test_coordinates_are_degrees_and_minutes(self):
+        self.assertAlmostEqual(nmea_coord("4736.37200", "N"), 47.6062, places=4)
+        self.assertAlmostEqual(nmea_coord("12219.92600", "W"), -122.33210, places=4)
+        self.assertAlmostEqual(nmea_coord("3351.000", "S"), -(33 + 51 / 60), places=6)
+        self.assertAlmostEqual(nmea_coord("01131.000", "E"), 11 + 31 / 60, places=6)
+
+    def test_less_than_a_degree(self):
+        self.assertAlmostEqual(nmea_coord("0030.000", "N"), 0.5)
+        self.assertAlmostEqual(nmea_coord("30.000", "N"), 0.5)
+
+    def test_nothing_to_convert(self):
+        self.assertIsNone(nmea_coord("", "N"))
+        self.assertIsNone(nmea_coord(None, "N"))
+        self.assertIsNone(nmea_coord("4736", "N"))
+
+
+class DemoRouteAtTest(unittest.TestCase):
+    NORTH = [(-122.0, 47.0), (-122.0, 47.01)]                    # about 1.1 km
+    SQUARE = [(-122.0, 47.0), (-122.0, 47.01), (-121.99, 47.01), (-121.99, 47.0)]
+
+    def test_the_start_and_heading_of_a_one_way_route(self):
+        r = DemoRoute(points=self.NORTH, loop=False)
+        lon, lat, heading = r.at(0)
+        self.assertEqual((lon, lat), (-122.0, 47.0))
+        self.assertAlmostEqual(heading, 0.0, places=3)
+
+    def test_part_way_along(self):
+        r = DemoRoute(points=self.NORTH, loop=False)
+        lon, lat, _ = r.at(r.length / 2)
+        self.assertAlmostEqual(lat, 47.005, places=6)
+        self.assertAlmostEqual(lon, -122.0, places=9)
+
+    def test_a_one_way_route_ends_at_its_last_point(self):
+        r = DemoRoute(points=self.NORTH, loop=False)
+        for d in (r.length, r.length + 5000):
+            lon, lat, heading = r.at(d)
+            self.assertAlmostEqual(lat, 47.01, places=5)
+            self.assertAlmostEqual(heading, 0.0, places=1)
+
+    def test_a_loop_closes_and_wraps(self):
+        r = DemoRoute(points=self.SQUARE)
+        self.assertEqual(r.points[0], r.points[-1])
+        for d in (10.0, 700.0, 1500.0):
+            a, b = r.at(d), r.at(d + 3 * r.length)
+            self.assertAlmostEqual(a[0], b[0], places=6)
+            self.assertAlmostEqual(a[1], b[1], places=6)
+        self.assertEqual(r.at(r.length)[:2], r.at(0)[:2])
+
+    def test_it_heads_along_the_leg_it_is_on(self):
+        r = DemoRoute(points=self.SQUARE)
+        self.assertAlmostEqual(r.at(r.cum[1] / 2)[2], 0.0, places=1)                  # north
+        self.assertAlmostEqual(r.at((r.cum[1] + r.cum[2]) / 2)[2], 90.0, delta=1)     # east
+        self.assertAlmostEqual(r.at(r.cum[3] - 100)[2], 180.0, delta=1)               # south
+
+    def test_it_turns_a_little_before_a_corner(self):
+        r = DemoRoute(points=self.SQUARE)
+        before = r.at(r.cum[1] - 10)[2]       # the point 25 m ahead is round the corner
+        self.assertTrue(0 < before < 90, before)
 
 
 if __name__ == "__main__":

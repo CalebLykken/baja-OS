@@ -7,6 +7,7 @@ in settings and picked up again after a restart.
 
 import io
 import json
+import math
 import time
 import unittest
 import urllib.error
@@ -16,8 +17,8 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
-from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, route_record,
-                             saved_route)
+from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
+                             route_record, saved_route, tidy)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -692,6 +693,141 @@ class StaleAnswerTest(unittest.TestCase):
         answer(self.router, ROUTE, "", "Shop", True, gen=old)
         self.assertFalse(self.router.active)
         self.assertFalse(self.router.previewing)
+
+
+class DecodePolylineTest(unittest.TestCase):
+    def test_a_known_shape(self):
+        # Google's documented example, whose 1e-5 values are (38.5, -120.2),
+        # (40.7, -120.95), (43.252, -126.453): at Valhalla's 1e-6 they come out a tenth the size.
+        points = decode_polyline6("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
+        want = [(-12.02, 3.85), (-12.095, 4.07), (-12.6453, 4.3252)]
+        self.assertEqual(len(points), 3)
+        for got, exp in zip(points, want):
+            self.assertAlmostEqual(got[0], exp[0], places=6)
+            self.assertAlmostEqual(got[1], exp[1], places=6)
+
+    def test_lon_lat_order_and_the_canned_route(self):
+        self.assertEqual(decode_polyline6(ROUTE["trip"]["legs"][0]["shape"]), [START, CORNER, END])
+
+    def test_nothing(self):
+        self.assertEqual(decode_polyline6(""), [])
+
+    def test_south_and_west_are_negative_deltas(self):
+        pts = [(-122.0, 47.0), (-122.5, 46.5), (-122.5001, 46.4999)]
+        for got, exp in zip(decode_polyline6(polyline6(pts)), pts):
+            self.assertAlmostEqual(got[0], exp[0], places=6)
+            self.assertAlmostEqual(got[1], exp[1], places=6)
+
+
+class TidyTest(unittest.TestCase):
+    def test_a_chained_step_loses_its_capital(self):
+        self.assertEqual(tidy("Turn left onto Pine Street. Then Keep right at the fork."),
+                         "Turn left onto Pine Street. Then keep right at the fork.")
+
+    def test_after_a_sentence_it_stays_a_sentence(self):
+        self.assertEqual(tidy("Drive north. Then Turn right."), "Drive north. Then turn right.")
+
+    def test_in_the_middle_of_a_sentence(self):
+        self.assertEqual(tidy("Turn left, Then Merge onto I-5"), "Turn left, then merge onto I-5")
+
+    def test_nothing_to_change(self):
+        for text in ("Turn right.", "", "Then", "Then we go on.", "Bethen Keep left"):
+            self.assertEqual(tidy(text), text)
+
+
+class RouteShapeTest(unittest.TestCase):
+    """A Route over the canned Valhalla reply: north 2.2 km, then east 760 m."""
+
+    def setUp(self):
+        self.r = Route(ROUTE, "Shop")
+
+    def test_the_length_is_the_legs_in_metres(self):
+        self.assertAlmostEqual(self.r.length, 0.02 * 110540 + 0.01 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertEqual(self.r.cum[0], 0.0)
+        self.assertAlmostEqual(self.r.cum[1], 2210.8, delta=1)
+
+    def test_it_starts_at_the_start(self):
+        self.r.locate(*START)
+        self.assertAlmostEqual(self.r.along, 0.0, places=3)
+        self.assertAlmostEqual(self.r.off, 0.0, places=3)
+        self.assertAlmostEqual(self.r.remaining, self.r.length, places=3)
+        self.assertEqual(self.r.seg, 0)
+
+    def test_half_way_up_the_first_leg(self):
+        self.r.locate(-122.0, 47.01)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] / 2, delta=0.5)
+        self.assertLess(self.r.off, 0.5)
+
+    def test_beside_the_road_it_is_the_distance_off(self):
+        self.r.locate(-121.999, 47.01)        # 0.001 degrees of longitude east
+        self.assertAlmostEqual(self.r.off, 0.001 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] / 2, delta=1)
+
+    def test_on_the_second_leg(self):
+        self.r.locate(-121.995, 47.02)
+        self.assertEqual(self.r.seg, 1)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] + 0.005 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertAlmostEqual(self.r.to_end, 0.005 * 111320 * math.cos(math.radians(47.0)), delta=1)
+
+    def test_past_the_end_stops_at_the_end(self):
+        self.r.locate(-121.9, 47.02)
+        self.assertAlmostEqual(self.r.along, self.r.length, places=3)
+        self.assertEqual(self.r.remaining, 0.0)
+
+    def test_the_same_fix_again_is_ignored(self):
+        self.r.locate(-122.0, 47.01, 0.0, 10.0, 0.0)
+        before = (self.r.along, self.r._at)
+        self.r.locate(-122.0, 47.01, 0.0, 10.0, 5.0)
+        self.assertEqual((self.r.along, self.r._at), before)
+
+
+class ManeuverTest(unittest.TestCase):
+    def route(self, end=END):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["shape"] = polyline6([START, CORNER, end])
+        return Route(data, "Shop")
+
+    def test_the_first_turn_ahead_at_the_start(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(*START)
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+
+    def test_the_turn_just_reached_is_behind(self):
+        r = Route(ROUTE, "Shop")
+        r.along = r.cum[1] - 6
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+        r.along = r.cum[1] - 4              # within 5 m: already counted as done
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+
+    def test_after_the_last_turn_it_is_the_arrival(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(-121.995, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+        r.locate(-121.9, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+
+    def test_a_turn_far_after_the_next_is_not_shown_with_it(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(*START)
+        self.assertIsNone(r.then_maneuver())          # the arrival is 760 m after the turn
+
+    def test_a_turn_right_after_the_next_is_shown_with_it(self):
+        r = self.route(end=(-121.9975, 47.02))        # 190 m after the turn
+        r.locate(*START)
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+        self.assertEqual(r.then_maneuver()["instruction"], "You have arrived.")
+
+    def test_the_gap_has_a_limit(self):
+        r = self.route(end=(-121.9965, 47.02))        # 266 m: still near
+        self.assertIsNotNone(r.then_maneuver())
+        r = self.route(end=(-121.995, 47.02))         # 380 m: too far
+        self.assertIsNone(r.then_maneuver())
+
+    def test_nothing_after_the_arrival(self):
+        r = self.route(end=(-121.9975, 47.02))
+        r.locate(-121.9, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+        self.assertIsNone(r.then_maneuver())
 
 
 if __name__ == "__main__":

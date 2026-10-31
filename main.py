@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Baja carputer dashboard: entry point.
 
-Runs the QML interface with mock vehicle and media data so the UI can be
-built and tested before real OBD-II and audio hardware is wired in.
+Runs the QML interface on the real hardware (OBD-II, GPS, Bluetooth and
+Spotify audio, local music). On a Mac or bench Pi with nothing attached it
+falls back to a simulated drive and a demo queue; --demo / --no-demo force it.
 
     python3 main.py               # 1280x800 window (Mac / desktop)
     python3 main.py --fullscreen  # full screen (the Pi in the car)
@@ -15,7 +16,6 @@ import os
 import signal
 import sys
 import threading
-import traceback
 from pathlib import Path
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
@@ -26,6 +26,7 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
+from backend import errorlog
 from backend.bluetooth import BluetoothAudio
 from backend.display import Display
 from backend.eq import Equalizer
@@ -36,15 +37,17 @@ from backend.routing import Router
 from backend.voice import Voice
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
-from backend.knob import Knob
+from backend.knob import Gestures, Knob, double_press
 from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.phone import PhoneSend
+from backend.datause import DataUse
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
+from backend.updater import Updater
 from backend.vehicle import VehicleData
 from backend.wifi import Wifi
 
@@ -76,40 +79,33 @@ def make_media_player(music_dir, demo_flag=None, on_pi=None):
     """The player for the Pi's own music: a real one over the audio files in
     music_dir. With none, the made-up playlist where demo data is allowed (a
     Mac, or --demo), else an empty player that says nothing's playing (the
-    truck). demo_flag is args.demo; on_pi (default: ask) is for tests."""
+    truck). It never reads tags here: it starts from the library cache, or
+    empty and "scanning" until the LibraryScanner reports (main starts that).
+    demo_flag is args.demo; on_pi (default: ask) is for tests."""
     from backend import demo
     show_demo = demo.allowed(demo_flag, not (demo.on_pi() if on_pi is None else on_pi))
     try:
-        from backend.library import LibraryPlayer, scan
+        from backend.library import LibraryPlayer, cached_tracks, has_audio_files
     except ImportError as e:  # QtMultimedia or mutagen not installed
         if show_demo:
             print(f"Music: real playback unavailable ({e}); using demo playlist")
             return MediaPlayer()
         print(f"Music: real playback unavailable ({e}); nothing to play")
         return MediaPlayer([])
-    tracks = scan(music_dir)
-    if tracks:
-        print(f"Music: {len(tracks)} track(s) from {music_dir}")
-        return LibraryPlayer(tracks)
-    if show_demo:
+    if show_demo and not has_audio_files(music_dir):
         print(f"Music: no audio files in {music_dir}; using demo playlist")
         return MediaPlayer()
-    print(f"Music: no audio files in {music_dir}")
-    return LibraryPlayer([])
-
-
-_errors = 0
+    tracks = cached_tracks(music_dir)
+    print(f"Music: {len(tracks)} track(s) from the cache; reading {music_dir}")
+    return LibraryPlayer(tracks, scanning=not tracks)
 
 
 def log_exception(exc_type, exc, tb):
     """Log an uncaught error and carry on. Without its own sys.excepthook,
     PyQt aborts the whole dashboard (exit 134) when an exception escapes a
-    slot, a timer or a property QML reads."""
-    global _errors
-    _errors += 1
-    print(f"Uncaught error #{_errors}:", file=sys.stderr)
-    traceback.print_exception(exc_type, exc, tb)
-    sys.stderr.flush()
+    slot, a timer or a property QML reads. Repeats are counted and
+    summarised (backend/errorlog.py), not each written out."""
+    errorlog.log.report(exc_type, exc, tb)
 
 
 def log_thread_exception(args):
@@ -117,9 +113,8 @@ def log_thread_exception(args):
     if args.exc_type is SystemExit:
         return
     name = args.thread.name if args.thread else "?"
-    print(f"Thread {name} stopped on an error:", file=sys.stderr)
-    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
-    sys.stderr.flush()
+    errorlog.log.report(args.exc_type, args.exc_value, args.exc_traceback,
+                    label=f"Thread {name} stopped on an error:")
 
 
 def init_web_engine():
@@ -156,8 +151,9 @@ def main():
     obd.reading.connect(vehicle.apply_obd)
     obd.lost.connect(vehicle.lost_obd)
     obd.voltage.connect(vehicle.apply_voltage)
+    obd.codes.connect(vehicle.apply_codes)
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
-    bluetooth = BluetoothAudio()
+    bluetooth = BluetoothAudio(settings=settings)
     spotify = SpotifyPlayer()
     # Spotify albums and playlists played here, kept between runs.
     try:
@@ -166,16 +162,28 @@ def main():
         pass
     spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
     local = make_media_player(args.music_dir, args.demo)
+    scanner = None                    # reads the music folder in the background
+    if hasattr(local, "set_tracks"):
+        from backend.library import LibraryScanner
+        scanner = LibraryScanner(args.music_dir)
+        scanner.found.connect(local.set_tracks)
     # It picks up where music was before a restart, and saves that as it goes.
     media = MediaHub(local, bluetooth, spotify,
                      volume=settings.get_int("volume", 40),
                      max_volume=settings.get_int("maxVolume", 100), settings=settings)
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
-    # The dash knob: turn for volume, press to play or pause.
+    # The dash knob: turn for volume; press to play or pause (a beat late, in
+    # case it's a double); double press for the next song, or while navigating
+    # the last direction again; hold to mute.
     knob = Knob()
+    gestures = Gestures()
     knob.turned.connect(lambda step: media.volumeUp() if step > 0 else media.volumeDown())
-    knob.pressed.connect(media.togglePlay)
+    knob.pressed.connect(gestures.down)
+    knob.released.connect(gestures.up)
+    gestures.single.connect(media.togglePlay)
+    gestures.double.connect(lambda: double_press(routing, media))
+    gestures.long.connect(media.toggleMute)
     # Day/night brightness follows the sun where the truck is (Seattle
     # until the GPS has a position).
     display = Display(settings, location=lambda: (gps.lat, gps.lon) if gps.hasFix else (47.6062, -122.3321))
@@ -184,6 +192,7 @@ def main():
     eq = Equalizer(settings)
     phone = PhoneSend(args.maps_dir)
     wifi = Wifi(settings)
+    datause = DataUse(settings)
     system = SystemInfo()
     # A simulated drive around Seattle while there's no GPS receiver and no
     # engine data (a Mac, or a Pi on the bench).
@@ -191,6 +200,8 @@ def main():
     vehicle.set_gps(gps)          # its speed shows when the car isn't answering
     routing = Router(gps, settings)
     road = RoadInfo(gps)
+    updater = Updater(vehicle, gps, routing, system.restartDashboard)
+    system.hold_power_while(lambda: updater.updating)
     voice = Voice(settings)
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops
@@ -209,7 +220,9 @@ def main():
     ctx.setContextProperty("maps", maps)
     ctx.setContextProperty("eq", eq)
     ctx.setContextProperty("wifi", wifi)
+    ctx.setContextProperty("dataUse", datause)
     ctx.setContextProperty("system", system)
+    ctx.setContextProperty("updater", updater)
     ctx.setContextProperty("keyOff", key_off)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
@@ -232,9 +245,12 @@ def main():
 
     vehicle.start()
     media.start()
+    if scanner:
+        scanner.start()
     maps.start()
     eq.start()
     wifi.start()
+    datause.start()
     system.start()
     gps.start()
     routing.start()
@@ -248,10 +264,14 @@ def main():
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
+    updater.start()
     code = app.exec()
+    errorlog.log.flush()          # repeats still being counted go to the journal now
+    if scanner:
+        scanner.stop()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):
+    for obj in (vehicle, local, scanner or local, bluetooth, spotify, media, display, network, maps, eq, wifi, datause, system, updater, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

@@ -14,7 +14,8 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend import obd
-from backend.obd import BARO_DEFAULT, Elm, ObdReader, pid_supported
+from backend.obd import (BARO_DEFAULT, DTC_TEXT, Elm, ObdReader, convert, describe, parse_dtcs,
+                         pid_supported, refuse_writes)
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -48,6 +49,9 @@ class CannedElm(Elm):
         if not replies:
             return "NO DATA"
         return replies.pop(0) if len(replies) > 1 else replies[0]
+
+    def lines(self, command, timeout=3.0):
+        return [self.send(command, timeout)]
 
 
 def support(low=LOW, high=HIGH_WITH_BARO):
@@ -286,6 +290,458 @@ class StoppedEngineTest(unittest.TestCase):
     def test_a_reading_that_isnt_steady_never_counts(self):
         reader, kept = self.stopped([90, 92, 94, 96, 98])
         self.assertEqual((reader._baro, kept), (95.0, []))
+
+
+class Clock:
+    """A clock that only the reader's sleeps move."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class RetryWaitTest(unittest.TestCase):
+    def wait_after(self, quiet_s):
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + quiet_s):
+            return obd.retry_wait(1000.0)
+
+    def test_often_then_rarely_then_very_rarely(self):
+        self.assertEqual(self.wait_after(0), obd.RETRY_S)
+        self.assertEqual(self.wait_after(obd.SLOW_AFTER_S - 1), obd.RETRY_S)
+        self.assertEqual(self.wait_after(obd.SLOW_AFTER_S), obd.RETRY_SLOW_S)
+        self.assertEqual(self.wait_after(obd.SLOWEST_AFTER_S - 1), obd.RETRY_SLOW_S)
+        self.assertEqual(self.wait_after(obd.SLOWEST_AFTER_S), obd.RETRY_SLOWEST_S)
+        self.assertEqual(self.wait_after(86400), obd.RETRY_SLOWEST_S)
+
+    def test_a_charging_battery_keeps_the_slow_tier(self):
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + 86400):
+            self.assertEqual(obd.retry_wait(1000.0, charging=True), obd.RETRY_SLOW_S)
+            self.assertEqual(obd.retry_wait(1000.0, charging=False), obd.RETRY_SLOWEST_S)
+
+    def test_the_reader_stays_slow_while_its_last_battery_reading_is_charging(self):
+        reader = ObdReader()
+        reader._since = 1000.0
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + 86400):
+            reader._volts(CannedElm({"ATRV": "14.1V"}))
+            self.assertEqual(reader._retry(), obd.RETRY_SLOW_S)
+            reader._volts(CannedElm({"ATRV": "12.5V"}))
+            self.assertEqual(reader._retry(), obd.RETRY_SLOWEST_S)
+
+    def test_the_longest_wait_is_at_most_two_minutes(self):
+        self.assertLessEqual(obd.RETRY_SLOWEST_S, 120.0)
+        self.assertGreater(obd.RETRY_SLOWEST_S, obd.RETRY_SLOW_S)
+
+
+class Stop(Exception):
+    pass
+
+
+class HoldTest(unittest.TestCase):
+    """A held reader sends nothing; released, it carries on."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.sleeps = []
+        self.on_sleep = lambda n: None
+        p = mock.patch.object(obd.time, "monotonic", self.clock.monotonic)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(obd.time, "sleep", self.sleep)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(obd.os.path, "exists", lambda path: True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.reader = ObdReader()
+        self.reader._since = self.clock.now
+        self.volts = []
+        self.reader.voltage.connect(self.volts.append)
+
+    def sleep(self, seconds):
+        self.clock.sleep(seconds)
+        self.sleeps.append(seconds)
+        self.on_sleep(len(self.sleeps))
+
+    def test_held_wait_sends_nothing_then_resumes(self):
+        elm = CannedElm({"ATRV": "12.5V", "0100": "41 00 98 3A 80 13"})
+
+        def on_sleep(n):
+            if n == 20:
+                self.assertEqual(elm.asked, [])
+                self.reader.release()
+        self.on_sleep = on_sleep
+        self.reader.hold()
+        self.assertTrue(self.reader._wait(elm, "/dev/x"))
+        self.assertEqual(elm.asked, ["ATRV", "0100"])
+        self.assertEqual(self.volts, [12.5])
+        self.assertLessEqual(max(self.sleeps), 1.0)
+
+    def test_a_long_wait_sleeps_in_short_slices_and_asks_every_two_minutes(self):
+        elm = CannedElm({"ATRV": "12.5V"})
+        self.clock.now += obd.SLOWEST_AFTER_S + 1       # parked a long while
+        self.reader._since = 1000.0
+
+        def on_sleep(n):
+            if self.clock.now > 1000.0 + obd.SLOWEST_AFTER_S + 300:
+                raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._wait(elm, "/dev/x")
+        self.assertLessEqual(max(self.sleeps), 1.0)
+        asks = elm.asked.count("0100")
+        self.assertIn(asks, (3, 4))                     # about every 120 s over 300 s
+        self.assertEqual(elm.asked.count("ATRV"), asks)  # the battery with each try
+
+    def test_hold_stops_the_battery_reads_too(self):
+        elm = CannedElm({"ATRV": "12.5V"})
+
+        def on_sleep(n):
+            if n == 3:
+                self.reader.hold()
+                self.asked_at_hold = len(elm.asked)
+            if n == 50:
+                raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._wait(elm, "/dev/x")
+        self.assertGreater(self.asked_at_hold, 0)
+        self.assertEqual(len(elm.asked), self.asked_at_hold)
+
+    def test_held_poll_sends_nothing_then_resumes(self):
+        elm = CannedElm(IDLING, rounds=3)
+        readings = []
+        self.reader.reading.connect(readings.append)
+
+        def on_sleep(n):
+            if n == 10:
+                self.assertEqual(elm.asked, [])
+                self.reader.release()
+        self.on_sleep = on_sleep
+        self.reader.hold()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.reader._poll(elm)
+        self.assertTrue(readings)
+
+    def test_a_hold_mid_round_sends_no_more(self):
+        elm = CannedElm(IDLING)
+        self.reader._start_baro = lambda elm: None
+        self.reader._read_codes = lambda elm, state: self.reader.hold()
+        readings = []
+        self.reader.reading.connect(readings.append)
+
+        def on_sleep(n):
+            raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._poll(elm)
+        self.assertEqual(elm.asked, [])
+        self.assertEqual(readings, [])
+
+
+class ConvertTest(unittest.TestCase):
+    def test_rpm_is_quarters(self):
+        self.assertEqual(convert(0x0C, [0x0C, 0x80]), ("rpm", 800.0))
+        self.assertEqual(convert(0x0C, [0x1A, 0xF8]), ("rpm", 1726.0))
+        self.assertEqual(convert(0x0C, [0, 0]), ("rpm", 0.0))
+
+    def test_manifold_pressure_is_kpa_as_is(self):
+        self.assertEqual(convert(0x0B, [40]), ("map", 40))
+
+    def test_speed_is_mph(self):
+        self.assertEqual(convert(0x0D, [0]), ("speed", 0.0))
+        name, mph = convert(0x0D, [100])
+        self.assertEqual(name, "speed")
+        self.assertAlmostEqual(mph, 62.1371, places=3)
+
+    def test_temperatures_are_fahrenheit_from_an_offset_celsius(self):
+        for pid, name in ((0x05, "coolant"), (0x0F, "intake")):
+            self.assertEqual(convert(pid, [40]), (name, 32.0))          # 0 C
+            self.assertEqual(convert(pid, [140]), (name, 212.0))        # 100 C
+            self.assertEqual(convert(pid, [0]), (name, -40.0))          # -40 C is -40 F
+
+    def test_a_pid_it_doesnt_know(self):
+        self.assertEqual(convert(0x33, [100]), (None, None))
+
+
+class PidReplyTest(unittest.TestCase):
+    """Elm.pid finds the data bytes in whatever the adapter sends back."""
+
+    def pid(self, pid, reply):
+        return CannedElm({f"01{pid:02X}": reply}).pid(pid)
+
+    def test_with_spaces(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F8"), [0x1A, 0xF8])
+
+    def test_without_spaces(self):
+        self.assertEqual(self.pid(0x0C, "410C1AF8"), [0x1A, 0xF8])
+
+    def test_a_header_before_the_answer(self):
+        # The adapter is set to ATH0, so headers shouldn't appear, but if a CAN id and
+        # length or K-line header bytes do, the answer is still found. (Real K-line
+        # frames end in a checksum, which ATH0 also strips; the byte after the
+        # data here is just more data.)
+        self.assertEqual(self.pid(0x0C, "7E8 04 41 0C 1A F8"), [0x1A, 0xF8])
+        self.assertEqual(self.pid(0x0D, "48 6B 10 41 0D 32 AB"), [0x32, 0xAB])
+
+    def test_a_search_banner_before_the_answer(self):
+        self.assertEqual(self.pid(0x0B, "SEARCHING... 41 0B 28"), [0x28])
+
+    def test_no_answer(self):
+        for reply in ("NO DATA", "UNABLE TO CONNECT", "?", "", "BUS INIT: ERROR"):
+            self.assertIsNone(self.pid(0x0C, reply), reply)
+
+    def test_the_answer_to_another_pid(self):
+        self.assertIsNone(self.pid(0x0C, "41 0D 32"))
+
+    def test_a_head_with_no_data(self):
+        self.assertIsNone(self.pid(0x0C, "41 0C"))
+
+    def test_junk_after_the_data_ends_it(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F8 ZZ"), [0x1A, 0xF8])
+
+    def test_an_odd_nibble_at_the_end_is_ignored(self):
+        self.assertEqual(self.pid(0x0C, "41 0C 1A F"), [0x1A])
+
+    def test_a_single_digit_pid_is_padded_in_the_request(self):
+        elm = CannedElm({"0105": "41 05 5F"})
+        self.assertEqual(elm.pid(0x05), [0x5F])
+        self.assertEqual(elm.asked, ["0105"])
+
+
+class WireElm(Elm):
+    """A real Elm (its guard and reply handling) without a serial port:
+    `_io` is the only thing replaced, and records what would be sent.
+    `replies` maps a command to the reply's lines."""
+
+    def __init__(self, replies, rounds=None):
+        self.replies, self.rounds, self.sent = dict(replies), rounds, []
+
+    def _io(self, command, timeout):
+        self.sent.append(command)
+        if self.rounds is not None and self.sent.count("010C") > self.rounds:
+            return ["NO DATA"]
+        return list(self.replies.get(command, ["NO DATA"]))
+
+
+class RefuseWritesTest(unittest.TestCase):
+    def test_anything_but_modes_01_03_07_is_refused(self):
+        for command in ("04", "0400", "04 ", " 04", "14", "0A", "02", "05", "08", "09", "0405", "10", "",
+                        "0", "ZZ", "01ZZ", "ST", "ST04", "ATZ\r04", "0100\r04", "03\n04", "ATZ\n04", "ATZ\r"):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                refuse_writes(command)
+
+    def test_reads_and_adapter_commands_pass(self):
+        for command in ("0100", "0105", "010C", "03", "07", "03 ", "ATRV", "ATZ", "atsp0", "AT SP 0"):
+            with self.subTest(command=command):
+                refuse_writes(command)
+
+    def test_a_real_elm_never_writes_a_clear(self):
+        elm = Elm.__new__(Elm)
+        elm.fd = 99
+        with mock.patch.object(obd.os, "write") as write, mock.patch.object(obd.termios, "tcflush"):
+            for command in ("04", "0400", "04 "):
+                with self.assertRaises(ValueError):
+                    elm.send(command)
+                with self.assertRaises(ValueError):
+                    elm.lines(command)
+        write.assert_not_called()
+
+    def test_a_real_elm_writes_a_read(self):
+        elm = Elm.__new__(Elm)
+        elm.fd = 99
+        with mock.patch.object(obd.os, "write") as write, mock.patch.object(obd.termios, "tcflush"), \
+                mock.patch.object(obd.select, "select", return_value=([99], [], [])), \
+                mock.patch.object(obd.os, "read", return_value=b"43 00\r\r>"):
+            self.assertEqual(elm.send("03"), "43 00")
+        write.assert_called_once_with(99, b"03\r")
+
+
+class DtcParseTest(unittest.TestCase):
+    def test_a_k_line_reply_with_padding(self):
+        self.assertEqual(parse_dtcs(["43 03 01 00 00 00 00"], "43"), ["P0301"])   # no count byte: 6 bytes
+        self.assertEqual(parse_dtcs(["43 01 33 02 01 00 00"], "43"), ["P0133", "P0201"])
+
+    def test_the_letters_and_digits(self):
+        for hexes, code in (("0123", "P0123"), ("1234", "P1234"), ("2345", "P2345"), ("3456", "P3456"),
+                            ("4123", "C0123"), ("7FFF", "C3FFF"), ("8123", "B0123"), ("A123", "B2123"),
+                            ("C123", "U0123"), ("FFFF", "U3FFF")):
+            with self.subTest(code=code):
+                self.assertEqual(parse_dtcs(["43 " + hexes + " 00 00 00 00"], "43"), [code])
+
+    def test_pending_uses_head_47(self):
+        self.assertEqual(parse_dtcs(["47 04 20 00 00 00 00"], "47"), ["P0420"])
+        self.assertEqual(parse_dtcs(["47 04 20 00 00 00 00"], "43"), [])
+
+    def test_a_can_count_byte_is_skipped(self):
+        self.assertEqual(parse_dtcs(["43 01 03 01 00 00"], "43"), ["P0301"])
+        self.assertEqual(parse_dtcs(["43 02 03 01 04 20"], "43"), ["P0301", "P0420"])
+        self.assertEqual(parse_dtcs(["43 00"], "43"), [])
+
+    def test_a_multi_frame_reply(self):
+        lines = ["00A", "0: 43 03 01 33 01 71", "1: 04 20 00 00 00 00 00"]
+        self.assertEqual(parse_dtcs(lines, "43"), ["P0133", "P0171", "P0420"])
+
+    def test_a_multi_frame_reply_with_an_even_length(self):
+        lines = ["00B", "0: 43 04 01 33 01 71", "1: 04 20 03 01 00 00 00"]
+        self.assertEqual(parse_dtcs(lines, "43"), ["P0133", "P0171", "P0420", "P0301"])
+        self.assertEqual(parse_dtcs(["008", "0: 43 00 00 00 00 00", "1: 00 00 00 00"], "43"), [])
+
+    def test_several_engine_computers_and_repeats(self):
+        lines = ["43 03 01 00 00 00 00", "43 03 01 01 71 00 00"]
+        self.assertEqual(parse_dtcs(lines, "43"), ["P0301", "P0171"])
+
+    def test_no_data_and_junk_give_none(self):
+        for junk in (["NO DATA"], [], ["SEARCHING..."], ["43 0Z 01"], ["UNABLE TO CONNECT"], ["43 0"], ["?"],
+                     ["43"], ["1: 43 03 01"]):
+            with self.subTest(junk=junk):
+                self.assertEqual(parse_dtcs(junk, "43"), [])
+
+    def test_a_banner_before_the_reply(self):
+        self.assertEqual(parse_dtcs(["SEARCHING...", "43 03 01 00 00 00 00"], "43"), ["P0301"])
+
+
+class DtcTextTest(unittest.TestCase):
+    def test_known_codes_have_text(self):
+        self.assertEqual(describe("P0301"), "Cylinder 1 misfire")
+        self.assertEqual(describe("p0420"), "Catalyst efficiency low")
+
+    def test_others_have_none(self):
+        self.assertEqual(describe("P1234"), "")
+        self.assertEqual(describe(""), "")
+
+    def test_the_table_is_short_and_generic(self):
+        self.assertGreaterEqual(len(DTC_TEXT), 40)
+        for code, text in DTC_TEXT.items():
+            self.assertRegex(code, r"^P0[0-9A-F]{3}$")
+            self.assertTrue(text)
+            self.assertLess(len(text), 45)
+
+
+class MilTest(unittest.TestCase):
+    def mil(self, reply):
+        return WireElm({"0101": [reply]}).mil()
+
+    def test_lamp_on_and_the_count(self):
+        self.assertEqual(self.mil("41 01 83 07 E5 00"), (True, 3))
+
+    def test_two_computers_the_lamp_and_counts_combine(self):
+        elm = WireElm({"0101": ["41 01 00 00 00 00", "41 01 82 07 E5 00"]})     # the transmission first
+        self.assertEqual(elm.mil(), (True, 2))
+        elm = WireElm({"0101": ["41 01 81 07 E5 00", "41 01 02 00 00 00"]})
+        self.assertEqual(elm.mil(), (True, 3))
+
+    def test_a_transmission_computer_alone(self):
+        self.assertEqual(self.mil("41 01 00 00 00 00"), (False, 0))
+
+    def test_lamp_off(self):
+        self.assertEqual(self.mil("41 01 00 07 65 00"), (False, 0))
+        self.assertEqual(self.mil("41 01 02 07 65 00"), (False, 2))     # stored but not lit
+
+    def test_no_answer(self):
+        self.assertIsNone(self.mil("NO DATA"))
+        self.assertIsNone(WireElm({}).mil())
+
+    def test_dtcs_ask_the_right_modes_and_only_those(self):
+        elm = WireElm({"03": ["43 01 33 00 00 00 00"], "07": ["47 03 01 00 00 00 00"]})
+        self.assertEqual(elm.dtcs("03"), ["P0133"])
+        self.assertEqual(elm.dtcs("07"), ["P0301"])
+        self.assertEqual(elm.sent, ["03", "07"])
+        with self.assertRaises(ValueError):
+            elm.dtcs("04")
+        self.assertEqual(elm.sent, ["03", "07"])
+
+
+class ReadingCodesTest(unittest.TestCase):
+    WITH_CODES = {**IDLING, "0101": ["41 01 82 07 E5 00"], "03": ["43 03 01 01 71 00 00"],
+                  "07": ["47 04 20 00 00 00 00"]}
+
+    def collect(self, reader):
+        got = []
+        reader.codes.connect(got.append)
+        return got
+
+    def test_a_poll_reads_the_codes_once_and_never_sends_mode_04(self):
+        reader, elm = ObdReader(), WireElm(self.WITH_CODES, rounds=6)
+        got = self.collect(reader)
+        poll(reader, elm)
+        self.assertEqual(got, [{"mil": True, "count": 2, "stored": ["P0301", "P0171"], "pending": ["P0420"]}])
+        self.assertEqual(elm.sent.count("0101"), 1)             # a minute hasn't passed
+        self.assertFalse([c for c in elm.sent if c.startswith("04")])
+        self.assertTrue(all(c[:2] in ("01", "03", "07") or c.startswith("AT") for c in elm.sent))
+
+    def test_a_car_without_pid_01_isnt_given_up_on(self):
+        reader, elm = ObdReader(), WireElm(IDLING, rounds=6)
+        got = self.collect(reader)
+        readings, _ = poll(reader, elm)
+        self.assertEqual(got, [])
+        self.assertEqual(len(readings), 6)
+
+    def test_codes_are_emitted_only_when_the_count_changes(self):
+        reader, elm, state = ObdReader(), WireElm(self.WITH_CODES), [None, None, None]
+        got = self.collect(reader)
+        with mock.patch.object(obd, "CODES_EVERY_S", 0):
+            reader._read_codes(elm, state)
+            reader._read_codes(elm, state)                      # same count: nothing new
+            self.assertEqual(got[0], got[1])                    # said again, not read again
+            self.assertEqual(elm.sent, ["0101", "03", "07", "0101"])
+            elm.replies["0101"] = ["41 01 00 07 E5 00"]         # cleared at the shop
+            elm.replies["07"] = ["NO DATA"]
+            reader._read_codes(elm, state)
+        self.assertEqual(got[2], {"mil": False, "count": 0, "stored": [], "pending": []})
+        self.assertNotIn("03", elm.sent[4:])                    # nothing stored to read
+
+    def test_the_lamp_changing_with_the_same_count_reads_again(self):
+        reader, elm, state = ObdReader(), WireElm(self.WITH_CODES), [None, None, None]
+        got = self.collect(reader)
+        with mock.patch.object(obd, "CODES_EVERY_S", 0):
+            reader._read_codes(elm, state)
+            elm.replies["0101"] = ["41 01 02 07 E5 00"]         # same count, lamp out
+            reader._read_codes(elm, state)
+        self.assertEqual([g["mil"] for g in got], [True, False])
+        self.assertEqual(elm.sent.count("03"), 2)
+
+    def test_stored_codes_that_didnt_come_are_asked_for_again(self):
+        reader, elm, state = ObdReader(), WireElm({**self.WITH_CODES, "03": ["NO DATA"]}), [None, None, None]
+        got = self.collect(reader)
+        with mock.patch.object(obd, "CODES_EVERY_S", 0):
+            reader._read_codes(elm, state)
+            self.assertEqual(got[0]["mil"], True)               # the lamp is still said
+            self.assertEqual(got[0]["stored"], [])
+            elm.replies["03"] = ["43 03 01 01 71 00 00"]
+            reader._read_codes(elm, state)
+        self.assertEqual(got[1]["stored"], ["P0301", "P0171"])
+        self.assertEqual(elm.sent.count("03"), 2)
+
+    def test_the_last_result_is_said_again_when_the_car_doesnt_answer_pid_01(self):
+        reader, elm, state = ObdReader(), WireElm(self.WITH_CODES), [None, None, None]
+        got = self.collect(reader)
+        with mock.patch.object(obd, "CODES_EVERY_S", 0):
+            reader._read_codes(elm, state)
+            elm.replies["0101"] = ["NO DATA"]
+            reader._read_codes(elm, state)
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0], got[1])
+
+    def test_not_asked_again_within_the_interval(self):
+        reader, elm, state = ObdReader(), WireElm(self.WITH_CODES), [None, None, None]
+        reader._read_codes(elm, state)
+        elm.sent.clear()
+        reader._read_codes(elm, state)
+        self.assertEqual(elm.sent, [])
+
+    def test_a_failed_first_read_is_tried_again_later(self):
+        reader, elm, state = ObdReader(), WireElm(IDLING), [None, None, None]
+        got = self.collect(reader)
+        with mock.patch.object(obd, "CODES_EVERY_S", 0):
+            reader._read_codes(elm, state)
+            elm.replies["0101"] = ["41 01 00 00 00 00"]
+            reader._read_codes(elm, state)
+        self.assertEqual(got, [{"mil": False, "count": 0, "stored": [], "pending": []}])
 
 
 if __name__ == "__main__":

@@ -113,7 +113,7 @@ QtObject {
     readonly property int fontSmall: 24       // times, units, secondary lines
     readonly property int fontBody: 30        // artists, list rows, settings text
     readonly property int fontTitle: 40       // page and card titles, track titles
-    readonly property int fontHero: 56        // the Music page track title, place names
+    readonly property int fontHero: 56        // place names (Maps), the Baja OS title in Settings
     readonly property int fontReadout: 56     // readout numerals
     readonly property int fontHuge: 88        // distance to the next turn
 }

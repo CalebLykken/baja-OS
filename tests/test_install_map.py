@@ -51,6 +51,8 @@ class SwapInTest(unittest.TestCase):
         write(self.live / "basemap.pmtiles", "old tiles")
         write(self.live / "region.json", "old region")
         write(self.live / "places.sqlite", "old index")
+        write(self.live / "addresses.sqlite", "old addresses")
+        write(self.live / "controls.geojson", "old signs")
         write(self.live / "fonts" / "Noto Sans Regular" / "0-255.pbf", "old glyphs")
         write(self.live / "fonts" / "stale.txt", "gone in the new build")
         write(self.live / "sprites" / "v4" / "sprite.json", "old sprites")
@@ -58,7 +60,8 @@ class SwapInTest(unittest.TestCase):
     def built(self, skip=()):
         """What install-map.sh leaves in .new."""
         files = {"basemap.pmtiles": "new tiles", "region.json": "new region",
-                 "places.sqlite": "new index",
+                 "places.sqlite": "new index", "addresses.sqlite": "new addresses",
+                 "controls.geojson": "new signs",
                  "fonts/Noto Sans Regular/0-255.pbf": "new glyphs",
                  "sprites/v4/sprite.json": "new sprites"}
         for name, text in files.items():
@@ -86,6 +89,8 @@ class SwapInTest(unittest.TestCase):
         self.assertEqual(self.read("basemap.pmtiles"), "new tiles")
         self.assertEqual(self.read("region.json"), "new region")
         self.assertEqual(self.read("places.sqlite"), "new index")
+        self.assertEqual(self.read("addresses.sqlite"), "new addresses")
+        self.assertEqual(self.read("controls.geojson"), "new signs")
         self.assertEqual(self.read("fonts/Noto Sans Regular/0-255.pbf"), "new glyphs")
         self.assertEqual(self.read("sprites/v4/sprite.json"), "new sprites")
 
@@ -95,7 +100,8 @@ class SwapInTest(unittest.TestCase):
         self.swap()
         self.assertFalse((self.live / "fonts" / "stale.txt").exists())
         self.assertEqual(sorted(p.name for p in self.live.iterdir() if p.name != ".new"),
-                         ["basemap.pmtiles", "fonts", "places.sqlite", "region.json", "sprites"])
+                         ["addresses.sqlite", "basemap.pmtiles", "controls.geojson", "fonts",
+                          "places.sqlite", "region.json", "sprites"])
         self.assertEqual(list(self.new.iterdir()), [])
 
     def test_the_tiles_come_last_and_the_old_folders_are_never_deleted_first(self):
@@ -104,15 +110,16 @@ class SwapInTest(unittest.TestCase):
         self.swap()
         # Each folder: the old one renamed aside, the new one renamed in.
         self.assertEqual(self.renames(), ["fonts.old", "fonts", "sprites.old", "sprites",
-                                          "places.sqlite", "region.json", "basemap.pmtiles"])
+                                          "places.sqlite", "addresses.sqlite", "controls.geojson",
+                                          "region.json", "basemap.pmtiles"])
 
     def test_a_first_install_works_and_the_tiles_still_come_last(self):
         self.live.mkdir()
         self.built()
         done = self.swap()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.renames(), ["fonts", "sprites", "places.sqlite", "region.json",
-                                          "basemap.pmtiles"])
+        self.assertEqual(self.renames(), ["fonts", "sprites", "places.sqlite", "addresses.sqlite",
+                                          "controls.geojson", "region.json", "basemap.pmtiles"])
         self.assertEqual(self.read("basemap.pmtiles"), "new tiles")
 
     def test_what_the_build_doesnt_have_stays_as_it_was(self):
@@ -123,6 +130,18 @@ class SwapInTest(unittest.TestCase):
         self.assertEqual(self.read("places.sqlite"), "old index")
         self.assertEqual(self.read("basemap.pmtiles"), "new tiles")
 
+    def test_a_build_without_addresses_and_signs_leaves_the_live_ones(self):
+        # install-map.sh skips them when the routing tools aren't installed
+        # or their builders failed.
+        self.installed()
+        self.built(skip=("addresses.sqlite", "controls.geojson"))
+        done = self.swap()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.read("addresses.sqlite"), "old addresses")
+        self.assertEqual(self.read("controls.geojson"), "old signs")
+        self.assertEqual(self.read("region.json"), "new region")
+        self.assertNotIn("addresses.sqlite", self.renames())
+
     def test_a_leftover_from_an_interrupted_swap_doesnt_get_in_the_way(self):
         self.installed()
         write(self.live / "fonts.old" / "junk.txt", "from a swap that was cut off")
@@ -131,6 +150,14 @@ class SwapInTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertFalse((self.live / "fonts.old").exists())
         self.assertEqual(self.read("fonts/Noto Sans Regular/0-255.pbf"), "new glyphs")
+
+    def test_a_swap_cut_off_between_its_renames_gets_the_old_folder_back(self):
+        self.installed()
+        (self.live / "fonts").rename(self.live / "fonts.old")        # killed here; .new is gone
+        done = self.swap()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.read("fonts/Noto Sans Regular/0-255.pbf"), "old glyphs")
+        self.assertFalse((self.live / "fonts.old").exists())
 
     def test_fonts_that_wont_move_in_leave_the_old_ones_and_the_old_tiles(self):
         self.installed()
@@ -146,6 +173,15 @@ class SwapInTest(unittest.TestCase):
         for name in ("install-map.sh", "swap-in.sh"):
             done = subprocess.run(["sh", "-n", str(MAPS / name)], capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_failed_address_build_doesnt_stop_the_update(self):
+        script = (MAPS / "install-map.sh").read_text()
+        # Each builder is followed by "|| echo": set -eu mustn't end the update.
+        self.assertEqual(script.count('"$work" \\\n        || echo'), 2)
+        self.assertIn("Skipping street addresses and signs", script)
+        # After the places index, before the swap.
+        self.assertLess(script.index("Indexing places"), script.index("build_addresses.py"))
+        self.assertLess(script.index("build_controls.py"), script.index('sh "$APP/deploy/maps/swap-in.sh"'))
 
     def test_the_build_is_next_to_the_live_files_not_in_tmp(self):
         script = (MAPS / "install-map.sh").read_text()

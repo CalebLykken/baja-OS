@@ -3,8 +3,9 @@
 `MediaPlayer` fakes a playlist so the music screens have something to show
 (on a Mac; the truck only shows what's real). Given an empty queue it's an
 empty player instead: nothing playing, and every key does nothing.
-Later this becomes a real player (MPD, a Bluetooth/AirPlay sink, or Spotify
-audio metadata), and `volumeUp`/`volumeDown` get wired to the dash knob.
+The real players are backend/library.py (local files), bluetooth.py (phone)
+and spotify.py; this is the stand-in the UI shows when none is wired.
+`volumeUp`/`volumeDown` are what the dash knob drives.
 """
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
@@ -27,6 +28,7 @@ class MediaPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()             # never: the demo has no albums
+    modesChanged = pyqtSignal()             # never: the demo plays in order
 
     def __init__(self, queue=None, parent=None):
         """The demo playlist, or `queue` (a list of {title, artist, duration};
@@ -111,6 +113,34 @@ class MediaPlayer(QObject):
     @pyqtProperty("QVariantList", constant=True)
     def queue(self):
         return self._queue
+
+    @pyqtProperty(bool, constant=True)
+    def hasModes(self):
+        return False
+
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        """AVRCP has no seek: the bar stays inert."""
+        return False
+
+    @pyqtProperty(bool, constant=True)
+    def shuffle(self):
+        return False
+
+    @pyqtProperty(str, constant=True)
+    def repeat(self):
+        return "all"
+
+    def set_modes(self, shuffle, repeat):
+        pass
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        pass
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        pass
 
     @pyqtProperty("QVariantList", constant=True)
     def albums(self):

@@ -87,6 +87,7 @@ class SpotifyPlayer(QObject):
         self._device = ""
         self._item = {}
         self._status = "idle"
+        self._error = ""      # short message after a Soloist error, until playback moves on
         self._pos = (0, 0.0, 0.0)       # position_ms, at (local monotonic s), speed
         self._volume = 0
         self._up_next = []
@@ -180,12 +181,15 @@ class SpotifyPlayer(QObject):
             self.queueChanged.emit()
         elif kind == "error":
             print(f"Spotify: {ev.get('message')}")
+            self._error = "Spotify isn't answering right now"
+            self.changed.emit()
 
     def _set_item(self, item):
         item = item if isinstance(item, dict) else {}
         if item != self._item:
             self._item = item
             self.trackChanged.emit()
+            self._clear_error()
             self._command("get_queue", limit=10)
             if self._fill_subtitle():
                 self.recentsChanged.emit()
@@ -226,9 +230,20 @@ class SpotifyPlayer(QObject):
                          if isinstance(r, dict) and r.get("uri")][:RECENTS_MAX]
         self.recentsChanged.emit()
 
+    @pyqtProperty(str, notify=changed)
+    def error(self):
+        """A short message when Soloist reported an error (offline, rate limited), else ''."""
+        return self._error
+
+    def _clear_error(self):
+        if self._error:
+            self._error = ""
+            self.changed.emit()
+
     def _set_status(self, status):
         if status and status != self._status:
             self._status = status
+            self._clear_error()
             self.playingChanged.emit()
 
     def _set_position(self, pos):
@@ -342,7 +357,15 @@ class SpotifyPlayer(QObject):
 
     @pyqtSlot(int)
     def seek(self, seconds):
-        self._command("seek", position_ms=max(0, int(seconds)) * 1000)
+        ms = max(0, int(seconds)) * 1000
+        self._command("seek", position_ms=ms)
+        # Show it now rather than when the server's next event arrives.
+        self._pos = (ms, time.monotonic(), self._pos[2])
+        self.positionChanged.emit()
+
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        return True
 
     @pyqtSlot(int)
     def setVolume(self, value):

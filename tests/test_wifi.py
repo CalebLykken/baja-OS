@@ -16,7 +16,9 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import HOTSPOT_ADDRESS, IPHONE_GATEWAY, Wifi, scan
+from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
+                          WATCH_EVERY_MS, Wifi, scan, split_terse, valid_ssid)
+from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -180,6 +182,117 @@ class FakeNM:
 
     def ran(self, *words):
         return [a for a in self.calls if all(w in a for w in words)]
+
+
+class SignalsTest(unittest.TestCase):
+    """NetworkManager's signals drive the watchdog, faked at the bus: it polls
+    as before without them, and the tethering deadlines still hold with them."""
+
+    def setUp(self):
+        self.nm = FakeNM()
+        self.clock = 1000.0
+        self.wifi = Wifi({})
+        self.wifi._available = True
+        self.wifi._settings = mock.Mock()
+        INLINE.start()
+        mock.patch("backend.wifi.nmcli", self.nm).start()
+        mock.patch("backend.wifi.time", SimpleNamespace(monotonic=lambda: self.clock)).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+        self.addCleanup(self.wifi._watch_timer.stop)
+
+    def started(self, bus):
+        with on_bus(bus):
+            self.wifi.start()
+        self.nm.calls.clear()
+
+    def interval(self):
+        return self.wifi._watch_timer.interval()
+
+    def wait(self):
+        """Sit out the timer as it's set, on the fake clock."""
+        self.clock += self.interval() / 1000
+        self.wifi._watch()
+
+    def test_a_signal_reads_the_list(self):
+        self.started(FakeBus())
+        self.wifi._nm._on_signal()
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+        self.wifi._nm._fire()
+        self.assertEqual(self.nm.ran("UUID,NAME,TYPE,DEVICE,STATE"), [("-t", "-f", "UUID,NAME,TYPE,DEVICE,STATE",
+                                                                      "connection", "show")])
+        self.assertEqual(self.nm.rescans(), [])
+
+    def test_a_signal_during_a_poll_reads_again_after_it(self):
+        self.started(FakeBus())
+        self.wifi._polling = True
+        self.wifi._signalled()
+        self.assertEqual(self.nm.calls, [])
+        self.wifi._on_polled(None)
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+
+    def test_without_a_bus_it_polls_as_often_as_ever(self):
+        self.started(None)
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+        self.assertTrue(self.wifi._watch_timer.isActive())
+
+    def test_with_signals_and_nothing_to_decide_it_relaxes(self):
+        self.started(FakeBus())
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+        self.assertTrue(self.wifi._watch_timer.isActive())
+
+    def test_a_failed_read_goes_back_to_the_quick_poll(self):
+        self.started(FakeBus())
+        self.wifi._on_polled(None)
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+
+    def test_network_manager_stopped_means_the_quick_poll(self):
+        bus = FakeBus()
+        self.started(bus)
+        bus.running = False
+        self.wifi._watch()
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+
+    def test_no_wifi_and_no_phone_is_nothing_to_wait_for(self):
+        self.nm.wifi_up = False
+        self.started(FakeBus())
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+
+    def test_the_phone_comes_up_on_time_with_no_signal_to_prompt_it(self):
+        self.nm.tether, self.nm.wifi_up = True, False
+        self.started(FakeBus())
+        self.wifi._watch()                                 # learns the permission
+        started = self.clock
+        while not self.nm.ran("connection", "up"):
+            self.wait()
+            self.assertLess(self.clock - started, TETHER_AFTER_S + WATCH_EVERY_MS / 1000 + 2)
+
+    def test_the_phone_is_let_go_on_time_with_no_signal_to_prompt_it(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, True, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        started = self.clock
+        while self.nm.tether_up:
+            self.wait()
+            self.assertLess(self.clock - started, UNTETHER_AFTER_S + WATCH_EVERY_MS / 1000 + 2)
+
+    def test_once_tethered_with_no_wifi_it_relaxes(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, False, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+
+    def test_switching_tethering_off_acts_without_waiting_for_the_safety_poll(self):
+        self.nm.tether, self.nm.wifi_up, self.nm.tether_up = True, False, True
+        self.started(FakeBus())
+        self.wifi._watch()
+        self.wifi.setTethering(False)
+        self.assertTrue(self.wifi._nm._timer.isActive())
+        self.wifi._nm._timer.stop()
+        self.wifi._nm._fire()
+        self.assertFalse(self.nm.tether_up)
 
 
 class RadioTest(unittest.TestCase):
@@ -404,6 +517,119 @@ class WrongPasswordTest(unittest.TestCase):
         self.join("Phone", "hunter22", 4, "Error: Secrets were required, but not provided.")
         self.assertEqual(self.wifi.message, "Wrong password for Phone")
         self.assertEqual(self.asked, [])
+
+
+class HiddenNetworkTest(unittest.TestCase):
+    """A network typed in by hand joins with `hidden yes`, the password on stdin."""
+
+    def setUp(self):
+        self.wifi = Wifi({})
+        self.wifi._available = False
+        INLINE.start()
+        self.addCleanup(mock.patch.stopall)
+        self.calls = []
+
+    def fake(self, *args, input=None, timeout=10):
+        self.calls.append((args, input))
+        return self.rc, "", self.err
+
+    def join(self, ssid, password, rc=0, err=""):
+        self.rc, self.err = rc, err
+        with mock.patch("backend.wifi.nmcli", self.fake):
+            self.wifi.joinHidden(ssid, password)
+
+    def test_joins_with_hidden_yes_and_the_password_on_stdin(self):
+        self.join("Secret Net", "hunter22")
+        args, stdin = self.calls[0]
+        self.assertEqual(args, ("--ask", "device", "wifi", "connect", "Secret Net", "hidden", "yes"))
+        self.assertEqual(stdin, "hunter22\n")
+        self.assertNotIn("hunter22", " ".join(a for c, _ in self.calls for a in c))
+        self.assertEqual(self.wifi.message, "Connected to Secret Net")
+
+    def test_an_open_hidden_network_sends_no_password(self):
+        self.join("Open", "")
+        self.assertEqual(self.calls[0], (("device", "wifi", "connect", "Open", "hidden", "yes"), None))
+
+    def test_a_wrong_password_says_so_and_frees_the_page(self):
+        self.join("Secret Net", "nope", 4, "Error: Secrets were required, but not provided.")
+        self.assertEqual(self.wifi.message, "Wrong password for Secret Net")
+        self.assertEqual(self.wifi.busy, "")
+
+    def test_the_name_goes_to_nmcli_as_one_argument(self):
+        self.join("a; reboot $(x)", "hunter22")
+        self.assertEqual(self.calls[0][0][4], "a; reboot $(x)")
+
+    def test_a_bad_name_never_reaches_nmcli(self):
+        for bad in ("", "x" * 33, "a\nb", "a\x00b"):
+            self.join(bad, "hunter22")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.wifi.message, "That isn't a valid network name")
+
+    def test_a_saved_network_of_that_name_is_replaced(self):
+        self.wifi._saved = [{"uuid": "u1", "ssid": "Secret Net", "type": "802-11-wireless"}]
+        self.join("Secret Net", "hunter22")
+        self.assertEqual(self.calls[0][0], ("connection", "delete", "uuid", "u1"))
+
+    def join_seq(self, results):
+        """joinHidden with nmcli answering from results, one per call."""
+        it = iter(results)
+
+        def fake(*args, input=None, timeout=10):
+            self.calls.append((args, input))
+            return next(it, (0, "", ""))
+        with mock.patch("backend.wifi.nmcli", fake), \
+                mock.patch("backend.wifi.time.sleep") as sleep:
+            self.wifi.joinHidden("Secret Net", "hunter22")
+        return sleep
+
+    def test_a_missed_first_scan_is_retried_after_a_pause(self):
+        sleep = self.join_seq([(10, "", "Error: No network with SSID 'Secret Net' found."),
+                               (10, "", "Error: Failed to scan hidden SSID"), (0, "", "")])
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(5)
+        tries = [c for c in self.calls if c[0][0] == "--ask"]
+        self.assertEqual([t[1] for t in tries], ["hunter22\n"] * 3)
+        self.assertEqual(self.wifi.message, "Connected to Secret Net")
+
+    def test_the_retries_stop_after_two_and_the_page_is_freed(self):
+        miss = (10, "", "Error: No network with SSID 'Secret Net' found.")
+        sleep = self.join_seq([miss] * 5)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(len([c for c in self.calls if c[0][0] == "--ask"]), 3)
+        self.assertEqual(self.wifi.message, "Can't see Secret Net; is the hotspot on?")
+        self.assertEqual(self.wifi.busy, "")
+
+    def test_a_wrong_password_is_not_retried(self):
+        sleep = self.join_seq([(4, "", "Error: Secrets were required, but not provided.")])
+        self.assertEqual(sleep.call_count, 0)
+
+    def test_valid_ssid_counts_bytes(self):
+        self.assertTrue(valid_ssid("é" * 16))
+        self.assertFalse(valid_ssid("é" * 17))
+
+
+class SplitTerseTest(unittest.TestCase):
+    def test_plain_fields(self):
+        self.assertEqual(split_terse("*:Home:80:WPA2"), ["*", "Home", "80", "WPA2"])
+
+    def test_an_escaped_colon_stays_in_the_field(self):
+        self.assertEqual(split_terse(r"AA\:BB\:CC:Cafe\: Free:55"), ["AA:BB:CC", "Cafe: Free", "55"])
+
+    def test_empty_fields_are_kept(self):
+        self.assertEqual(split_terse(":Home::"), ["", "Home", "", ""])
+        self.assertEqual(split_terse(""), [""])
+
+    def test_a_colon_at_either_end_of_a_name(self):
+        self.assertEqual(split_terse(r"\:a\::1"), [":a:", "1"])
+
+    def test_an_escaped_backslash_is_one_backslash(self):
+        self.assertEqual(split_terse(r"C\\D:1"), ["C\\D", "1"])
+
+    def test_a_name_ending_in_a_backslash_still_ends(self):
+        # nmcli writes the name "ab\" as ab\\ and then the separator: the
+        # colon after an escaped backslash is a real one, but split_terse
+        # sees a backslash in front of it and keeps the two fields as one.
+        self.assertEqual(split_terse("ab\\\\:70"), ["ab\\", "70"])
 
 
 if __name__ == "__main__":

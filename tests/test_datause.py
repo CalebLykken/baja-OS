@@ -1,0 +1,160 @@
+"""Off-Pi tests for backend/datause.py with a fake /sys/class/net and clock.
+
+    python3 -m unittest tests.test_datause
+"""
+
+import os
+import shutil
+import tempfile
+import time
+import unittest
+
+from PyQt6.QtCore import QCoreApplication
+
+from backend.datause import DataUse, format_bytes
+
+app = QCoreApplication.instance() or QCoreApplication([])
+
+
+class FakeSettings:
+    def __init__(self):
+        self.d = {}
+
+    def get(self, k, default=None):
+        return self.d.get(k, default)
+
+    def set(self, k, v):
+        self.d[k] = v
+
+
+def stamp(y, m, d):
+    return time.mktime((y, m, d, 12, 0, 0, 0, 0, -1))
+
+
+class DataUseTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.now = stamp(2026, 10, 15)
+        self.settings = FakeSettings()
+
+    def iface(self, name, rx, tx):
+        d = os.path.join(self.root, name, "statistics")
+        os.makedirs(d, exist_ok=True)
+        for f, v in (("rx_bytes", rx), ("tx_bytes", tx)):
+            with open(os.path.join(d, f), "w") as fh:
+                fh.write(f"{v}\n")
+
+    def make(self):
+        return DataUse(self.settings, root=self.root, clock=lambda: self.now)
+
+    def test_missing_interfaces_show_nothing(self):
+        du = DataUse(self.settings, root=os.path.join(self.root, "nope"), clock=lambda: self.now)
+        du.sample()
+        self.assertFalse(du.available)
+
+    def test_ignores_other_interfaces(self):
+        self.iface("eth0", 5000, 5000)
+        du = self.make()
+        du.sample()
+        self.assertFalse(du.available)
+
+    def test_adds_wifi_and_tether_deltas(self):
+        self.iface("wlan0", 100, 50)
+        self.iface("bnep0", 10, 10)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 170)
+        self.iface("wlan0", 300, 150)
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 470)
+        self.assertTrue(du.available)
+
+    def test_counter_reset_counts_new_bytes(self):
+        self.iface("wlan0", 1000, 1000)
+        du = self.make()
+        du.sample()
+        self.iface("wlan0", 30, 20)         # rebooted
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 2050)
+
+    def test_a_tether_that_went_away_counts_from_zero_when_it_is_back(self):
+        self.iface("bnep0", 900, 100)
+        du = self.make()
+        du.sample()
+        shutil.rmtree(os.path.join(self.root, "bnep0"))
+        self.iface("wlan0", 10, 0)
+        du.sample()
+        self.assertNotIn("bnep0", du._last)
+        self.iface("bnep0", 1500, 0)        # a new connection, already past the old count
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 1000 + 10 + 1500)
+
+    def test_the_last_interface_going_away_is_saved_too(self):
+        self.iface("bnep0", 900, 100)
+        du = self.make()
+        du.sample()
+        shutil.rmtree(os.path.join(self.root, "bnep0"))
+        du.sample()
+        again = self.make()
+        self.assertEqual(again._last, {})
+
+    def test_an_unreadable_interface_keeps_its_place(self):
+        self.iface("wlan0", 500, 0)
+        du = self.make()
+        du.sample()
+        with open(os.path.join(self.root, "wlan0", "statistics", "rx_bytes"), "w") as f:
+            f.write("garbage")
+        du.sample()
+        self.iface("wlan0", 600, 0)
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 600)    # not 500 + 600
+
+    def test_month_rollover(self):
+        self.iface("wlan0", 100, 0)
+        du = self.make()
+        du.sample()
+        self.now = stamp(2026, 11, 1)
+        self.iface("wlan0", 150, 0)
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 50)
+
+    def test_survives_restart(self):
+        self.iface("wlan0", 100, 0)
+        self.make().sample()
+        self.iface("wlan0", 400, 0)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 400)
+
+    def test_earlier_month_clock_keeps_the_total(self):
+        self.iface("wlan0", 100, 0)
+        self.make().sample()
+        self.now = stamp(2026, 9, 1)       # the Pi's clock before it syncs
+        self.iface("wlan0", 150, 0)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 150)
+
+    def test_infinite_saved_bytes_starts_over(self):
+        self.settings.d["dataUse"] = '{"month": "2026-11", "bytes": Infinity, "last": {}}'
+        self.iface("wlan0", 7, 3)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 10)
+
+    def test_bad_saved_state_starts_over(self):
+        self.settings.d["dataUse"] = "garbage"
+        self.iface("wlan0", 7, 3)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.bytesThisMonth, 10)
+
+    def test_format(self):
+        self.assertEqual(format_bytes(1_200_000_000), "1.2 GB")
+        self.assertEqual(format_bytes(5_000_000), "5 MB")
+
+
+if __name__ == "__main__":
+    unittest.main()

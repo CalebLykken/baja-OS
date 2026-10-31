@@ -78,6 +78,9 @@ backend/voice.py     spoken directions with Piper, music dipping underneath
 backend/phone.py     "Send to Baja": a destination from the phone
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
+backend/dbus.py      D-Bus signal subscriptions, so Bluetooth and network refresh on change
+backend/retry.py     retry with back-off for online requests (worker threads)
+backend/datause.py   Wi-Fi and tether data use this month
 backend/system.py    temperature, fan, power warnings, restart and power
 backend/ignition.py  shuts the Pi down once the truck is off (the car goes quiet on the OBD adapter)
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
@@ -192,9 +195,8 @@ parked.
 > The amp's outputs are bridged: never connect a speaker − wire to ground or
 > to another − wire. Note the order flips halfway along the terminal block.
 
-The sound board's 3.5 mm jack goes to the amp's **Audio input 1**: the
-plug's tip to `INL`, ring to `INR` and sleeve to `GND`. Set the channel
-switch so input 1 plays on all four speakers. Leave the factory FM antenna lead unplugged and taped.
+The sound board's RCA outputs go to the amp's RCA inputs (**Audio input 1**). Set the channel switch
+so input 1 plays on all four speakers. Leave the factory FM antenna lead unplugged and taped.
 
 ### Car power and key-off shutdown
 
@@ -435,7 +437,12 @@ From the Mac:
 ./deploy/push.sh        # copies to baja.local, stamps the version, restarts
 ```
 
-Or on the Pi: `git pull && sudo systemctl restart baja-os`.
+Or on the Pi: `git pull && sudo systemctl restart baja-os`, or Settings > System > Check for updates
+(needs a real `git clone` that can reach GitHub, not a push.sh copy; it doesn't re-run `setup-pi.sh`,
+so run that over SSH when a release changes `deploy/` or the packages). An update from Settings looks
+after itself: one that's cut off is put back on the next start, and one that keeps dying before it has run
+for a minute falls back to the commit before it after three tries (`deploy/update-guard.sh`), and says so
+on screen.
 
 ## Next steps
 

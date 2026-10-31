@@ -7,6 +7,7 @@ in settings and picked up again after a restart.
 
 import io
 import json
+import math
 import time
 import unittest
 import urllib.error
@@ -16,8 +17,8 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
-from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Router, route_record,
-                             saved_route)
+from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
+                             route_record, saved_route, short_instruction, tidy)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -57,6 +58,43 @@ ROUTE = {"trip": {"summary": {"time": 200.0}, "legs": [{
         {"type": 4, "begin_shape_index": 2, "instruction": "You have arrived."},
     ],
 }]}}
+
+
+class TimeLeftTest(unittest.TestCase):
+    """Time left comes from the maneuvers' own times, not an even share."""
+
+    def route(self, times=(100.0, 100.0, 0.0), ends=(1, 2, 2)):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["summary"]["time"] = sum(times)
+        for m, t, e in zip(data["trip"]["legs"][0]["maneuvers"], times, ends):
+            m["time"], m["end_shape_index"] = t, e
+        return Route(data, "Shop")
+
+    def test_the_whole_route_at_the_start(self):
+        self.assertAlmostEqual(self.route().time_left(), 200.0)
+
+    def test_uneven_legs_are_not_averaged(self):
+        # 2.2 km in 20 s (a highway), then 760 m in 180 s: at the corner
+        # a quarter of the distance is left but nine tenths of the time.
+        r = self.route(times=(20.0, 180.0, 0.0))
+        r.along = r.cum[1]
+        self.assertAlmostEqual(r.time_left(), 180.0)
+        self.assertGreater(abs(r.time_left() - 200.0 * r.remaining / r.length), 50)
+
+    def test_part_way_along_a_leg(self):
+        r = self.route(times=(100.0, 100.0, 0.0))
+        r.along = r.cum[1] / 2
+        self.assertAlmostEqual(r.time_left(), 150.0)
+
+    def test_the_end(self):
+        r = self.route()
+        r.along = r.length
+        self.assertEqual(r.time_left(), 0.0)
+
+    def test_without_maneuver_times_it_falls_back_to_the_even_share(self):
+        r = Route(ROUTE, "Shop")
+        r.along = r.length / 2
+        self.assertAlmostEqual(r.time_left(), 100.0)
 
 
 class Changed:
@@ -410,6 +448,42 @@ class SavingTest(unittest.TestCase):
         self.assertGreater(json.loads(self.settings.values["route"])["at"], time.time() - 5)
 
 
+class RepeatTest(unittest.TestCase):
+    def setUp(self):
+        self.gps = FakeGps()
+        self.router = Router(self.gps)
+        self.said = []
+        self.router.speak.connect(self.said.append)
+        self.router._request = lambda *a, **k: None
+        self.router.routeTo("Shop", *END)
+        answer(self.router, ROUTE, "", "Shop", False)
+
+    def test_nothing_without_guidance(self):
+        self.router.repeatLast()                       # only a preview
+        self.assertEqual(self.said, [])
+        self.router.stop()
+        self.router.repeatLast()
+        self.assertEqual(self.said, [])
+
+    def test_says_the_last_direction_again(self):
+        self.router.go()
+        self.router.repeatLast()
+        self.assertEqual(self.said, ["Drive north.", "Drive north."])
+        self.gps.at(CORNER[0], 47.0195)                 # just before the right turn
+        self.router._on_fix()
+        self.router.repeatLast()
+        self.assertEqual(self.said[-1], self.said[-2])
+        self.assertNotEqual(self.said[-1], "Drive north.")
+
+    def test_a_new_route_forgets_it(self):
+        self.router.go()
+        self.router.routeTo("Cafe", *START)
+        answer(self.router, ROUTE, "", "Cafe", False)
+        self.said.clear()
+        self.router.repeatLast()
+        self.assertEqual(self.said, [])
+
+
 class InlineThread:
     """Stands in for threading.Thread: start() runs the work on the spot."""
 
@@ -482,6 +556,93 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(self.router.error, "Couldn't get a route")
 
 
+class AvoidTest(unittest.TestCase):
+    """The avoid options reach Valhalla's costing, on reroutes too."""
+
+    def setUp(self):
+        inline = mock.patch("backend.routing.threading", SimpleNamespace(Thread=InlineThread))
+        inline.start()
+        self.addCleanup(inline.stop)
+        self.settings = FakeSettings()
+        self.router = Router(FakeGps(), self.settings)
+        self.sent = []
+
+    def urlopen(self, req, timeout):
+        self.sent.append(json.loads(req.data))
+        return Reply(json.dumps(ROUTE).encode())
+
+    def run_with_router(self, fn):
+        with mock.patch("backend.routing.urllib.request.urlopen", self.urlopen):
+            fn()
+
+    def test_nothing_avoided_sends_no_options(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.assertNotIn("costing_options", self.sent[0])
+
+    def test_avoided_roads_are_zeroed(self):
+        self.router.setAvoid("avoidFerries", True)
+        self.router.setAvoid("avoidTolls", True)
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.assertEqual(self.sent[0]["costing_options"], {"auto": {"use_ferry": 0, "use_tolls": 0}})
+        self.assertEqual(self.sent[0]["costing"], "auto")
+
+    def test_a_route_that_failed_is_tried_again_with_the_new_option(self):
+        def no_route(req, timeout):
+            raise urllib.error.URLError("refused")
+        with mock.patch("backend.routing.urllib.request.urlopen", no_route):
+            self.router.routeTo("Shop", *END)
+        self.assertFalse(self.router.previewing)
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertTrue(self.router.previewing)
+
+    def test_after_arriving_an_option_asks_for_nothing(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.router._arrived = True
+        self.sent.clear()
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertEqual(self.sent, [])
+        self.assertTrue(self.router._arrived)       # the auto-stop still comes
+
+    def test_a_reroute_carries_them(self):
+        self.router.setAvoid("avoidHighways", True)
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router._request(*self.router._dest, reroute=True))
+        self.assertEqual(self.sent[1]["costing_options"], {"auto": {"use_highways": 0}})
+
+    def test_changing_one_with_a_route_shown_asks_again(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.sent[1]["costing_options"], {"auto": {"use_ferry": 0}})
+        self.assertTrue(self.router.previewing)
+        self.assertFalse(self.router.computing)
+        self.assertTrue(self.router.avoidFerries)
+        self.assertEqual(self.settings.values["avoidFerries"], "true")
+
+    def test_no_route_means_no_request(self):
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))
+        self.assertEqual(self.sent, [])
+
+    def test_unchanged_or_unknown_does_nothing(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidFerries", False))
+        self.run_with_router(lambda: self.router.setAvoid("bogus", True))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_still_computing_the_first_route_is_replaced(self):
+        held = mock.patch("backend.routing.threading", SimpleNamespace(
+            Thread=lambda **k: SimpleNamespace(start=lambda: None)))
+        held.start()
+        self.addCleanup(held.stop)
+        self.router.routeTo("Shop", *END)
+        old = self.router._gen
+        self.router.setAvoid("avoidFerries", True)
+        self.assertGreater(self.router._gen, old)
+        self.assertTrue(self.router.computing)
+        answer(self.router, ROUTE, "", "Shop", False, gen=old)       # the old answer is dropped
+        self.assertTrue(self.router.computing)
+
+
 class StaleAnswerTest(unittest.TestCase):
     """An answer that isn't for the latest request is dropped: a cancelled
     route stays cancelled and the last place picked wins."""
@@ -532,6 +693,342 @@ class StaleAnswerTest(unittest.TestCase):
         answer(self.router, ROUTE, "", "Shop", True, gen=old)
         self.assertFalse(self.router.active)
         self.assertFalse(self.router.previewing)
+
+
+class DecodePolylineTest(unittest.TestCase):
+    def test_a_known_shape(self):
+        # Google's documented example, whose 1e-5 values are (38.5, -120.2),
+        # (40.7, -120.95), (43.252, -126.453): at Valhalla's 1e-6 they come out a tenth the size.
+        points = decode_polyline6("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
+        want = [(-12.02, 3.85), (-12.095, 4.07), (-12.6453, 4.3252)]
+        self.assertEqual(len(points), 3)
+        for got, exp in zip(points, want):
+            self.assertAlmostEqual(got[0], exp[0], places=6)
+            self.assertAlmostEqual(got[1], exp[1], places=6)
+
+    def test_lon_lat_order_and_the_canned_route(self):
+        self.assertEqual(decode_polyline6(ROUTE["trip"]["legs"][0]["shape"]), [START, CORNER, END])
+
+    def test_nothing(self):
+        self.assertEqual(decode_polyline6(""), [])
+
+    def test_south_and_west_are_negative_deltas(self):
+        pts = [(-122.0, 47.0), (-122.5, 46.5), (-122.5001, 46.4999)]
+        for got, exp in zip(decode_polyline6(polyline6(pts)), pts):
+            self.assertAlmostEqual(got[0], exp[0], places=6)
+            self.assertAlmostEqual(got[1], exp[1], places=6)
+
+
+class TidyTest(unittest.TestCase):
+    def test_a_chained_step_loses_its_capital(self):
+        self.assertEqual(tidy("Turn left onto Pine Street. Then Keep right at the fork."),
+                         "Turn left onto Pine Street. Then keep right at the fork.")
+
+    def test_after_a_sentence_it_stays_a_sentence(self):
+        self.assertEqual(tidy("Drive north. Then Turn right."), "Drive north. Then turn right.")
+
+    def test_in_the_middle_of_a_sentence(self):
+        self.assertEqual(tidy("Turn left, Then Merge onto I-5"), "Turn left, then merge onto I-5")
+
+    def test_nothing_to_change(self):
+        for text in ("Turn right.", "", "Then", "Then we go on.", "Bethen Keep left"):
+            self.assertEqual(tidy(text), text)
+
+
+class RouteShapeTest(unittest.TestCase):
+    """A Route over the canned Valhalla reply: north 2.2 km, then east 760 m."""
+
+    def setUp(self):
+        self.r = Route(ROUTE, "Shop")
+
+    def test_the_length_is_the_legs_in_metres(self):
+        self.assertAlmostEqual(self.r.length, 0.02 * 110540 + 0.01 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertEqual(self.r.cum[0], 0.0)
+        self.assertAlmostEqual(self.r.cum[1], 2210.8, delta=1)
+
+    def test_it_starts_at_the_start(self):
+        self.r.locate(*START)
+        self.assertAlmostEqual(self.r.along, 0.0, places=3)
+        self.assertAlmostEqual(self.r.off, 0.0, places=3)
+        self.assertAlmostEqual(self.r.remaining, self.r.length, places=3)
+        self.assertEqual(self.r.seg, 0)
+
+    def test_half_way_up_the_first_leg(self):
+        self.r.locate(-122.0, 47.01)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] / 2, delta=0.5)
+        self.assertLess(self.r.off, 0.5)
+
+    def test_beside_the_road_it_is_the_distance_off(self):
+        self.r.locate(-121.999, 47.01)        # 0.001 degrees of longitude east
+        self.assertAlmostEqual(self.r.off, 0.001 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] / 2, delta=1)
+
+    def test_on_the_second_leg(self):
+        self.r.locate(-121.995, 47.02)
+        self.assertEqual(self.r.seg, 1)
+        self.assertAlmostEqual(self.r.along, self.r.cum[1] + 0.005 * 111320 * math.cos(math.radians(47.0)), delta=1)
+        self.assertAlmostEqual(self.r.to_end, 0.005 * 111320 * math.cos(math.radians(47.0)), delta=1)
+
+    def test_past_the_end_stops_at_the_end(self):
+        self.r.locate(-121.9, 47.02)
+        self.assertAlmostEqual(self.r.along, self.r.length, places=3)
+        self.assertEqual(self.r.remaining, 0.0)
+
+    def test_the_same_fix_again_is_ignored(self):
+        self.r.locate(-122.0, 47.01, 0.0, 10.0, 0.0)
+        before = (self.r.along, self.r._at)
+        self.r.locate(-122.0, 47.01, 0.0, 10.0, 5.0)
+        self.assertEqual((self.r.along, self.r._at), before)
+
+
+class ManeuverTest(unittest.TestCase):
+    def route(self, end=END):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["shape"] = polyline6([START, CORNER, end])
+        return Route(data, "Shop")
+
+    def test_the_first_turn_ahead_at_the_start(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(*START)
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+
+    def test_the_turn_just_reached_is_behind(self):
+        r = Route(ROUTE, "Shop")
+        r.along = r.cum[1] - 6
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+        r.along = r.cum[1] - 4              # within 5 m: already counted as done
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+
+    def test_after_the_last_turn_it_is_the_arrival(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(-121.995, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+        r.locate(-121.9, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+
+    def test_a_turn_far_after_the_next_is_not_shown_with_it(self):
+        r = Route(ROUTE, "Shop")
+        r.locate(*START)
+        self.assertIsNone(r.then_maneuver())          # the arrival is 760 m after the turn
+
+    def test_a_turn_right_after_the_next_is_shown_with_it(self):
+        r = self.route(end=(-121.9975, 47.02))        # 190 m after the turn
+        r.locate(*START)
+        self.assertEqual(r.next_maneuver()["instruction"], "Turn right.")
+        self.assertEqual(r.then_maneuver()["instruction"], "You have arrived.")
+
+    def test_the_gap_has_a_limit(self):
+        r = self.route(end=(-121.9965, 47.02))        # 266 m: still near
+        self.assertIsNotNone(r.then_maneuver())
+        r = self.route(end=(-121.995, 47.02))         # 380 m: too far
+        self.assertIsNone(r.then_maneuver())
+
+    def test_nothing_after_the_arrival(self):
+        r = self.route(end=(-121.9975, 47.02))
+        r.locate(-121.9, 47.02)
+        self.assertEqual(r.next_maneuver()["instruction"], "You have arrived.")
+        self.assertIsNone(r.then_maneuver())
+
+
+class FerryTest(unittest.TestCase):
+    def route(self, *extra):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["maneuvers"][1:1] = list(extra)
+        return Route(data, "Shop")
+
+    def test_no_ferry(self):
+        self.assertEqual(Route(ROUTE, "Shop").ferries, [])
+
+    def test_detected_from_type_and_named(self):
+        r = self.route({"type": 28, "instruction": "Take the Fauntleroy - Vashon ferry.",
+                        "time": 600, "length": 8.0})
+        self.assertEqual(r.ferries, [{"name": "Fauntleroy - Vashon", "time": 600.0, "length": 8000.0}])
+
+    def test_detected_from_travel_mode_and_merged(self):
+        r = self.route({"type": 28, "travel_mode": "drive", "ferry": True, "instruction": "Take the A - B ferry.",
+                        "time": 300, "length": 4.0},
+                       {"type": 29, "travel_mode": "drive", "ferry": True, "instruction": "Exit the ferry.",
+                        "time": 300, "length": 4.0})
+        self.assertEqual(len(r.ferries), 1)
+        self.assertEqual(r.ferries[0]["name"], "A - B")
+        self.assertEqual(r.ferries[0]["time"], 600.0)
+        self.assertEqual(r.ferries[0]["length"], 8000.0)
+
+    def test_unnamed_ferry(self):
+        r = self.route({"ferry": True, "instruction": "Board."})
+        self.assertEqual(r.ferries[0]["name"], "Ferry")
+
+    def test_missing_keys_do_not_raise(self):
+        r = self.route({"type": 28}, {"ferry": True, "time": None, "length": "x"})
+        self.assertEqual(r.ferries, [{"name": "Ferry", "time": 0.0, "length": 0.0}])
+
+    def test_two_ferries_stay_separate(self):
+        r = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 60},
+                       {"type": 10, "instruction": "Turn right."},
+                       {"type": 28, "instruction": "Take the B ferry.", "time": 120})
+        self.assertEqual([f["name"] for f in r.ferries], ["A", "B"])
+
+    def test_unflagged_exit_is_not_a_ferry(self):
+        r = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 60},
+                       {"type": 29, "travel_mode": "drive", "instruction": "Exit.", "time": 99})
+        self.assertEqual(r.ferries[0]["time"], 60.0)
+
+    def test_names(self):
+        for text, names, want in (
+                ("Take the ferry toward Kingston Ferry Terminal.", None, "Ferry"),
+                ("Take the Fauntleroy Ferry Dock - Vashon Ferry.", None, "Fauntleroy Ferry Dock - Vashon"),
+                ("Take the ferry.", ["Bainbridge FERRY"], "Bainbridge"),
+                ("Take the ferry.", [" ferry "], "Ferry")):
+            m = {"type": 28, "instruction": text}
+            if names:
+                m["street_names"] = names
+            self.assertEqual(self.route(m).ferries[0]["name"], want, text)
+
+    def test_nan_and_inf_do_not_raise(self):
+        r = self.route({"type": 28, "time": float("nan"), "length": float("inf")},
+                       {"ferry": True, "time": float("inf")})
+        router = Router(FakeGps())
+        router._route = r
+        self.assertEqual(router.ferries, [{"name": "Ferry", "minutes": 0}])
+
+    def test_router_properties(self):
+        router = Router(FakeGps())
+        self.assertEqual(router.ferries, [])
+        router._route = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 10})
+        self.assertEqual(router.ferries, [{"name": "A", "minutes": 1}])
+
+
+class ShortInstructionTest(unittest.TestCase):
+    @staticmethod
+    def el(*texts):
+        return [{"text": t} for t in texts]
+
+    def m(self, kind, text="Valhalla says this.", streets=(), **sign):
+        out = {"type": kind, "instruction": text, "street_names": list(streets)}
+        if sign:
+            out["sign"] = {f"exit_{k}_elements": self.el(*v) for k, v in sign.items()}
+        return out
+
+    def test_exit_with_number_and_toward_or_branch(self):
+        self.assertEqual(short_instruction(self.m(20, number=["165B"], toward=["I-5 S"])),
+                         "Exit 165B toward I-5 S")
+        self.assertEqual(short_instruction(self.m(21, number=["165B"], branch=["I-5 S"])),
+                         "Exit 165B onto I-5 S")
+        both = self.m(20, number=["165B"], toward=["Tacoma"], branch=["I-5 S"])
+        self.assertEqual(short_instruction(both), "Exit 165B toward Tacoma")
+        self.assertEqual(short_instruction(self.m(20, toward=["Tacoma", "Seattle"])),
+                         "Exit toward Tacoma / Seattle")
+
+    def test_ramp(self):
+        self.assertEqual(short_instruction(self.m(18, toward=["Tacoma"])), "Ramp toward Tacoma")
+        self.assertEqual(short_instruction(self.m(19, branch=["SR 16 W"])), "Ramp onto SR 16 W")
+        self.assertEqual(short_instruction(self.m(18, "Take the ramp on the right.")),
+                         "Take the ramp on the right")
+
+    def test_turns(self):
+        self.assertEqual(short_instruction(self.m(15, streets=["Pine St"])), "Turn left onto Pine St")
+        self.assertEqual(short_instruction(self.m(10, streets=["Pine St"])), "Turn right onto Pine St")
+        both = {"type": 10, "begin_street_names": ["Oak Ave"], "street_names": ["Pine St"],
+                "instruction": "x."}
+        self.assertEqual(short_instruction(both), "Turn right onto Oak Ave")
+        for kind in (2, 3):                      # start right/left: "Head north on X"
+            self.assertEqual(short_instruction(self.m(kind, "Head north on Pine St.", ["Pine St"])),
+                             "Head north on Pine St")
+        self.assertEqual(short_instruction(self.m(9, streets=["Pine St"])), "Bear right onto Pine St")
+        self.assertEqual(short_instruction(self.m(16, streets=["Pine St"])), "Bear left onto Pine St")
+        self.assertEqual(short_instruction(self.m(11, streets=["Pine St"])), "Sharp right onto Pine St")
+        self.assertEqual(short_instruction(self.m(14, streets=["Pine St"])), "Sharp left onto Pine St")
+        begin = {"type": 10, "begin_street_names": ["Oak Ave"], "instruction": "x."}
+        self.assertEqual(short_instruction(begin), "Turn right onto Oak Ave")
+        self.assertEqual(short_instruction(self.m(15, "Turn left.")), "Turn left")     # no street
+
+    def test_keep(self):
+        self.assertEqual(short_instruction(self.m(23, toward=["I-5 S"])), "Keep right toward I-5 S")
+        self.assertEqual(short_instruction(self.m(24, streets=["Main St"])), "Keep left onto Main St")
+        self.assertEqual(short_instruction(self.m(22, streets=["Main St"])), "Keep straight on Main St")
+        self.assertEqual(short_instruction(self.m(23, "Keep right at the fork.")), "Keep right at the fork")
+
+    def test_merge(self):
+        for kind, text in ((25, "Merge onto"), (37, "Merge right onto"), (38, "Merge left onto")):
+            self.assertEqual(short_instruction(self.m(kind, branch=["I-5 S"])), f"{text} I-5 S")
+        self.assertEqual(short_instruction(self.m(25, streets=["I-90 E"])), "Merge onto I-90 E")
+
+    def test_roundabout(self):
+        m = self.m(26, streets=["Main St"])
+        for n, word in ((1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"), (11, "11th"), (22, "22nd")):
+            m["roundabout_exit_count"] = n
+            self.assertEqual(short_instruction(m), f"Roundabout, take the {word} exit")
+        self.assertEqual(short_instruction(m), "Roundabout, take the 22nd exit")
+        del m["roundabout_exit_count"]
+        self.assertEqual(short_instruction(m), "Valhalla says this")
+
+    def test_continue(self):
+        self.assertEqual(short_instruction(self.m(8, streets=["Main St"])), "Continue on Main St")
+        self.assertEqual(short_instruction(self.m(7, streets=["Main St"])), "Continue on Main St")
+        self.assertEqual(short_instruction(self.m(8, "Continue.")), "Continue")
+
+    def test_ferry_arrival_and_unknown_keep_valhalla_text(self):
+        for kind in (28, 29, 4, 5, 6, 12, 13, 99, None):
+            self.assertEqual(short_instruction(self.m(kind, "Take the Bremerton ferry.", ["X"],
+                                                      toward=["Y"])), "Take the Bremerton ferry")
+        self.assertEqual(short_instruction({"type": 5, "instruction": "Arrive at Cafe"}), "Arrive at Cafe")
+
+    def test_junk_never_raises(self):
+        for junk in (None, [], "text", 5, {}, {"type": "x"}, {"type": 20, "sign": "no"},
+                     {"type": 20, "sign": {"exit_toward_elements": "I-5"}},
+                     {"type": 20, "sign": {"exit_toward_elements": [None, 3, {"text": None}, {"x": 1}]},
+                      "instruction": "Take the exit."},
+                     {"type": 15, "street_names": "Pine", "instruction": "Turn left."},
+                     {"type": 15, "street_names": [None, 4], "instruction": "Turn left."},
+                     {"type": 26, "roundabout_exit_count": "2", "instruction": None},
+                     {"type": 26, "roundabout_exit_count": True},
+                     {"type": [1], "instruction": 7}):
+            self.assertIsInstance(short_instruction(junk), str)
+        self.assertEqual(short_instruction(
+            {"type": 20, "sign": {"exit_toward_elements": [None, 3, {"text": None}]},
+             "instruction": "Take the exit."}), "Take the exit")
+        self.assertEqual(short_instruction({"type": 15, "street_names": "Pine", "instruction": "Turn left."}),
+                         "Turn left")
+
+    def test_length_cap(self):
+        long_names = ["Interstate 5 Southbound Express Lanes", "Tacoma Narrows Bridge", "Gig Harbor"]
+        out = short_instruction(self.m(20, number=["165B"], toward=long_names))
+        self.assertEqual(out, "Exit 165B toward Interstate 5 Southbound Express Lanes")
+        self.assertLessEqual(len(out), 60)
+        out = short_instruction(self.m(15, streets=["Martin Luther King Junior Memorial Way South East"]))
+        self.assertLessEqual(len(out), 60)
+        self.assertEqual(out, "Turn left onto Martin Luther King Junior Memorial Way South")
+        out = short_instruction(self.m(15, streets=["Supercalifragilisticexpialidocious" * 3]))
+        self.assertLessEqual(len(out), 60)
+        self.assertTrue(out.startswith("Turn left onto"))
+
+    def test_screen_short_speech_full(self):
+        route = {"trip": {"summary": {"time": 200.0}, "legs": [{
+            "shape": polyline6([START, CORNER, END]),
+            "maneuvers": [
+                {"type": 1, "begin_shape_index": 0, "instruction": "Drive north.",
+                 "verbal_pre_transition_instruction": "Drive north."},
+                {"type": 10, "begin_shape_index": 1, "street_names": ["Pine St"],
+                 "instruction": "Turn right onto Pine Street.",
+                 "verbal_pre_transition_instruction": "Turn right onto Pine Street, then arrive.",
+                 "verbal_transition_alert_instruction": "Turn right onto Pine Street."},
+                {"type": 4, "begin_shape_index": 2, "instruction": "You have arrived."},
+            ]}]}}
+        gps = FakeGps()
+        router = Router(gps)
+        said = []
+        router.speak.connect(said.append)
+        router._request = lambda *a, **k: None
+        router.routeTo("Shop", *END)
+        answer(router, route, "", "Shop", False)
+        router.go()
+        self.assertEqual(said, ["Drive north."])
+        gps.at(CORNER[0], 47.0195)
+        router._on_fix()
+        self.assertEqual(router.instruction, "Turn right onto Pine St")
+        self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
+        router.repeatLast()
+        self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
 
 
 if __name__ == "__main__":

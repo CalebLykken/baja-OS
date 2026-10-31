@@ -237,7 +237,9 @@ class MapService(QObject):
                 env.update(BBOX=bbox, REGION=self._info.get("region", "Seattle area"))
             steps = {"Getting the pmtiles": "Getting the download tool",
                      "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons",
-                     "Indexing places": "Indexing places for search"}
+                     "Indexing places": "Indexing places for search",
+                     "Indexing street": "Indexing street addresses",
+                     "Finding traffic": "Finding traffic lights and signs"}
             try:
                 proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -312,6 +314,28 @@ class MapService(QObject):
                 rows = []
             safe_emit(self, "_found", key, rows)
         threading.Thread(target=work, name="place-nearby", daemon=True).start()
+
+    @pyqtSlot(str, "QVariantList", int, float)
+    def searchAlong(self, category, shape, start_seg, into_seg):
+        """Places of a category along the route ahead (from `into_seg` metres
+        along segment `start_seg`), in the order reached."""
+        key = "along:" + category
+        self._query = key
+        index = self._data_dir / places.INDEX_NAME
+        try:
+            line = [(float(p[0]), float(p[1])) for p in shape]
+        except (TypeError, ValueError, IndexError):
+            line = []
+
+        def work():
+            try:
+                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+                rows = places.along_route(db, category, line, start_seg, into_seg)
+                db.close()
+            except sqlite3.Error:
+                rows = []
+            safe_emit(self, "_found", key, rows)
+        threading.Thread(target=work, name="place-along", daemon=True).start()
 
     def _on_found(self, text, rows):
         if text != self._query:

@@ -12,7 +12,10 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.network import Network, wifi_name
+from backend.dbus import NM_DEBOUNCE_MS
+from backend.network import CHECK_EVERY_MS, SAFETY_CHECK_MS, Network, internet_state, wifi_name
+from backend.network import tcp_online as real_tcp_online
+from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -45,7 +48,7 @@ class CheckFailureTest(unittest.TestCase):
         ssid_lookup = mock.patch("backend.network.wifi_name", side_effect=error) if error else \
             mock.patch("backend.network.wifi_name", return_value=ssid)
         with mock.patch("backend.network.local_ip", return_value=ip), ssid_lookup, \
-                mock.patch("backend.network.is_online", return_value=online):
+                mock.patch("backend.network.internet_state", return_value=(online, False)):
             self.net._check()
 
     def test_two_crashing_checks_log_once_and_keep_the_result(self):
@@ -74,7 +77,7 @@ class CheckFailureTest(unittest.TestCase):
     def test_a_crash_in_a_later_lookup_is_caught_too(self):
         with mock.patch("backend.network.local_ip", return_value="10.0.0.5"), \
                 mock.patch("backend.network.wifi_name", return_value="Phone"), \
-                mock.patch("backend.network.is_online", side_effect=AttributeError("x")):
+                mock.patch("backend.network.internet_state", side_effect=AttributeError("x")):
             self.net._check()
         self.assertFalse(self.net._busy)
         self.assertEqual(len(logged(self.printed)), 1)
@@ -88,6 +91,136 @@ class WifiNameTest(unittest.TestCase):
             self.assertEqual(wifi_name(), "Phone")
         args = run.call_args.args[0]
         self.assertEqual(args[args.index("--rescan") + 1], "no")
+
+
+
+def nm(out="full\n", code=0):
+    return mock.patch("backend.network.subprocess.run",
+                      return_value=SimpleNamespace(stdout=out, returncode=code))
+
+
+class InternetStateTest(unittest.TestCase):
+    def setUp(self):
+        mock.patch("backend.network.shutil.which", return_value="/usr/bin/nmcli").start()
+        self.tcp = mock.patch("backend.network.tcp_online", return_value=False).start()
+        self.dropin = mock.patch("backend.network.os.path.exists", return_value=True).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_nm_states(self):
+        for out, want in (("full\n", (True, False)), ("portal\n", (False, True)),
+                          ("none\n", (False, False))):
+            with nm(out):
+                self.assertEqual(internet_state(), want, out)
+        self.tcp.assert_not_called()
+
+    def test_limited_gets_a_second_opinion(self):
+        with nm("limited\n"):
+            self.assertEqual(internet_state(), (False, False))
+            self.tcp.assert_called_once()
+            self.tcp.return_value = True    # nmcheck.gnome.org down, the link fine
+            self.assertEqual(internet_state(), (True, False))
+
+    def test_without_the_drop_in_full_means_only_a_default_route(self):
+        self.dropin.return_value = False
+        with nm("full\n"):
+            self.assertEqual(internet_state(), (False, False))
+            self.tcp.return_value = True
+            self.assertEqual(internet_state(), (True, False))
+
+    def test_the_probe_is_tcp_443(self):
+        with mock.patch("backend.network.socket.create_connection") as connect:
+            self.assertTrue(real_tcp_online())
+        self.assertEqual(connect.call_args[0][0][1], 443)
+
+    def test_nmcli_missing_uses_tcp_probe(self):
+        self.tcp.return_value = True
+        with mock.patch("backend.network.shutil.which", return_value=None):
+            self.assertEqual(internet_state(), (True, False))
+        self.tcp.assert_called_once()
+
+    def test_nmcli_failing_uses_tcp_probe(self):
+        self.tcp.return_value = True
+        for run in (nm("", 8), nm("unknown\n", 1), nm("unknown\n", 0),
+                    mock.patch("backend.network.subprocess.run", side_effect=OSError)):
+            with run:
+                self.assertEqual(internet_state(), (True, False))
+
+    def test_portal_reaches_the_property(self):
+        net = Network()
+        net._apply(("10.0.0.5", "Cafe", False, True))
+        self.assertTrue(net.portal)
+        self.assertFalse(net.online)
+
+
+class SignalsTest(unittest.TestCase):
+    """NetworkManager's signals drive the check, faked at the bus; polling is
+    the fallback, and the TCP probe needs it."""
+
+    def setUp(self):
+        self.net = Network()
+        INLINE.start()
+        self.lookup = mock.patch("backend.network.wifi_name", return_value="Phone").start()
+        mock.patch("backend.network.local_ip", return_value="10.0.0.5").start()
+        mock.patch("backend.network.internet_state", return_value=(True, False)).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(self.net._timer.stop)
+        self.addCleanup(mock.patch.stopall)
+
+    def started(self, bus):
+        with on_bus(bus):
+            self.net.start()
+        self.lookup.reset_mock()
+
+    def test_subscribes_to_network_manager(self):
+        bus = FakeBus()
+        self.started(bus)
+        names = {(s[1], s[2], s[3]) for s in bus.subscribed}
+        root = "/org/freedesktop/NetworkManager"
+        self.assertIn((root, "org.freedesktop.NetworkManager", "StateChanged"), names)
+        self.assertIn((root, "org.freedesktop.DBus.Properties", "PropertiesChanged"), names)
+        self.assertIn(("", "org.freedesktop.NetworkManager.Connection.Active", "StateChanged"), names)
+        self.assertNotIn(("", "org.freedesktop.DBus.Properties", "PropertiesChanged"), names)    # signal strength
+
+    def test_a_signal_checks_after_the_debounce(self):
+        bus = FakeBus()
+        self.started(bus)
+        for _ in range(5):
+            bus.slot()
+        self.lookup.assert_not_called()
+        self.assertTrue(self.net._nm._timer.isActive())
+        self.assertEqual(self.net._nm._timer.interval(), NM_DEBOUNCE_MS)
+        self.net._nm._timer.stop()
+        self.net._nm._fire()
+        self.lookup.assert_called_once()
+
+    def test_a_signal_during_a_check_checks_again_after_it(self):
+        self.started(FakeBus())
+        self.net._busy = True
+        self.net._signalled()
+        self.lookup.assert_not_called()
+        self.net._apply(None)
+        self.assertTrue(self.net._nm._timer.isActive())
+        self.net._nm._timer.stop()
+
+    def test_without_a_bus_it_checks_as_often_as_ever(self):
+        self.started(None)
+        self.assertEqual(self.net._timer.interval(), CHECK_EVERY_MS)
+        self.assertTrue(self.net._timer.isActive())
+
+    def test_with_signals_it_relaxes(self):
+        self.started(FakeBus())
+        self.assertEqual(self.net._timer.interval(), SAFETY_CHECK_MS)
+        self.assertTrue(self.net._timer.isActive())
+
+    def test_network_manager_stopped_means_the_quick_checks(self):
+        bus = FakeBus()
+        self.started(bus)
+        bus.running = False
+        self.net._check()
+        self.assertEqual(self.net._timer.interval(), CHECK_EVERY_MS)
+        bus.running = True
+        self.net._check()
+        self.assertEqual(self.net._timer.interval(), SAFETY_CHECK_MS)
 
 
 if __name__ == "__main__":

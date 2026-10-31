@@ -8,14 +8,16 @@ Wiring, at the USB end of the header, clear of the sound board's pins:
 
 The pins are only ever read, with the Pi's own pull-ups, so a loose or
 misplaced wire can't harm anything. Turning reports clicks (`turned`, +1
-or -1); a press reports `pressed`. main.py decides what they do.
+or -1); a press reports `pressed` and its end `released`. `Gestures`
+turns those into a single, double or long press. main.py decides what
+they do.
 """
 
 import threading
 import time
 from datetime import timedelta
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from backend import safe_emit
 
@@ -36,11 +38,71 @@ STEPS = {(0, 1): 1, (1, 3): 1, (3, 2): 1, (2, 0): 1,
          (0, 2): -1, (2, 3): -1, (3, 1): -1, (1, 0): -1}
 REST = 3
 PRESS_GAP_S = 0.05                       # ignore switch bounce shorter than this
+LONG_PRESS_MS = 700                      # held this long: a long press (fires while still held)
+DOUBLE_PRESS_MS = 300                    # a second press within this of the first release: a double
+
+
+class Gestures(QObject):
+    """Single, double and long presses from a switch going down and up.
+
+    A long press fires once the switch has been held LONG_PRESS_MS, without
+    waiting for the release. A single press has to wait DOUBLE_PRESS_MS after
+    the release in case a second press follows, so it fires that much late;
+    the double fires on the second press going down."""
+    single = pyqtSignal()
+    double = pyqtSignal()
+    long = pyqtSignal()
+
+    IDLE, DOWN, WAITING, SPENT = range(4)    # SPENT: down, but already a double or long press
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._state = self.IDLE
+        self._hold = QTimer(self, singleShot=True, interval=LONG_PRESS_MS, timeout=self._held)
+        self._wait = QTimer(self, singleShot=True, interval=DOUBLE_PRESS_MS, timeout=self._waited)
+
+    def down(self):
+        if self._state == self.IDLE:
+            self._state = self.DOWN
+            self._hold.start()
+        elif self._state == self.WAITING:
+            self._wait.stop()
+            self._state = self.SPENT
+            self.double.emit()
+        # Already down (a missed release): nothing new.
+
+    def up(self):
+        if self._state == self.DOWN:
+            self._hold.stop()
+            self._state = self.WAITING
+            self._wait.start()
+        elif self._state == self.SPENT:
+            self._state = self.IDLE
+
+    def _held(self):
+        if self._state == self.DOWN:
+            self._state = self.SPENT
+            self.long.emit()
+
+    def _waited(self):
+        if self._state == self.WAITING:
+            self._state = self.IDLE
+            self.single.emit()
+
+
+def double_press(routing, media):
+    """What a double press does: while navigating, say the last direction
+    again; otherwise the next song."""
+    if routing.active:
+        routing.repeatLast()
+    else:
+        media.next()
 
 
 class Knob(QObject):
     turned = pyqtSignal(int)             # +1 per click clockwise, -1 the other way
-    pressed = pyqtSignal()
+    pressed = pyqtSignal()               # the switch went down
+    released = pyqtSignal()              # and came back up
 
     def start(self):
         if gpiod is not None:
@@ -92,3 +154,4 @@ class Knob(QObject):
                 safe_emit(self, "pressed")
             elif not is_down and down:
                 down, released_at = False, now
+                safe_emit(self, "released")

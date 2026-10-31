@@ -489,6 +489,88 @@ def nearby(db, category, near, limit=12):
     return out[:limit]
 
 
+def along_route(db, category, shape, start_seg, into_seg=0.0, limit=8, corridor_m=400, reach_m=150000):
+    """Places of a category within `corridor_m` of the route ahead of the
+    truck, in the order you'd reach them. `shape` is [(lon, lat), ...],
+    `start_seg` the segment the truck is on and `into_seg` how many metres
+    along it; only the next `reach_m` of the route counts. "distance" is
+    metres along the route from the truck, "off" metres from the route."""
+    kinds = CATEGORIES.get(category)
+    try:
+        pts = [(float(p[0]), float(p[1])) for p in shape]
+        start = max(0, int(start_seg))
+        into = max(0.0, float(into_seg))
+    except (TypeError, ValueError, IndexError):
+        return []
+    if not kinds or start >= len(pts) - 1:
+        return []
+    lon0, lat0 = pts[start]
+    kx = 111320 * math.cos(math.radians(lat0))
+    ky = 110540
+    # The ahead part in metres, cut off at reach_m; cum[i] is the way to vertex i.
+    xy = [((lon - lon0) * kx, (lat - lat0) * ky) for lon, lat in pts[start:]]
+    cum = [0.0]
+    for i in range(1, len(xy)):
+        cum.append(cum[-1] + math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]))
+        if cum[-1] >= reach_m + into:
+            xy = xy[:i + 1]
+            break
+    # Segments by grid cell: a place is only tested against those within
+    # the corridor of its own cell. Each cell lists them in route order.
+    cell = float(corridor_m)
+    segs, grid = [], {}
+    for i in range(len(xy) - 1):
+        (ax, ay), (bx, by) = xy[i], xy[i + 1]
+        dx, dy = bx - ax, by - ay
+        segs.append((ax, ay, dx, dy, dx * dx + dy * dy, cum[i]))
+        for cx in range(int((min(ax, bx) - cell) // cell), int((max(ax, bx) + cell) // cell) + 1):
+            for cy in range(int((min(ay, by) - cell) // cell), int((max(ay, by) + cell) // cell) + 1):
+                grid.setdefault((cx, cy), []).append(i)
+    if not segs:
+        return []
+    pad = corridor_m * 1.2
+    lons = [lon0 + (min(p[0] for p in xy) - pad) / kx, lon0 + (max(p[0] for p in xy) + pad) / kx]
+    lats = [lat0 + (min(p[1] for p in xy) - pad) / ky, lat0 + (max(p[1] for p in xy) + pad) / ky]
+    marks = ",".join("?" * len(kinds))
+    rows = db.execute(
+        f"SELECT name, kind, area, lon, lat FROM places WHERE kind IN ({marks})"
+        " AND lon BETWEEN ? AND ? AND lat BETWEEN ? AND ?",
+        (*kinds, min(lons), max(lons), min(lats), max(lats))).fetchall()
+    limit2 = corridor_m * corridor_m
+    found = []
+    for name, kind, area_, lon, lat in rows:
+        px, py = (lon - lon0) * kx, (lat - lat0) * ky
+        best, along = None, None
+        for i in grid.get((int(px // cell), int(py // cell)), ()):
+            ax, ay, dx, dy, ll, c0 = segs[i]
+            u = 0.0 if ll == 0 else ((px - ax) * dx + (py - ay) * dy) / ll
+            if u < 0 and best is None:
+                continue                    # behind this segment's start: an outer corner was found from the one before
+            t = max(0.0, min(1.0, u))
+            if i == 0 and t * math.sqrt(ll) < into:
+                continue                    # already passed
+            ex, ey = px - (ax + t * dx), py - (ay + t * dy)
+            d2 = ex * ex + ey * ey
+            if d2 > limit2:
+                continue
+            d = math.sqrt(d2)
+            # The earliest pass wins unless a later one is clearly closer
+            # (a spur out and back goes past twice).
+            if best is None or d < best - 5:
+                best, along = d, c0 + t * math.sqrt(ll) - into
+        if along is not None and along >= 0:
+            found.append((along, {"name": name, "kind": kind, "area": area_, "lon": lon, "lat": lat,
+                                  "distance": along, "off": best}))
+    found.sort(key=lambda r: r[0])
+    out, seen = [], set()
+    for _, r in found:
+        if (r["name"], r["area"]) in seen:
+            continue
+        seen.add((r["name"], r["area"]))
+        out.append(r)
+    return out[:limit]
+
+
 if __name__ == "__main__":
     cmd, folder = sys.argv[1], Path(sys.argv[2]).expanduser()
     if cmd == "build":

@@ -8,6 +8,15 @@
 
 cd "$(dirname "$0")" || exit 1
 
+# Before anything of the app runs: put right an update that was cut off, or
+# whose version won't start. 75 means it changed the code under this very
+# script, so begin again on what's there now, once: the guard must never keep
+# the dashboard from starting.
+sh deploy/update-guard.sh
+if [ $? -eq 75 ] && [ -z "$BAJA_GUARD_RESTARTED" ]; then
+    BAJA_GUARD_RESTARTED=1 exec ./run.sh "$@"
+fi
+
 FULLSCREEN="--fullscreen"
 if [ "$1" = "--windowed" ]; then
     FULLSCREEN=""

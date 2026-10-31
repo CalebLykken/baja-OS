@@ -106,6 +106,29 @@ class SoloistEventsTest(unittest.TestCase):
         self.send(type="volume_changed", volume=30)
         self.assertEqual(self.sp.volume, 30)
 
+    def test_a_soloist_error_shows_a_short_message_until_playback_moves(self):
+        self.send(type="error", message="429 too many requests")
+        self.assertEqual(self.sp.error, "Spotify isn't answering right now")
+        self.send(type="playback_state", status="playing")
+        self.assertEqual(self.sp.error, "")
+
+    def test_a_new_track_clears_the_error_and_tells_qml(self):
+        self.send(type="playback_state", status="playing", item=track())
+        self.send(type="error", message="429")
+        changes = []
+        self.sp.changed.connect(lambda: changes.append(1))
+        self.send(type="track_changed", item=track(identity={"name": "Next"}))
+        self.assertEqual(self.sp.error, "")
+        self.assertTrue(changes)
+
+    def test_a_status_change_tells_qml_the_error_went(self):
+        self.send(type="error", message="429")
+        changes = []
+        self.sp.changed.connect(lambda: changes.append(1))
+        self.send(type="playback_changed", status="paused")
+        self.assertEqual(self.sp.error, "")
+        self.assertTrue(changes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,12 +3,14 @@
 The audio itself flows phone -> BlueZ -> PipeWire -> speakers without
 touching this code. This class watches BlueZ for a connected phone's
 AVRCP media player (org.bluez.MediaPlayer1) to show its track and send
-commands, and can make the Pi discoverable for pairing.
+commands, and can make the Pi discoverable for pairing. New phones are
+confirmed on the screen (backend/btagent.py), and only those get trusted.
 
-BlueZ is polled once a second with `busctl` (JSON output) on a worker
-thread rather than through D-Bus signals: simple, robust across BlueZ
-versions, and a negligible load on the Pi 5. Off a Pi (no busctl/BlueZ)
-everything reports "unavailable" and the UI hides the Bluetooth bits.
+BlueZ's state is read with `busctl` (JSON output) on a worker thread. Its
+D-Bus signals say when to read it, so a track change shows at once; a slow
+safety poll catches anything missed, and without the bus or BlueZ's signals it
+polls once a second. Off a Pi (no busctl/BlueZ) everything reports
+"unavailable" and the UI hides the Bluetooth bits.
 """
 
 import json
@@ -17,18 +19,47 @@ import subprocess
 import threading
 import time
 import traceback
+from datetime import date
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit
+from backend.btagent import PairingAgent
+from backend.dbus import PROPERTIES, BusWatch
 
 POLL_MS = 1000
+SAFETY_TICKS = 60       # seconds between polls while BlueZ's signals are coming through
 PAIRING_SECONDS = 120
+ACCEPTED_SECONDS = 120      # for the phone's side to finish after Pair was tapped here
+DATES_KEY = "btPairedDates"
+VOLUME_SETTLE_MS = 1600     # just past the 1.5 s that _apply ignores after a change we sent
+OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
+BLUEZ_SIGNALS = [("/", OBJECT_MANAGER, "InterfacesAdded"),
+                 ("/", OBJECT_MANAGER, "InterfacesRemoved"),
+                 ("", PROPERTIES, "PropertiesChanged")]      # any object: players, transports, devices
 
 
 def _v(variant):
     """Unwrap a busctl JSON variant {"type": ..., "data": ...}."""
     return variant.get("data") if isinstance(variant, dict) and "type" in variant else variant
+
+
+def _name(device):
+    return _v(device.get("Alias")) or _v(device.get("Name")) or _v(device.get("Address")) or "Device"
+
+
+def _address(path, device):
+    """The device's address; BlueZ's object paths end in it too."""
+    return _v(device.get("Address")) or (path.rsplit("/dev_", 1)[1].replace("_", ":") if "/dev_" in path else "")
+
+
+def _shown_date(iso):
+    """"Oct 31, 2026" from "2026-10-31"; "" if it isn't a date."""
+    try:
+        d = date.fromisoformat(str(iso))
+    except ValueError:
+        return ""
+    return f"{d:%b} {d.day}, {d.year}"
 
 
 def _pick_player(players, prefer):
@@ -43,7 +74,7 @@ def parse_objects(objects, prefer=None):
     """Reduce BlueZ's GetManagedObjects data to what the UI needs. `prefer` is
     the path of the player used last, to stay on it when nothing says otherwise."""
     state = {"adapter": None, "discoverable": False, "device": None, "player": None,
-             "to_trust": [], "transport": None, "volume": None, "paired": []}
+             "known": {}, "confirmed": [], "transport": None, "volume": None, "paired": []}
     devices, players, transports = {}, [], {}
     for path, ifaces in objects.items():
         if "org.bluez.Adapter1" in ifaces and state["adapter"] is None:
@@ -53,8 +84,8 @@ def parse_objects(objects, prefer=None):
         if "org.bluez.Device1" in ifaces:
             d = ifaces["org.bluez.Device1"]
             devices[path] = d
-            if _v(d.get("Paired")) and not _v(d.get("Trusted")):
-                state["to_trust"].append(path)
+            state["known"][path] = {"name": _name(d), "address": _address(path, d),
+                                    "paired": bool(_v(d.get("Paired"))), "trusted": bool(_v(d.get("Trusted")))}
         if "org.bluez.MediaTransport1" in ifaces:
             # The audio link. Its Volume (0-127) is the phone's own volume
             # setting, kept in sync both ways (AVRCP absolute volume).
@@ -86,8 +117,8 @@ def parse_objects(objects, prefer=None):
         state["transport"], state["volume"] = chosen
     connected = [(p, d) for p, d in devices.items() if _v(d.get("Connected"))]
     state["paired"] = sorted(
-        ({"path": p, "name": _v(d.get("Alias")) or _v(d.get("Name")) or _v(d.get("Address")) or "Device",
-          "connected": bool(_v(d.get("Connected")))}
+        ({"path": p, "name": _name(d), "connected": bool(_v(d.get("Connected"))),
+          "address": _address(p, d), "trusted": bool(_v(d.get("Trusted")))}
          for p, d in devices.items() if _v(d.get("Paired"))),
         key=lambda d: (not d["connected"], d["name"].lower()))
     if state["player"] and state["player"]["device"] in devices:
@@ -112,9 +143,12 @@ class BluetoothAudio(QObject):
     playingChanged = pyqtSignal()
     _polled = pyqtSignal(object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
         self._available = bool(shutil.which("busctl"))
+        self._settings = settings
+        self._dates = self._load_dates()    # {address: ISO date}, when a device was accepted here
+        self._accepted = {}                 # {device path: when to give up}, accepted but not yet trusted
         self._state = parse_objects({})
         self._player = None
         self._pos_ms = 0
@@ -122,14 +156,24 @@ class BluetoothAudio(QObject):
         self._pairing_until = 0.0
         self._volume_sent_at = 0.0
         self._busy = False
+        self._again = False        # a signal came during a poll, which may have read too early
+        self._ticks_left = 0       # until the next poll
         self._poll_error = ""      # the error the last poll died of, while it keeps happening
         self._polled.connect(self._apply)
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self._tick)
+        self._bluez = BusWatch("org.bluez", BLUEZ_SIGNALS, self._signalled, self)
+        # What the phone made of a volume we sent, which _apply ignores until then.
+        self._volume_settle = QTimer(self, singleShot=True, interval=VOLUME_SETTLE_MS,
+                                     timeout=self._bluez.poke)
+        self._agent = PairingAgent(self._pairing_open, self._is_trusted, self._accepted_on_screen, self)
+        self._agent.changed.connect(self._agent_changed)
 
     def start(self):
         if self._available:
+            self._agent.start()      # first: its call on the bus mustn't wait behind the poll
+            self._bluez.start()
             self._tick()
             self._timer.start()
 
@@ -139,13 +183,31 @@ class BluetoothAudio(QObject):
             self.positionChanged.emit()   # interpolated between BlueZ updates
         if self._pairing_until and time.monotonic() >= self._pairing_until:
             self._pairing_until = 0.0
+            self._agent.cancel("Pairing closed")
             self.changed.emit()
+        self._agent.tick()
+        now = time.monotonic()
+        self._accepted = {p: until for p, until in self._accepted.items() if until > now}
+        self._ticks_left -= 1
+        if self._ticks_left <= 0:
+            self._refresh()
+
+    def _refresh(self):
+        # Fast while a device accepted on screen waits for its trust.
+        self._ticks_left = SAFETY_TICKS if self._bluez.live() and not self._accepted else 1
         if not self._busy:
             self._busy = True
             threading.Thread(target=self._poll, daemon=True).start()
 
+    def _signalled(self):
+        if self._busy:
+            self._again = True
+        else:
+            self._refresh()
+
     def _poll(self):
         state = None     # stays None if the poll crashes, and _apply keeps the old state
+        accepted = list(self._accepted)
         try:
             try:
                 out = _busctl("--json=short", "call", "org.bluez", "/",
@@ -154,17 +216,34 @@ class BluetoothAudio(QObject):
             except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
                 data = {}                    # no BlueZ, or nothing usable from it
             state = parse_objects(data, (self._player or {}).get("path"))
-            # Trust paired phones so they reconnect by themselves next time.
-            for path in state["to_trust"]:
-                try:
-                    _busctl("set-property", "org.bluez", path, "org.bluez.Device1", "Trusted", "b", "true")
-                except (OSError, subprocess.SubprocessError):
-                    pass
+            self._trust(state, accepted)
             self._logged()
         except Exception as e:
             self._logged(e)
         finally:
             safe_emit(self, "_polled", state)     # always, or _busy would never clear
+
+    def _trust(self, state, accepted):
+        """Trust what was accepted on screen, now that it's paired, so it
+        reconnects by itself. Nothing else ever gets trusted here. Runs on the
+        poll's thread; a failure leaves the device for the next poll."""
+        for path in accepted:
+            device = state["known"].get(path)
+            if not device or not device["paired"]:
+                continue
+            if not device["trusted"]:
+                try:
+                    done = _busctl("set-property", "org.bluez", path, "org.bluez.Device1",
+                                   "Trusted", "b", "true")
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if done.returncode != 0:
+                    continue
+                device["trusted"] = True
+                for entry in state["paired"]:
+                    if entry["path"] == path:
+                        entry["trusted"] = True
+            state["confirmed"].append((path, device["address"]))
 
     def _logged(self, error=None):
         """Log a poll that crashed (once, while the same error repeats), or
@@ -179,12 +258,17 @@ class BluetoothAudio(QObject):
 
     def _apply(self, state):
         self._busy = False
+        if self._again:
+            self._again = False
+            self._bluez.poke()
         if state is None:
             return
         old, old_player = self._state, self._player
         self._state, self._player = state, state["player"]
         p, o = self._player, old_player or {}
-        if (old["adapter"], old["discoverable"], old["device"], old["paired"]) != \
+        dated = self._update_dates(state)
+        # A prompt's device can turn up (or get its name) after the prompt does.
+        if dated or self._agent.pending or (old["adapter"], old["discoverable"], old["device"], old["paired"]) != \
                 (state["adapter"], state["discoverable"], state["device"], state["paired"]):
             self.changed.emit()
         # Ignore polls that raced a change we just sent, so the bar doesn't
@@ -207,6 +291,49 @@ class BluetoothAudio(QObject):
         if p["position_ms"] != o.get("position_ms") or p["status"] != o.get("status"):
             self._pos_ms, self._pos_at = p["position_ms"], time.monotonic()
             self.positionChanged.emit()
+
+    # ---- pairing ----------------------------------------------------------
+    def _pairing_open(self):
+        return self._pairing_until > time.monotonic()
+
+    def _is_trusted(self, path):
+        """For a service BlueZ wants allowed. A phone connects its audio right
+        after pairing, which can beat the poll that trusts it."""
+        return path in self._accepted or self._state["known"].get(path, {}).get("trusted", False)
+
+    def _accepted_on_screen(self, path):
+        self._accepted[path] = time.monotonic() + ACCEPTED_SECONDS
+        self._bluez.poke()
+
+    def _agent_changed(self):
+        if self._agent.pending:
+            self._bluez.poke()       # the phone that's asking is usually new to us
+        self.changed.emit()
+
+    def _load_dates(self):
+        if self._settings is None:
+            return {}
+        try:
+            dates = json.loads(str(self._settings.get(DATES_KEY, "{}")))
+        except ValueError:
+            return {}
+        return dates if isinstance(dates, dict) else {}
+
+    def _update_dates(self, state):
+        """Note the day each device was accepted, and forget the ones that are
+        gone (not while BlueZ is down: that's no answer). True if any changed."""
+        before = dict(self._dates)
+        for path, address in state["confirmed"]:
+            self._accepted.pop(path, None)
+            self._dates[address] = date.today().isoformat()
+        if state["adapter"]:
+            paired = {d["address"] for d in state["paired"]}
+            self._dates = {a: d for a, d in self._dates.items() if a in paired}
+        if self._dates == before:
+            return False
+        if self._settings is not None:
+            self._settings.set(DATES_KEY, json.dumps(self._dates))
+        return True
 
     def _command(self, method):
         if not self._player:
@@ -239,8 +366,38 @@ class BluetoothAudio(QObject):
 
     @pyqtProperty("QVariantList", notify=changed)
     def paired(self):
-        """Paired devices: [{path, name, connected}], connected first."""
-        return self._state["paired"]
+        """Paired devices, connected first: [{path, name, address, connected,
+        trusted, pairedOn}]. trusted is False for one not accepted on this
+        screen; pairedOn is "" for one paired before dates were kept."""
+        return [dict(d, pairedOn=_shown_date(self._dates.get(d["address"], "")))
+                for d in self._state["paired"]]
+
+    @pyqtProperty(bool, notify=changed)
+    def pairPending(self):
+        """A device is asking to pair, and the screen has to answer."""
+        return self._agent.pending
+
+    @pyqtProperty(str, notify=changed)
+    def pairName(self):
+        return self._state["known"].get(self._agent.device, {}).get("name") or self.pairAddress
+
+    @pyqtProperty(str, notify=changed)
+    def pairAddress(self):
+        return _address(self._agent.device, {})
+
+    @pyqtProperty(str, notify=changed)
+    def pairCode(self):
+        """The six digits to compare with the phone; "" if it can't show any."""
+        return self._agent.code
+
+    @pyqtProperty(bool, notify=changed)
+    def agentOk(self):
+        return self._agent.registered
+
+    @pyqtProperty(str, notify=changed)
+    def agentProblem(self):
+        """Why new phones can't be confirmed; nothing where there's no Bluetooth to pair with."""
+        return self._agent.problem if self._available else ""
 
     @pyqtProperty(bool, notify=trackChanged)
     def hasPlayer(self):
@@ -271,6 +428,15 @@ class BluetoothAudio(QObject):
             ms += int((time.monotonic() - self._pos_at) * 1000)
         dur = (self._player or {}).get("duration_ms", 0)
         return (min(ms, dur) if dur else ms) // 1000
+
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        """AVRCP has no seek: the progress bar isn't draggable on a phone."""
+        return False
+
+    @pyqtSlot(int)
+    def seek(self, seconds):
+        pass
 
     @pyqtProperty(bool, notify=playingChanged)
     def playing(self):
@@ -317,10 +483,19 @@ class BluetoothAudio(QObject):
         raw = max(0, min(127, round(int(value) * 127 / 100)))
         self._state["volume"] = raw
         self._volume_sent_at = time.monotonic()
+        self._volume_settle.start()
         threading.Thread(target=lambda: _busctl(
             "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
             "Volume", "q", str(raw)), daemon=True).start()
         self.volumeChanged.emit()
+
+    @pyqtSlot()
+    def acceptPairing(self):
+        self._agent.accept()
+
+    @pyqtSlot()
+    def cancelPairing(self):
+        self._agent.cancel()
 
     @pyqtSlot(str)
     def connectDevice(self, path):
@@ -339,12 +514,15 @@ class BluetoothAudio(QObject):
         """Unpair: the phone has to pair again to come back."""
         adapter = self._state["adapter"]
         if adapter and path.startswith(adapter + "/"):
+            self._accepted.pop(path, None)
             threading.Thread(target=lambda: _busctl("call", "org.bluez", adapter, "org.bluez.Adapter1",
                                                     "RemoveDevice", "o", path), daemon=True).start()
 
     @pyqtSlot(bool)
     def setPairing(self, on):
         """Make the Pi visible to phones for a couple of minutes, or stop."""
+        if not on:
+            self._agent.cancel("Pairing closed")
         adapter = self._state["adapter"]
         if not adapter:
             return

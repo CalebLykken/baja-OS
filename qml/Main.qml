@@ -81,6 +81,7 @@ Window {
     Connections {
         target: typeof phone !== "undefined" ? phone : null
         function onReceived(place) {
+            if (typeof display !== "undefined") display.wake()
             root.page = 2
             mapsPage.receive(place)
         }
@@ -233,6 +234,105 @@ Window {
         opacity: (1 - display.brightness / 100) * 0.85
     }
 
+    // "Screen off": a black layer over the pages and the dim overlay (the
+    // backlight itself is not driven yet, see Display._drive_panel). The tap
+    // that wakes it is swallowed so it doesn't press anything underneath.
+    // The shutdown prompt below stays above it.
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+        visible: typeof display !== "undefined" && display.screenOff
+        MouseArea {
+            anchors.fill: parent
+            onPressed: (mouse) => { mouse.accepted = true; display.wake() }
+        }
+    }
+    Connections {
+        target: typeof keyOff !== "undefined" ? keyOff : null
+        function onChanged() {
+            if (typeof display !== "undefined" && (keyOff.countdown >= 0 || keyOff.error !== ""))
+                display.wake()
+        }
+    }
+
+    // An overheating or charging warning brings the screen back (once per
+    // warning, so it can be blanked again while the warning holds).
+    readonly property bool urgentWarning: typeof vehicle !== "undefined"
+        && (vehicle.warnings.indexOf("coolant") >= 0 || vehicle.warnings.indexOf("voltage") >= 0)
+    onUrgentWarningChanged: if (urgentWarning && typeof display !== "undefined") display.wake()
+
+    // A phone wants to pair (backend/btagent.py): nothing pairs without a
+    // tap here. Phones with no screen have no code to compare.
+    Rectangle {
+        id: pairPrompt
+        readonly property bool asking: typeof bluetooth !== "undefined" && bluetooth.pairPending
+        readonly property string name: asking ? bluetooth.pairName : ""
+        readonly property string address: asking ? bluetooth.pairAddress : ""
+        readonly property string code: asking ? bluetooth.pairCode : ""
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.6)
+        opacity: asking ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+
+        Card {
+            anchors.centerIn: parent
+            width: 720
+            height: pairColumn.implicitHeight + 64
+            ColumnLayout {
+                id: pairColumn
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
+                spacing: 12
+                Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText      // the name comes from the other device
+                    text: "Pair with " + pairPrompt.name + "?"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                    text: pairPrompt.address
+                }
+                Label {
+                    visible: pairPrompt.code !== ""
+                    Layout.topMargin: 8
+                    numeric: true
+                    text: pairPrompt.code
+                    font.pixelSize: Theme.fontHuge
+                    font.weight: Theme.numWeight
+                    font.letterSpacing: 6
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
+                                                 : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
+                }
+                RowLayout {
+                    Layout.topMargin: 12
+                    spacing: 14
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "Pair"; primary: true
+                        onClicked: bluetooth.acceptPairing()
+                    }
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "Cancel"
+                        onClicked: bluetooth.cancelPairing()
+                    }
+                }
+            }
+        }
+    }
+
     // The truck was turned off: the Pi shuts down at the end of the
     // countdown (backend/ignition.py) unless "Keep on" is tapped. If the
     // shutdown fails, it says so instead, until OK.
@@ -303,6 +403,46 @@ Window {
                         icon: "power"; text: "Shut down now"; danger: true
                         onClicked: system.powerOff()
                     }
+                }
+            }
+        }
+    }
+
+    // The last start had to take an update back (backend/updater.py): say
+    // so, once, until OK.
+    Rectangle {
+        id: updateNotice
+        readonly property string text: typeof updater === "undefined" ? "" : updater.notice
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.6)
+        visible: text !== ""
+        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+
+        Card {
+            anchors.centerIn: parent
+            width: 720
+            height: noticeColumn.implicitHeight + 64
+            ColumnLayout {
+                id: noticeColumn
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
+                spacing: 12
+                Label {
+                    text: "Software update"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: updateNotice.text
+                }
+                TextButton {
+                    Layout.topMargin: 12
+                    Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                    text: "OK"; primary: true
+                    onClicked: updater.dismissNotice()
                 }
             }
         }

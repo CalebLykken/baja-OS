@@ -25,7 +25,9 @@ frame; Spotify covers are downloaded and cached first.
 
 Which source was on, and where local music was up to, are saved in
 settings (every few seconds while it plays, and whenever that changes), so
-a restart picks up the same album and song, near the same place. Local
+a restart picks up the same album and song, near the same place. Shuffle
+and repeat (the Pi's own music only; Spotify and the phone have no way to
+set them from here) are saved with it. Local
 music plays again only if it was what was playing; after Spotify or the
 phone it waits, paused, for them to come back.
 """
@@ -41,7 +43,7 @@ import urllib.request
 from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
-from backend import artcache, safe_emit
+from backend import artcache, retry, safe_emit
 
 PHONE_RECONNECT_GRACE_S = 10
 # Soft pause and play, like a car stereo: music cut off mid-wave clicks.
@@ -52,6 +54,7 @@ FADE_IN_MS = 400
 FADE_STEP_MS = 30
 START_WAIT_MS = 120
 SETTLE_MS = 250            # after pausing, before the volume goes back up
+MUTE_MS = 150              # the knob's mute ramps like this, so it doesn't click
 FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
 SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
 
@@ -105,8 +108,10 @@ def cached_art(url):
         return url
     out, hit = artcache.lookup(artcache.digest(url) + ".img")
     if not hit:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            data = r.read()
+        def get():
+            with urllib.request.urlopen(url, timeout=10) as r:
+                return r.read()
+        data = retry.call(get)        # back-off on timeouts, 429 and 5xx; callers are worker threads
         with artcache.writing(out) as tmp:
             tmp.write_bytes(data)
     return QUrl.fromLocalFile(str(out)).toString()
@@ -136,7 +141,11 @@ class MediaHub(QObject):
     _artReady = pyqtSignal(str, str, str, str)   # source, its art url, local copy, rounded card
 
     maxVolumeChanged = pyqtSignal()
+    modesChanged = pyqtSignal()
+    mutedChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
+    albumsChanged = pyqtSignal()        # the Pi's music was rescanned
+    scanningChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
         super().__init__(parent)
@@ -146,6 +155,9 @@ class MediaHub(QObject):
         saved = read_state(str(settings.get("music", ""))) if settings else None
         self._was_playing = plays_on_start(saved)      # kept while local music has no songs
         if saved is not None:
+            modes = saved.get("modes")
+            if isinstance(modes, dict):
+                local.set_modes(modes.get("shuffle") is True, modes.get("repeat"))
             local.restore(saved.get("local"), play=self._was_playing)
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
         self._system_volume = bool(shutil.which("wpctl"))
@@ -161,6 +173,9 @@ class MediaHub(QObject):
         self._fade_step = 0.0
         self._after_fade = None
         self._pausing = self._resuming = False
+        self._muted = False              # the knob's long press: silent, but still playing
+        self._mute_gain = 1.0            # 0-1 on top of the volume, ramping to 0 or 1
+        self._mute_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._mute_tick)
         self._fade_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._fade_tick)
         self._give_up = QTimer(self, singleShot=True, interval=FADE_GIVE_UP_MS,
                                timeout=self._give_up_waiting)
@@ -182,6 +197,10 @@ class MediaHub(QObject):
         spotify.changed.connect(self._spotify_changed)
         spotify.queueChanged.connect(self.queueChanged)
         local.queueChanged.connect(self.queueChanged)       # an album started
+        local.modesChanged.connect(self.modesChanged)
+        if hasattr(local, "libraryChanged"):         # not the demo player
+            local.libraryChanged.connect(self.albumsChanged)
+            local.scanningChanged.connect(self.scanningChanged)
         self._recent_art = {}             # Spotify cover URL -> saved copy
         spotify.recentsChanged.connect(self._save_recent_art)
         spotify.recentsChanged.connect(self.recentsChanged)
@@ -198,7 +217,8 @@ class MediaHub(QObject):
             src.start()
         if self._settings:
             # Only from here: before it starts, local music doesn't know its place.
-            for sig in (self.sourceChanged, self.playingChanged, self.trackChanged):
+            for sig in (self.sourceChanged, self.playingChanged, self.trackChanged,
+                        self.modesChanged):
                 sig.connect(self._save)
             self._save_timer.start()
 
@@ -212,7 +232,9 @@ class MediaHub(QObject):
             playing = self._was_playing
         self._settings.set("music", json.dumps({
             "source": self._source, "playing": playing,
-            "local": self._sources["local"].state()}))
+            "local": self._sources["local"].state(),
+            "modes": {"shuffle": self._sources["local"].shuffle,
+                      "repeat": self._sources["local"].repeat}}))
 
     def _no_songs(self):
         """True when local music is the source and has nothing to play."""
@@ -231,9 +253,11 @@ class MediaHub(QObject):
     def _set_source(self, source):
         if source != self._source:
             self._source = source
+            if source != "local" and hasattr(self._sources["local"], "cancel_autoplay"):
+                self._sources["local"].cancel_autoplay()    # songs found later mustn't take over
             self._apply_volume()
             for sig in ("sourceChanged", "volumeChanged", "trackChanged",
-                        "positionChanged", "playingChanged", "queueChanged"):
+                        "positionChanged", "playingChanged", "queueChanged", "modesChanged"):
                 getattr(self, sig).emit()
 
     def _pause_others(self, keep):
@@ -311,10 +335,27 @@ class MediaHub(QObject):
         if self._system_volume:
             level = ceiling if self._remote_volume else self._volume / 100 * ceiling
             with self._level_lock:
-                self._pending_level = level * self._fade
+                self._pending_level = level * self._fade * self._mute_gain
             self._level_wake.set()
         else:
-            self._sources["local"].setVolume(round(self._volume * ceiling))
+            self._sources["local"].setVolume(round(self._volume * ceiling * self._mute_gain))
+
+    def _set_muted(self, on):
+        if on == self._muted:
+            return
+        self._muted = on
+        self._mute_timer.start()
+        self.mutedChanged.emit()
+
+    def _mute_tick(self):
+        step = FADE_STEP_MS / MUTE_MS
+        if self._muted:
+            self._mute_gain = max(0.0, self._mute_gain - step)
+        else:
+            self._mute_gain = min(1.0, self._mute_gain + step)
+        self._apply_volume()
+        if self._mute_gain == (0.0 if self._muted else 1.0):
+            self._mute_timer.stop()
 
     def _level_writer(self):
         while True:
@@ -430,10 +471,15 @@ class MediaHub(QObject):
         """The Pi's own songs playing through: an album, or all of them (tap to play)."""
         return self._sources["local"].queue
 
-    @pyqtProperty("QVariantList", constant=True)
+    @pyqtProperty("QVariantList", notify=albumsChanged)
     def albums(self):
         """Albums of the Pi's own songs: [{title, artist, art, count, duration}]."""
         return self._sources["local"].albums
+
+    @pyqtProperty(bool, notify=scanningChanged)
+    def scanning(self):
+        """The Pi's music folder is still being read for the first time."""
+        return getattr(self._sources["local"], "scanning", False)
 
     @pyqtProperty(int, notify=queueChanged)
     def album(self):
@@ -476,6 +522,40 @@ class MediaHub(QObject):
         """What Spotify plays next (display only)."""
         return self._sources["spotify"].upNext if self._source == "spotify" else []
 
+    @pyqtProperty(bool, notify=sourceChanged)
+    def canSeek(self):
+        """The bar can be dragged: not on a phone, which has no seek."""
+        return self._active.canSeek
+
+    @pyqtSlot(int)
+    def seek(self, seconds):
+        if self._active.canSeek:
+            self._active.seek(seconds)
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def hasModes(self):
+        """Shuffle and repeat can be set: the Pi's own music is the source."""
+        return self._source == "local" and self._sources["local"].hasModes
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def shuffle(self):
+        return self._sources["local"].shuffle
+
+    @pyqtProperty(str, notify=modesChanged)
+    def repeat(self):
+        """'all', 'one' or 'off' for the Pi's own music."""
+        return self._sources["local"].repeat
+
+    @pyqtSlot()
+    def toggleShuffle(self):
+        if self.hasModes:
+            self._sources["local"].toggleShuffle()
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        if self.hasModes:
+            self._sources["local"].cycleRepeat()
+
     @pyqtProperty(int, notify=positionChanged)
     def position(self):
         return self._active.position
@@ -492,6 +572,15 @@ class MediaHub(QObject):
     def maxVolume(self):
         """Ceiling on the Pi's output, 30-100 (% of full)."""
         return self._max
+
+    @pyqtProperty(bool, notify=mutedChanged)
+    def muted(self):
+        """The knob's long press: silent, but still playing. Any volume change ends it."""
+        return self._muted
+
+    @pyqtSlot()
+    def toggleMute(self):
+        self._set_muted(not self._muted)
 
     @pyqtSlot(int)
     def setMaxVolume(self, value):
@@ -561,6 +650,7 @@ class MediaHub(QObject):
     @pyqtSlot(int)
     def setVolume(self, value):
         value = max(0, min(100, int(value)))
+        self._set_muted(False)
         if self._remote_volume:
             self._active.setVolume(value)
             return

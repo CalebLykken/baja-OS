@@ -12,7 +12,8 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.system import SystemInfo, power
+from backend import system as system_module
+from backend.system import SystemInfo, can_power, power
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -59,6 +60,65 @@ def logged(printed):
     return [c.args[0] for c in printed.call_args_list if c.args and "System" in str(c.args[0])]
 
 
+class HoldTest(unittest.TestCase):
+    """Reboot and shut down wait for an update's merge, but not for ever."""
+
+    def setUp(self):
+        self.busy = True
+        self.sys = SystemInfo()
+        self.sys.hold_power_while(lambda: self.busy)
+        self.asked = []
+        p = mock.patch("backend.system.power", side_effect=lambda a: self.asked.append(a) or "")
+        p.start()
+        self.addCleanup(p.stop)
+        t = mock.patch("backend.system.threading.Thread", InlineThread)
+        t.start()
+        self.addCleanup(t.stop)
+
+    def tick(self):
+        self.sys._held_tick()
+
+    def test_not_busy_goes_at_once(self):
+        self.busy = False
+        self.sys.powerOff()
+        self.assertEqual(self.asked, ["poweroff"])
+
+    def test_waits_for_the_merge(self):
+        self.sys.reboot()
+        self.tick()
+        self.assertEqual(self.asked, [])
+        self.busy = False
+        self.tick()
+        self.assertEqual(self.asked, ["reboot"])
+        self.assertFalse(self.sys._hold_timer.isActive())
+
+    def test_gives_up_in_bounded_time(self):
+        with mock.patch.object(system_module, "POWER_HOLD_S", 0):
+            self.sys.powerOff()
+        self.tick()                         # still merging: shuts down anyway
+        self.assertEqual(self.asked, ["poweroff"])
+
+    def test_asking_again_does_not_extend_the_wait(self):
+        self.sys.powerOff()
+        until = self.sys._held[1]
+        self.sys.powerOff()
+        self.assertEqual(self.sys._held[1], until)
+        self.sys._hold_timer.stop()
+
+
+class CanPowerTest(unittest.TestCase):
+    def test_answers(self):
+        for out, want in (('s "yes"\n', True), ('s "no"\n', False), ('s "challenge"\n', False)):
+            with mock.patch("subprocess.run", return_value=ran(0, out)):
+                self.assertIs(can_power(), want)
+
+    def test_no_answer_is_none(self):
+        with mock.patch("subprocess.run", return_value=ran(1, "", "not running")):
+            self.assertIsNone(can_power())
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertIsNone(can_power())
+
+
 class StatusCheckTest(unittest.TestCase):
     def setUp(self):
         with mock.patch("backend.system.version_text", return_value=""):
@@ -77,6 +137,27 @@ class StatusCheckTest(unittest.TestCase):
                 mock.patch("backend.system.uptime_text", return_value="5 min"), \
                 mock.patch("backend.system.can_power", return_value=False):
             self.system._check()
+
+    def asked(self, answers):
+        """Three checks with logind answering in turn; how often it was asked."""
+        with mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.can_power", side_effect=answers) as ask:
+            for _ in range(3):
+                self.system._check()
+        return ask.call_count
+
+    def test_logind_is_asked_once(self):
+        self.assertEqual(self.asked([True]), 1)
+        self.assertTrue(self.system.canPower)
+
+    def test_a_no_is_an_answer_too(self):
+        self.assertEqual(self.asked([False]), 1)
+        self.assertFalse(self.system.canPower)
+
+    def test_logind_is_asked_again_until_it_answers(self):
+        self.assertEqual(self.asked([None, None, True]), 3)    # not up yet at boot
+        self.assertTrue(self.system.canPower)
 
     def test_two_crashing_checks_log_once_and_keep_the_readings(self):
         self.check(used=1000)

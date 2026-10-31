@@ -156,6 +156,19 @@ Item {
                     IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
                 }
                 SettingRow {
+                    label: "Screen"
+                    TextButton {
+                        icon: "power"
+                        text: "Screen off"
+                        onClicked: display.setScreenOff(true)
+                    }
+                    Label {
+                        text: "Touch to wake"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+                SettingRow {
                     label: "Dim after sunset"
                     SegmentedControl {
                         options: [{ label: "On", value: true }, { label: "Off", value: false }]
@@ -281,9 +294,30 @@ Item {
                         onClicked: voice.test()
                     }
                 }
+                RowLayout {
+                    visible: typeof voice !== "undefined" && voice.available
+                    Layout.fillWidth: true
+                    spacing: 16
+                    IconButton { icon: "remove"; size: 60; onClicked: voice.setLevel(voice.level - 5) }
+                    LevelBar {
+                        Layout.fillWidth: true
+                        segments: 14
+                        value: typeof voice !== "undefined" ? (voice.level - 30) / 70 : 0
+                        onMoved: (v) => voice.setLevel(Math.round((30 + v * 70) / 5) * 5)
+                    }
+                    Label {
+                        Layout.preferredWidth: 64
+                        horizontalAlignment: Text.AlignRight
+                        text: (typeof voice !== "undefined" ? voice.level : 0) + "%"
+                        font.family: Theme.numFont
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    IconButton { icon: "add"; size: 60; onClicked: voice.setLevel(voice.level + 5) }
+                }
                 Note {
                     text: typeof voice !== "undefined" && voice.available
-                          ? "Turn instructions are spoken over the music, which dips while they play."
+                          ? "Turn instructions are spoken over the music, which dips while they play. Their volume is their own: it follows the Loudest volume above, not the music volume or the source."
                           : "Run deploy/audio/install-voice.sh on the Pi once to add the voice (about 100 MB)."
                 }
             }
@@ -319,7 +353,9 @@ Item {
                     }
                     Label {
                         text: !parent.known ? "Checking the connection"
-                              : network.online ? "Online" : (network.ip ? "Connected, but no internet" : "Offline")
+                              : network.online ? "Online"
+                              : network.portal ? "Sign in to the network on your phone"
+                              : (network.ip ? "Connected, but no internet" : "Offline")
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }
@@ -330,6 +366,16 @@ Item {
                     text: wifi.tetherActive ? "Using " + wifi.tetherPhone + " over Bluetooth"
                           : network.ssid ? "On " + network.ssid + (network.ip ? ", " + network.ip : "")
                           : "Not on Wi-Fi"
+                }
+                Label {
+                    visible: dataUse.available
+                    font.pixelSize: Theme.fontBody
+                    color: Theme.textDim
+                    text: "Data this month: " + dataUse.text
+                }
+                Note {
+                    visible: dataUse.available
+                    text: "Counts all Wi-Fi and Bluetooth tether use, not only the phone's hotspot."
                 }
             }
 
@@ -415,6 +461,24 @@ Item {
                         }
                     }
                 }
+                // A network that doesn't broadcast its name: type it in.
+                Rectangle {
+                    visible: wifi.available && wifi.canControl
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 64
+                    radius: Theme.radius
+                    color: otherTap.pressed ? Theme.panelHi : "transparent"
+                    Label {
+                        anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+                        text: "Other network…"
+                        font.pixelSize: Theme.fontBody
+                    }
+                    TapHandler {
+                        id: otherTap
+                        enabled: wifi.busy === ""
+                        onTapped: joinSheet.openHidden()
+                    }
+                }
                 Note {
                     visible: wifi.available
                     text: wifi.networks.length === 0 ? "Looking for networks"
@@ -449,6 +513,21 @@ Item {
     Component {
         id: bluetoothSection
         Scroller {
+            Section {
+                visible: !bluetooth.agentOk && bluetooth.agentProblem !== ""
+                Layout.fillWidth: true
+                heading: "Pairing can't be confirmed on this screen"
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.warn
+                    font.pixelSize: Theme.fontBody
+                    text: "A new phone may not pair, or may pair without asking and then be refused. Don't rely on Pair phone until this clears. Phones already paired still connect."
+                }
+                Note { text: bluetooth.agentProblem }
+                Note { text: "It keeps trying by itself. If this stays, restart Baja OS and check bluetooth.service on the Pi." }
+            }
+
             Section {
                 id: btCard
                 Layout.fillWidth: true
@@ -485,7 +564,7 @@ Item {
                     }
                 }
                 Note {
-                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”. Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
+                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”, then tap Pair on this screen when the code matches the phone's (some phones show none). Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
                 }
             }
 
@@ -508,13 +587,24 @@ Item {
                             Label {
                                 width: parent.width
                                 elide: Text.ElideRight
+                                textFormat: Text.PlainText
                                 text: modelData.name
                                 font.pixelSize: Theme.fontBody
                                 font.weight: modelData.connected ? Font.DemiBold : Font.Normal
                             }
                             Label {
-                                text: modelData.connected ? "Connected" : "Not connected"
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: (modelData.connected ? "Connected" : "Not connected")
+                                      + (modelData.pairedOn !== "" ? " · Paired " + modelData.pairedOn
+                                         : modelData.trusted ? " · Paired before the update" : "")
                                 color: modelData.connected ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Label {
+                                visible: !modelData.trusted
+                                text: "Not accepted on this screen"
+                                color: Theme.warn
                                 font.pixelSize: Theme.fontSmall
                             }
                         }
@@ -701,6 +791,32 @@ Item {
             }
             Section {
                 Layout.fillWidth: true
+                heading: "Route options"
+                Repeater {
+                    model: [{ label: "Avoid ferries", key: "avoidFerries" },
+                            { label: "Avoid highways", key: "avoidHighways" },
+                            { label: "Avoid tolls", key: "avoidTolls" }]
+                    SettingRow {
+                        required property var modelData
+                        label: modelData.label
+                        SegmentedControl {
+                            options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                            current: typeof routing !== "undefined" && (modelData.key === "avoidFerries" ? routing.avoidFerries
+                                     : modelData.key === "avoidHighways" ? routing.avoidHighways : routing.avoidTolls)
+                            onPicked: (v) => routing.setAvoid(modelData.key, v)
+                        }
+                    }
+                }
+                // Guidance has no other place to say a change didn't work.
+                Note {
+                    readonly property bool shown: typeof routing !== "undefined" && (routing.active || routing.previewing)
+                    text: shown && routing.computing ? "Finding a route with these options"
+                          : shown && routing.error !== "" ? routing.error + ". The route on screen hasn't changed."
+                          : "Used for every new route. Changing one while a route is showing works it out again."
+                }
+            }
+            Section {
+                Layout.fillWidth: true
                 heading: "Directions"
                 Row {
                     spacing: 12
@@ -774,8 +890,9 @@ Item {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     font.pixelSize: Theme.fontBody
-                    color: system.power !== "" ? Theme.warn : Theme.textDim
-                    text: system.power !== "" ? system.power : "Power supply and temperature are fine"
+                    color: system.power !== "" || system.errors > 0 ? Theme.warn : Theme.textDim
+                    text: (system.power !== "" ? system.power : "Power supply and temperature are fine")
+                          + (system.errors > 0 ? " · " + system.errors + (system.errors === 1 ? " error" : " errors") + " since start" : "")
                 }
             }
 
@@ -784,9 +901,9 @@ Item {
                 heading: "Restart and power"
                 RowLayout {
                     spacing: 14
-                    TextButton { icon: "refresh"; text: "Restart dashboard"; onClicked: system.restartDashboard() }
-                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower; onConfirmed: system.reboot() }
-                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower; onConfirmed: system.powerOff() }
+                    TextButton { icon: "refresh"; text: "Restart dashboard"; enabled: !updater.busy; onClicked: system.restartDashboard() }
+                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower && !updater.updating; onConfirmed: system.reboot() }
+                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower && !updater.updating; onConfirmed: system.powerOff() }
                 }
                 Label {
                     visible: system.powerError !== ""
@@ -816,6 +933,41 @@ Item {
                           ? "When the truck is turned off (it stops answering the OBD adapter), the Pi counts down 25 s and shuts down, inside the power relay's hold time. Keep on stops it."
                           : "Turn this on once the Pi runs through the power relay. On any other power, a shut-down Pi stays off until it's unplugged and plugged back in."
                 }
+            }
+
+            Section {
+                Layout.fillWidth: true
+                heading: "Software update"
+                RowLayout {
+                    spacing: 14
+                    TextButton { icon: "refresh"; text: "Check for updates"; enabled: !updater.busy; onClicked: updater.check() }
+                    TextButton { text: "Update"; enabled: updater.canUpdate; onClicked: updater.update() }
+                }
+                Label {
+                    visible: updater.message !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontBody
+                    color: updater.state === "failed" ? Theme.warn : Theme.textDim
+                    text: updater.message
+                }
+                Repeater {
+                    model: updater.commits
+                    Label {
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        font.pixelSize: Theme.fontSmall
+                        color: Theme.textDim
+                        text: "· " + modelData
+                    }
+                }
+                Label {
+                    visible: updater.count > updater.commits.length
+                    font.pixelSize: Theme.fontSmall
+                    color: Theme.textDim
+                    text: "and " + (updater.count - updater.commits.length) + " more"
+                }
+                Note { text: "Update pulls what Check found and restarts the dashboard. It won't run while driving, while directions are on, or if files here were changed over SSH." }
             }
 
             Section {
@@ -905,11 +1057,14 @@ Item {
         property string ssid: ""
         property string password: ""
         property bool reveal: false
-        function open(name) { ssid = name; password = ""; reveal = false }
-        function close() { ssid = ""; password = "" }
+        property bool hidden: false      // a network typed in by hand
+        property bool naming: false      // ...and its name is still being typed
+        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false }
+        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true }
+        function close() { ssid = ""; password = ""; hidden = false; naming = false }
 
         anchors.fill: parent
-        visible: ssid !== ""
+        visible: ssid !== "" || naming
         color: Theme.bg
         // Swallow taps so nothing underneath reacts.
         MouseArea { anchors.fill: parent }
@@ -923,7 +1078,7 @@ Item {
                 spacing: 14
                 Label {
                     Layout.fillWidth: true
-                    text: "Join “" + joinSheet.ssid + "”"
+                    text: joinSheet.naming ? "Other network" : "Join “" + joinSheet.ssid + "”"
                     elide: Text.ElideRight
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
@@ -947,14 +1102,15 @@ Item {
                         width: Math.min(implicitWidth, parent.width - 50)
                         clip: true
                         horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
-                        text: joinSheet.password === "" ? ""
+                        text: joinSheet.naming ? joinSheet.ssid
+                              : joinSheet.password === "" ? ""
                               : joinSheet.reveal ? joinSheet.password : "•".repeat(joinSheet.password.length)
                         font.pixelSize: Theme.fontTitle
                     }
                     Label {
-                        visible: joinSheet.password === ""
+                        visible: joinSheet.naming ? joinSheet.ssid === "" : joinSheet.password === ""
                         anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter }
-                        text: "Password"
+                        text: joinSheet.naming ? "Network name" : joinSheet.hidden ? "Password (empty if open)" : "Password"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -974,6 +1130,7 @@ Item {
                     }
                 }
                 IconButton {
+                    visible: !joinSheet.naming
                     size: 64
                     icon: joinSheet.reveal ? "visibility_off" : "visibility"
                     onClicked: joinSheet.reveal = !joinSheet.reveal
@@ -984,12 +1141,19 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.maximumHeight: 440
-                doneLabel: "Join"
-                doneEnabled: joinSheet.password.length >= 8      // WPA passwords are 8+
-                onTyped: (ch) => joinSheet.password += ch
-                onBackspace: joinSheet.password = joinSheet.password.slice(0, -1)
+                doneLabel: joinSheet.naming ? "Next" : "Join"
+                doneEnabled: joinSheet.naming ? joinSheet.ssid.length > 0
+                             : joinSheet.password.length >= 8      // WPA passwords are 8+
+                                || (joinSheet.hidden && joinSheet.password.length === 0)
+                onTyped: (ch) => { if (joinSheet.naming) joinSheet.ssid += ch; else joinSheet.password += ch }
+                onBackspace: {
+                    if (joinSheet.naming) joinSheet.ssid = joinSheet.ssid.slice(0, -1)
+                    else joinSheet.password = joinSheet.password.slice(0, -1)
+                }
                 onDone: {
-                    wifi.join(joinSheet.ssid, joinSheet.password)
+                    if (joinSheet.naming) { joinSheet.naming = false; return }
+                    if (joinSheet.hidden) wifi.joinHidden(joinSheet.ssid, joinSheet.password)
+                    else wifi.join(joinSheet.ssid, joinSheet.password)
                     joinSheet.close()
                 }
             }

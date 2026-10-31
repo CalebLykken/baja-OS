@@ -5,8 +5,12 @@ Piper runs in its own process (voice_worker.py, under the Piper install's
 Python from deploy/audio/install-voice.sh), started on first use and kept
 loaded. Playback is `pw-play`; the other audio streams are turned down
 with `wpctl` for the length of the line and put back afterwards, so
-Spotify's own volume (and the phone's slider) never moves. The volumes to
-go back to are written to a file first, so a dashboard that dies mid-line
+Spotify's own volume (and the phone's slider) never moves. Directions have
+their own level (Settings > Sound), a share of the output ceiling that does
+not depend on the music: the voice stream is turned down to it, or if the
+output is quieter than that (music at 0, say) the output is raised for the
+length of the line, with the music ducked further to stay as quiet as it
+was. The volumes to go back to are written to a file first, so a dashboard that dies mid-line
 puts them back on its next start instead of leaving the music at 30%.
 
 A Piper that stops answering, or exits, is killed and started again for the
@@ -44,6 +48,9 @@ RECOVER_S = 1800        # then a stream from the last run has this long to appea
                         # only does once playback starts); the level check keeps waiting safe
 GIVE_UP_S = 120         # a put-back that keeps failing is dropped after this long
 RETRY_S = 2             # between tries at putting back what wpctl would not
+VOICE_LEVEL = (30, 100)  # Settings > Sound > Spoken directions volume, % of the ceiling; never muted
+VOICE_LEVEL_DEFAULT = 70
+SINK = "@DEFAULT_AUDIO_SINK@"
 DUCK_TOL = 0.02         # wpctl prints two decimals; a stream within this of the duck level is still ducked
 
 
@@ -106,6 +113,15 @@ def _set_volumes(volumes):
     return done
 
 
+def clamp_level(value):
+    """A saved spoken-directions level as a whole % within VOICE_LEVEL."""
+    try:
+        value = int(float(str(value)))
+    except (TypeError, ValueError):
+        value = VOICE_LEVEL_DEFAULT
+    return max(VOICE_LEVEL[0], min(VOICE_LEVEL[1], value))
+
+
 def _state_file():
     base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
     return Path(base).expanduser() / "baja-os" / "duck.json"
@@ -147,11 +163,15 @@ class Ducker:
         except OSError as e:
             print(f"Voice: couldn't update {self._path} ({e!r})", flush=True)
 
-    def duck(self):
-        """Turn down every stream not already ducked."""
+    def duck(self, scale=1.0):
+        """Turn down every stream not already ducked, to DUCK_TO of what it
+        was times `scale` (<1 while the output is raised for the voice, so
+        the music stays as quiet as it was). True if every stream was read
+        and turned down."""
         with self._lock:
             self._depth += 1
-            names = _stream_names() or {}
+            dumped = _stream_names()
+            names = dumped or {}
             held = {e["id"] for e in self._saved if names.get(e["id"]) == e["name"]}
             # A stream the last run left ducked, now back at that level, already has
             # its real "before" on file: don't save the ducked level as a new one.
@@ -160,10 +180,12 @@ class Ducker:
                    if n not in held and names.get(n) not in waiting}
             for n, v in new.items():
                 self._saved.append({"id": n, "name": names.get(n, ""), "before": v,
-                                    "ducked": v * DUCK_TO, "give_up": None, "started": True,
+                                    "ducked": v * DUCK_TO * scale, "give_up": None, "started": True,
                                     "failing": False, "recovered": False})
             self._write()               # before any volume moves
-            _set_volumes({n: v * DUCK_TO for n, v in new.items()})
+            done = _set_volumes({n: v * DUCK_TO * scale for n, v in new.items()})
+            unread = set(names) - set(new) - held   # streams wpctl wouldn't read
+            return dumped is not None and not unread and done == set(new)
 
     def release(self):
         with self._lock:
@@ -327,8 +349,11 @@ class Voice(QObject):
         self._enabled = str(settings.get("voice", "false")) == "true"
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
+        self._stuck = None              # (raised, scale) of an output that wouldn't come down
+        self._stuck_until = None        # keep trying without a line until then
         self._piper = None
         self._ducker = Ducker()
+        self._level = clamp_level(settings.get("voiceVolume", VOICE_LEVEL_DEFAULT))
         self._tmp = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
         if self._available:
             threading.Thread(target=self._run, name="voice", daemon=True).start()
@@ -371,6 +396,29 @@ class Voice(QObject):
             return False
         return True
 
+    def _ceiling(self):
+        """The output ceiling, 0.3-1 (Settings > Sound > Loudest volume). Read
+        on the main thread: the settings object isn't for the voice thread."""
+        try:
+            return max(30, min(100, int(float(str(self._settings.get("maxVolume", 100)))))) / 100
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _plan_levels(self, ceiling):
+        """(stream volume for pw-play, output level to raise to or None, scale
+        for ducking the music). The stream is only ever turned down, never
+        amplified (Piper's WAVs are near full scale), so an output quieter
+        than the target is raised instead. Without a reading of the output
+        the stream just plays at the level. wpctl volumes are cubic in amplitude
+        and pw-play's is linear, so the stream gets the ratio cubed."""
+        target = self._level / 100 * ceiling
+        sink = _volume(SINK)
+        if sink is None:
+            return (self._level / 100) ** 3, None, 1.0
+        if sink >= target:
+            return (target / sink) ** 3, None, 1.0
+        return 1.0, target, sink / target
+
     def _run(self):
         n = 0
         try:
@@ -379,13 +427,18 @@ class Voice(QObject):
             print(f"Voice: couldn't put back volumes from a last run ({e!r})", flush=True)
         while True:
             try:
-                text, queued_at = self._jobs.get(timeout=RETRY_S if self._ducker.pending else None)
+                job = self._jobs.get(timeout=RETRY_S if self._owing else None)
             except queue.Empty:
-                try:
+                job = None
+            try:
+                self._retry_output()                # first: a line needs the output's true level
+                if job is None:
                     self._ducker.retry()
-                except Exception as e:
-                    print(f"Voice: couldn't put volumes back ({e!r})", flush=True)
+            except Exception as e:
+                print(f"Voice: couldn't put volumes back ({e!r})", flush=True)
+            if job is None:
                 continue
+            text, queued_at, ceiling = job
             if time.monotonic() - queued_at > STALE_S:
                 continue                            # the moment has passed
             try:
@@ -393,27 +446,77 @@ class Voice(QObject):
                 out = str(self._tmp / f"baja-voice-{n % 4}.wav")
                 if not self._synthesize(text, out):
                     continue
+                gain, raise_to, scale = self._plan_levels(ceiling)
+                if self._stuck is not None:         # already raised: a stream that's new
+                    raise_to, scale = None, self._stuck[1]      # is ducked to match
+                raised = None
                 try:
-                    self._ducker.duck()
+                    ducked = self._ducker.duck(scale)
+                    # Raising the output with music not turned down would blast it.
+                    if raise_to is not None and ducked and _set_volumes({SINK: raise_to}):
+                        raised = raise_to
                     subprocess.run(["pw-play", "--media-role", "Navigation",
+                                    "--volume", f"{gain:.3f}",
                                     "--properties", '{ node.name = "%s" }' % NODE_NAME, out],
                                    capture_output=True, timeout=30)
                 finally:
-                    self._ducker.release()
+                    # The output first, while the music is still ducked, then the music.
+                    if raised is None or self._put_back_output(raised, scale):
+                        self._ducker.release()
+                    else:
+                        # Still raised: this line's release is held back, so the music
+                        # stays ducked (blasting it would be worse) until it comes down.
+                        self._stuck = raised, scale
+                        self._stuck_until = time.monotonic() + GIVE_UP_S
+                        print("Voice: couldn't lower the output; music stays down", flush=True)
             except Exception as e:                  # never end this thread
                 print(f"Voice: couldn't speak a line ({e!r}); on to the next", flush=True)
+
+    @property
+    def _owing(self):
+        """Something to try again without waiting for a line."""
+        return self._ducker.pending or self._stuck_until is not None
+
+    def _retry_output(self):
+        """Another go at an output that wouldn't come down; the music follows it.
+        After GIVE_UP_S only a new line tries again: the music stays ducked,
+        since full music on a raised output is the worse way to be wrong, until
+        one gets the output down, the knob moves it, or the next start recovers."""
+        if self._stuck is None:
+            return
+        if self._put_back_output(*self._stuck):
+            self._stuck = self._stuck_until = None
+            self._ducker.release()
+        elif self._stuck_until is not None and time.monotonic() > self._stuck_until:
+            self._stuck_until = None
+            print("Voice: gave up lowering the output for now; music stays down", flush=True)
+
+    def _put_back_output(self, raised, scale):
+        """Lower the output again, unless something (the knob) moved it meanwhile.
+        Only when the music is back to its own level does it matter: with another
+        line queued the next one raises it again. False if it's still raised."""
+        if raised is None:
+            return True
+        now = _volume(SINK)
+        if now is not None and abs(now - raised) > DUCK_TOL:
+            return True                                      # moved by hand: leave it
+        for _ in range(2):                                   # unreadable: put it back anyway
+            if SINK in _set_volumes({SINK: raised * scale}):
+                return True
+        return False
 
     # ---- what QML and the router use -----------------------------------------------
     @pyqtSlot(str)
     def say(self, text):
         if self._available and self._enabled and text:
-            self._jobs.put((text, time.monotonic()))
+            self._jobs.put((text, time.monotonic(), self._ceiling()))
 
     @pyqtSlot()
     def test(self):
         """Say a sample line, even if spoken directions are off."""
         if self._available:
-            self._jobs.put(("In a quarter mile, turn right onto Broad Street.", time.monotonic()))
+            self._jobs.put(("In a quarter mile, turn right onto Broad Street.", time.monotonic(),
+                              self._ceiling()))
 
     @pyqtProperty(bool, constant=True)
     def available(self):
@@ -422,6 +525,19 @@ class Voice(QObject):
     @pyqtProperty(bool, notify=changed)
     def enabled(self):
         return self._enabled
+
+    @pyqtProperty(int, notify=changed)
+    def level(self):
+        """Spoken directions volume, 30-100 (% of the loudest volume)."""
+        return self._level
+
+    @pyqtSlot(int)
+    def setLevel(self, value):
+        value = clamp_level(value)
+        if value != self._level:
+            self._level = value
+            self._settings.set("voiceVolume", value)
+            self.changed.emit()
 
     @pyqtSlot(bool)
     def setEnabled(self, on):

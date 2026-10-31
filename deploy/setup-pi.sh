@@ -100,6 +100,15 @@ while read -r con; do
     nmcli con modify "$con" connection.autoconnect-retries 0 802-11-wireless.powersave 2
     echo "   $con: retry forever, power saving off"
 done
+# "Online" comes from NetworkManager's own connectivity check. Plain HTTP so a
+# captive portal can intercept it; 30 s so a lost hotspot shows up quickly.
+cat > /etc/NetworkManager/conf.d/baja-connectivity.conf <<CONF
+[connectivity]
+uri=http://nmcheck.gnome.org/check_network_status.txt
+response=NetworkManager is online
+interval=30
+CONF
+systemctl reload NetworkManager 2>/dev/null || true
 # The dashboard is a service, not a desktop login, so polkit needs telling
 # that it may change networks (and reboot or shut down from Settings).
 sed "s|@USER@|$USER_NAME|g" "$HERE/polkit/50-baja-os.rules" > /etc/polkit-1/rules.d/50-baja-os.rules

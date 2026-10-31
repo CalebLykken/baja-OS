@@ -340,7 +340,9 @@ Item {
                     }
                     Label {
                         text: !parent.known ? "Checking the connection"
-                              : network.online ? "Online" : (network.ip ? "Connected, but no internet" : "Offline")
+                              : network.online ? "Online"
+                              : network.portal ? "Sign in to the network on your phone"
+                              : (network.ip ? "Connected, but no internet" : "Offline")
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }

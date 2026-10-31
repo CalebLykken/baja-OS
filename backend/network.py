@@ -47,7 +47,23 @@ def wifi_name():
     return ""
 
 
-def is_online():
+def nm_connectivity():
+    """NetworkManager's own connectivity check: full/limited/portal/none, or
+    None when nmcli is missing, NM isn't running or it can't say."""
+    if not shutil.which("nmcli"):
+        return None
+    try:
+        r = subprocess.run(["nmcli", "-t", "networking", "connectivity"],
+                           capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    state = r.stdout.strip()
+    if r.returncode != 0 or state not in ("full", "limited", "portal", "none"):
+        return None                       # error, or "unknown": ask the probe instead
+    return state
+
+
+def tcp_online():
     try:
         with socket.create_connection(PROBE_HOST, timeout=2):
             return True
@@ -55,15 +71,25 @@ def is_online():
         return False
 
 
+def internet_state():
+    """(online, portal). NetworkManager's check sees captive portals, which a
+    TCP probe can't; the probe is the fallback where NM isn't there (the Mac)."""
+    state = nm_connectivity()
+    if state is None:
+        return tcp_online(), False
+    return state == "full", state == "portal"
+
+
 class Network(QObject):
     changed = pyqtSignal()
-    _result = pyqtSignal(object)    # (ip, ssid, online), or None if the check crashed
+    _result = pyqtSignal(object)    # (ip, ssid, online, portal), or None if the check crashed
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._ip = ""
         self._ssid = ""
         self._online = False
+        self._portal = False
         self._checked = False
         self._busy = False
         self._check_error = ""     # the error the last check died of, while it keeps happening
@@ -85,7 +111,7 @@ class Network(QObject):
     def _work(self):
         result = None
         try:
-            result = (local_ip(), wifi_name(), is_online())
+            result = (local_ip(), wifi_name(), *internet_state())
             self._logged()
         except Exception as e:
             self._logged(e)
@@ -107,9 +133,9 @@ class Network(QObject):
         self._busy = False
         if result is None:
             return                        # the check crashed: keep what we had
-        ip, ssid, online = result
-        if (ip, ssid, online, True) != (self._ip, self._ssid, self._online, self._checked):
-            self._ip, self._ssid, self._online, self._checked = ip, ssid, online, True
+        ip, ssid, online, portal = result
+        if (ip, ssid, online, portal, True) != (self._ip, self._ssid, self._online, self._portal, self._checked):
+            self._ip, self._ssid, self._online, self._portal, self._checked = ip, ssid, online, portal, True
             self.changed.emit()
 
     @pyqtProperty(str, notify=changed)
@@ -123,6 +149,11 @@ class Network(QObject):
     @pyqtProperty(bool, notify=changed)
     def online(self):
         return self._online
+
+    @pyqtProperty(bool, notify=changed)
+    def portal(self):
+        """Connected, but a captive portal wants a sign-in first."""
+        return self._portal
 
     @pyqtProperty(bool, notify=changed)
     def checked(self):

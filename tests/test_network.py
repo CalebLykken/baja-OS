@@ -12,7 +12,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.network import Network, wifi_name
+from backend.network import Network, internet_state, wifi_name
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -45,7 +45,7 @@ class CheckFailureTest(unittest.TestCase):
         ssid_lookup = mock.patch("backend.network.wifi_name", side_effect=error) if error else \
             mock.patch("backend.network.wifi_name", return_value=ssid)
         with mock.patch("backend.network.local_ip", return_value=ip), ssid_lookup, \
-                mock.patch("backend.network.is_online", return_value=online):
+                mock.patch("backend.network.internet_state", return_value=(online, False)):
             self.net._check()
 
     def test_two_crashing_checks_log_once_and_keep_the_result(self):
@@ -74,7 +74,7 @@ class CheckFailureTest(unittest.TestCase):
     def test_a_crash_in_a_later_lookup_is_caught_too(self):
         with mock.patch("backend.network.local_ip", return_value="10.0.0.5"), \
                 mock.patch("backend.network.wifi_name", return_value="Phone"), \
-                mock.patch("backend.network.is_online", side_effect=AttributeError("x")):
+                mock.patch("backend.network.internet_state", side_effect=AttributeError("x")):
             self.net._check()
         self.assertFalse(self.net._busy)
         self.assertEqual(len(logged(self.printed)), 1)
@@ -88,6 +88,45 @@ class WifiNameTest(unittest.TestCase):
             self.assertEqual(wifi_name(), "Phone")
         args = run.call_args.args[0]
         self.assertEqual(args[args.index("--rescan") + 1], "no")
+
+
+
+def nm(out="full\n", code=0):
+    return mock.patch("backend.network.subprocess.run",
+                      return_value=SimpleNamespace(stdout=out, returncode=code))
+
+
+class InternetStateTest(unittest.TestCase):
+    def setUp(self):
+        mock.patch("backend.network.shutil.which", return_value="/usr/bin/nmcli").start()
+        self.tcp = mock.patch("backend.network.tcp_online", return_value=False).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_nm_states(self):
+        for out, want in (("full\n", (True, False)), ("portal\n", (False, True)),
+                          ("limited\n", (False, False)), ("none\n", (False, False))):
+            with nm(out):
+                self.assertEqual(internet_state(), want, out)
+        self.tcp.assert_not_called()
+
+    def test_nmcli_missing_uses_tcp_probe(self):
+        self.tcp.return_value = True
+        with mock.patch("backend.network.shutil.which", return_value=None):
+            self.assertEqual(internet_state(), (True, False))
+        self.tcp.assert_called_once()
+
+    def test_nmcli_failing_uses_tcp_probe(self):
+        self.tcp.return_value = True
+        for run in (nm("", 8), nm("unknown\n", 1), nm("unknown\n", 0),
+                    mock.patch("backend.network.subprocess.run", side_effect=OSError)):
+            with run:
+                self.assertEqual(internet_state(), (True, False))
+
+    def test_portal_reaches_the_property(self):
+        net = Network()
+        net._apply(("10.0.0.5", "Cafe", False, True))
+        self.assertTrue(net.portal)
+        self.assertFalse(net.online)
 
 
 if __name__ == "__main__":

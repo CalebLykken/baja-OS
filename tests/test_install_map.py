@@ -151,6 +151,14 @@ class SwapInTest(unittest.TestCase):
         self.assertFalse((self.live / "fonts.old").exists())
         self.assertEqual(self.read("fonts/Noto Sans Regular/0-255.pbf"), "new glyphs")
 
+    def test_a_swap_cut_off_between_its_renames_gets_the_old_folder_back(self):
+        self.installed()
+        (self.live / "fonts").rename(self.live / "fonts.old")        # killed here; .new is gone
+        done = self.swap()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.read("fonts/Noto Sans Regular/0-255.pbf"), "old glyphs")
+        self.assertFalse((self.live / "fonts.old").exists())
+
     def test_fonts_that_wont_move_in_leave_the_old_ones_and_the_old_tiles(self):
         self.installed()
         self.built()

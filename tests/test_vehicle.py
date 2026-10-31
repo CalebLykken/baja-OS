@@ -493,5 +493,65 @@ class EstimateGearTest(unittest.TestCase):
         self.assertLess(estimate_gear(30.0, 4500), estimate_gear(30.0, 1100))
 
 
+class CodesTest(unittest.TestCase):
+    FOUND = {"mil": True, "count": 2, "stored": ["P0301", "P1234"], "pending": ["P0420", "P0301"]}
+
+    def test_unknown_until_the_car_says(self):
+        v = truck()
+        self.assertEqual((v.milOn, v.codeCount, v.codes), (False, 0, []))
+
+    def test_codes_with_text_and_pending_marked(self):
+        v = truck()
+        fired = count(v.codesChanged)
+        v.apply_codes(self.FOUND)
+        self.assertTrue(v.milOn)
+        self.assertEqual(v.codeCount, 2)
+        self.assertEqual(v.codes, [
+            {"code": "P0301", "text": "Cylinder 1 misfire", "pending": False},
+            {"code": "P1234", "text": "", "pending": False},
+            {"code": "P0420", "text": "Catalyst efficiency low", "pending": True}])
+        self.assertEqual(len(fired), 1)
+
+    def test_mil_warns_last_and_only_while_live(self):
+        v = truck()
+        v.apply_codes(self.FOUND)
+        self.assertEqual(v.warnings, [])                  # the car isn't answering now
+        v.apply_obd({**DRIVING, "coolant": 240.0})
+        self.assertEqual(v.warnings, ["coolant", "mil"])
+
+    def test_a_lamp_that_is_off_doesnt_warn(self):
+        v = truck()
+        v.apply_obd(DRIVING)
+        v.apply_codes({"mil": False, "count": 1, "stored": ["P0301"], "pending": []})
+        self.assertEqual(v.warnings, [])
+        self.assertEqual(v.codeCount, 1)
+
+    def test_lost_obd_clears_them(self):
+        v = truck()
+        v.apply_obd(DRIVING)
+        v.apply_codes(self.FOUND)
+        fired = count(v.codesChanged)
+        v.lost_obd()
+        self.assertEqual((v.milOn, v.codeCount, v.codes, v.warnings), (False, 0, [], []))
+        self.assertEqual(len(fired), 1)
+        v.lost_obd()
+        self.assertEqual(len(fired), 1)                   # nothing more to clear
+
+    def test_lost_obd_clears_them_even_when_the_car_wasnt_live(self):
+        v = truck()
+        v.apply_codes(self.FOUND)                         # no readings yet: not live
+        v.lost_obd()
+        self.assertEqual((v.milOn, v.codeCount, v.codes), (False, 0, []))
+
+    def test_the_simulation_never_has_any(self):
+        v = VehicleData(FakeSettings(), demo=True)
+        v._tick()
+        self.assertEqual((v.milOn, v.codeCount, v.codes), (False, 0, []))
+
+    def test_the_warnings_function_takes_mil_as_an_option(self):
+        self.assertEqual(warnings(**FINE, mil=True), ["mil"])
+        self.assertEqual(warnings(**{**FINE, "boost": 20.0}, mil=True), ["boost", "mil"])
+
+
 if __name__ == "__main__":
     unittest.main()

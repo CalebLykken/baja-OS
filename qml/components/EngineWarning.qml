@@ -1,7 +1,8 @@
 import QtQuick
 
 // An engine warning chip: shown while a reading from the car is out of
-// range (vehicle.warnings: overheating, battery voltage, overboost), never
+// range or its check-engine lamp is on (vehicle.warnings: overheating, battery voltage, overboost, and the
+// check-engine lamp), never
 // from the simulated data. With more than one, they take turns.
 Rectangle {
     id: chip
@@ -33,7 +34,7 @@ Rectangle {
         spacing: 2
         Icon {
             anchors.horizontalCenter: parent.horizontalCenter
-            name: chip.shown === "coolant" ? "thermostat" : chip.shown === "voltage" ? "battery_alert" : "speed"
+            name: chip.shown === "coolant" ? "thermostat" : chip.shown === "voltage" ? "battery_alert" : chip.shown === "mil" ? "car" : "speed"
             size: 28
             color: Theme.bg
         }
@@ -49,6 +50,7 @@ Rectangle {
                 text: chip.shown === "coolant" ? Math.round(Units.temp(vehicle.coolant))
                       : chip.shown === "voltage" ? vehicle.voltage.toFixed(1)
                       : chip.shown === "boost" ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals)
+                      : chip.shown === "mil" ? "CHECK"
                       : ""
             }
             Label {

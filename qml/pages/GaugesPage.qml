@@ -5,13 +5,59 @@ import "../components"
 // Six live gauges in a 3x2 grid. Warning thresholds (vehicle.limits, from
 // backend/vehicle.py) turn a gauge red. A reading that isn't known (the car
 // isn't answering) shows a dash instead of a number; the speed is also known
-// from the GPS.
+// from the GPS. While the car reports trouble codes (vehicle.codes), a strip
+// under the grid lists each with its description.
 Item {
     id: page
     signal navigate(int index)
 
+    Rectangle {
+        id: strip
+        readonly property bool shown: vehicle.codes.length > 0
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: shown ? list.implicitHeight + 16 : 0
+        visible: shown
+        radius: Theme.radius
+        color: Theme.panel
+        border { width: Theme.border; color: Theme.warn }
+
+        Column {
+            id: list
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
+            spacing: 2
+            Repeater {
+                model: vehicle.codes.slice(0, 4)
+                Row {
+                    spacing: 12
+                    Label {
+                        text: modelData.code
+                        numeric: true
+                        color: Theme.warn
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
+                    }
+                    Label {
+                        width: list.width - x - 12
+                        text: (modelData.text || "") + (modelData.pending ? (modelData.text ? "  ·  " : "") + "pending" : "")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+            Label {
+                visible: vehicle.codes.length > 4
+                text: "+" + (vehicle.codes.length - 4) + " more"
+                color: Theme.textDim
+                font.pixelSize: Theme.fontSmall
+            }
+        }
+    }
+
     GridLayout {
-        anchors.fill: parent
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        anchors.bottom: strip.shown ? strip.top : parent.bottom
+        anchors.bottomMargin: strip.shown ? Theme.gap : 0
         columns: 3
         rowSpacing: Theme.gap
         columnSpacing: Theme.gap

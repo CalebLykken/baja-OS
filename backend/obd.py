@@ -12,7 +12,13 @@ from the engine computer (PID 0x33) when it has one, else from the manifold
 with the engine stopped (key on), and the last one measured is kept (the
 `baro` signal) so a restart with the engine running starts from it.
 
-Read only: it never sends mode 04 (clear codes) or anything that writes.
+Every 60 seconds it also asks whether the check-engine light is on (mode 01
+PID 01) and, when the number of stored codes changed, reads them (mode 03)
+and the pending ones (mode 07): the `codes` signal.
+
+Read only: the only requests that can leave are modes 01, 03 and 07 (and the
+adapter's own AT commands). `refuse_writes` stops anything else, mode 04
+(clear codes) above all, before it reaches the serial port.
 With no adapter, or the key off, it just keeps looking, and VehicleData
 shows the engine values as unknown (backend/vehicle.py). While it waits for the car it still
 reads the battery: the adapter measures that itself (ATRV), so it works
@@ -22,6 +28,7 @@ whether the engine is still running.
 
 import glob
 import os
+import re
 import select
 import termios
 import threading
@@ -46,12 +53,124 @@ WAKE_TIMEOUT_S = 15.0
 # The battery while waiting: every second for the first two minutes after
 # the car goes quiet (past the power relay's hold time), then with each try.
 VOLTS_EVERY_S, VOLTS_FOR_S = 1.0, 120.0
+CODES_EVERY_S = 60.0                 # ask whether the check-engine light is on, and how many codes
+READ_MODES = ("01", "03", "07")      # the only OBD modes ever sent: data, stored codes, pending codes
 LOG_EVERY_S = 15.0                   # a one-line summary in the journal while live
 BARO_PID = 0x33                      # barometric pressure, kPa (not every engine computer has it)
 BARO_DEFAULT = 101.3                 # kPa at sea level, until measured
 BARO_RANGE = (50.0, 110.0)           # kPa: from 18,000 ft up to a stormy sea level
 BARO_STEADY = (3, 1.0)               # rounds at RPM 0, and kPa: how long and how still the manifold
                                      # must hold before it's taken as the outside air
+
+
+# Short descriptions of common generic codes. Anything else (the Subaru P1xxx
+# ones, say) shows just the code.
+DTC_TEXT = {
+    "P0030": "O2 heater circuit, bank 1 sensor 1",
+    "P0101": "Mass airflow out of range",
+    "P0102": "Mass airflow low",
+    "P0103": "Mass airflow high",
+    "P0105": "Manifold pressure circuit",
+    "P0106": "Manifold pressure out of range",
+    "P0107": "Manifold pressure low",
+    "P0108": "Manifold pressure high",
+    "P0112": "Intake air temp low",
+    "P0113": "Intake air temp high",
+    "P0117": "Coolant temp low",
+    "P0118": "Coolant temp high",
+    "P0121": "Throttle position out of range",
+    "P0122": "Throttle position low",
+    "P0123": "Throttle position high",
+    "P0125": "Coolant too cold for closed loop",
+    "P0128": "Thermostat: coolant below temp",
+    "P0131": "O2 sensor low, bank 1 sensor 1",
+    "P0132": "O2 sensor high, bank 1 sensor 1",
+    "P0133": "O2 sensor slow, bank 1 sensor 1",
+    "P0134": "O2 sensor no activity, bank 1 sensor 1",
+    "P0135": "O2 heater, bank 1 sensor 1",
+    "P0137": "O2 sensor low, bank 1 sensor 2",
+    "P0138": "O2 sensor high, bank 1 sensor 2",
+    "P0171": "Fuel mixture too lean",
+    "P0172": "Fuel mixture too rich",
+    "P0300": "Random misfire",
+    "P0301": "Cylinder 1 misfire",
+    "P0302": "Cylinder 2 misfire",
+    "P0303": "Cylinder 3 misfire",
+    "P0304": "Cylinder 4 misfire",
+    "P0325": "Knock sensor circuit",
+    "P0327": "Knock sensor low",
+    "P0328": "Knock sensor high",
+    "P0335": "Crankshaft sensor circuit",
+    "P0340": "Camshaft sensor circuit",
+    "P0420": "Catalyst efficiency low",
+    "P0440": "Evap system fault",
+    "P0441": "Evap purge flow wrong",
+    "P0442": "Evap small leak",
+    "P0446": "Evap vent circuit",
+    "P0455": "Evap large leak",
+    "P0456": "Evap very small leak",
+    "P0500": "Vehicle speed sensor",
+    "P0505": "Idle control system",
+    "P0506": "Idle speed low",
+    "P0507": "Idle speed high",
+    "P0600": "Control module communication",
+    "P0601": "Control module memory",
+    "P0605": "Control module ROM",
+}
+
+
+def describe(code):
+    """A short description of a trouble code, or '' for one not in the table."""
+    return DTC_TEXT.get(str(code).upper(), "")
+
+
+def refuse_writes(command):
+    """Raises ValueError for any request that isn't read only: an OBD request
+    (hex) in a mode other than READ_MODES, mode 04 (clear codes) above all.
+    The adapter's own AT commands pass."""
+    if "\r" in str(command) or "\n" in str(command):
+        raise ValueError(f"refusing to send {command!r}: more than one request in a line")
+    text = str(command).replace(" ", "").upper()
+    if text.startswith("AT"):
+        return
+    if len(text) < 2 or text[:2] not in READ_MODES or re.fullmatch(r"[0-9A-F]+", text) is None:
+        raise ValueError(f"refusing to send {command!r}: only OBD modes 01, 03 and 07 are read only")
+
+
+def parse_dtcs(lines, head):
+    """Trouble codes ('P0301') out of the reply `lines` to a mode 03 or 07
+    request, whose answer starts with `head` ('43' or '47'). Each engine
+    computer answers with its own line; a long CAN answer comes in frames
+    ('0: 43 ...', '1: ...') that are joined. Two bytes a code, 0000 is
+    padding. A CAN answer has a count byte after the head: always when it
+    comes in frames, else when it leaves an odd number of bytes. Junk and NO DATA give none."""
+    messages = []           # [text, in frames: the count byte then holds]
+    for line in lines:
+        text = line.replace(" ", "").upper()
+        frame = re.fullmatch(r"([0-9A-F]):([0-9A-F]*)", text)
+        if frame:
+            if frame.group(1) == "0":
+                messages.append([frame.group(2), True])
+            elif messages:
+                messages[-1][0] += frame.group(2)
+        elif text.startswith(head):
+            messages.append([text, False])
+    found = []
+    for message, framed in messages:
+        body = message[len(head):] if message.startswith(head) else None
+        if body is None or len(body) % 2 or re.fullmatch(r"[0-9A-F]*", body) is None:
+            continue
+        data = bytes.fromhex(body)
+        if framed and data:
+            data = data[1:1 + data[0] * 2]     # a count byte, then that many codes, then padding
+        elif len(data) % 2:
+            data = data[1:]
+        for i in range(0, len(data) - 1, 2):
+            if data[i] or data[i + 1]:
+                code = "PCBU"[data[i] >> 6] + str(data[i] >> 4 & 3) + f"{data[i] & 15:X}{data[i + 1]:02X}"
+                if code not in found:
+                    found.append(code)
+    return found
 
 
 def retry_wait(since):
@@ -98,7 +217,19 @@ class Elm:
             pass
 
     def send(self, command, timeout=3.0):
-        """The reply's text (without the prompt), or raises OSError."""
+        """The reply's text (without the prompt), or raises OSError.
+        Raises ValueError, sending nothing, for a request that isn't read only."""
+        refuse_writes(command)
+        return " ".join(self._io(command, timeout))
+
+    def lines(self, command, timeout=3.0):
+        """Like `send`, but the reply's lines apart (multi-frame answers)."""
+        refuse_writes(command)
+        return self._io(command, timeout)
+
+    def _io(self, command, timeout):
+        """The serial I/O behind `send`: only it touches the port, and only
+        after `refuse_writes` has passed the command."""
         # Drop what's left of an earlier reply that came after its timeout:
         # read as this one's, it would shift every answer after it.
         termios.tcflush(self.fd, termios.TCIFLUSH)
@@ -109,7 +240,8 @@ class Elm:
                 buf += os.read(self.fd, 4096)
                 if b">" in buf:
                     break
-        return buf.decode(errors="replace").replace(">", "").replace("\r", " ").strip()
+        text = buf.decode(errors="replace").replace(">", "")
+        return [line.strip() for line in re.split(r"[\r\n]", text) if line.strip()]
 
     def volts(self):
         """The adapter's supply voltage (the car's battery), or None."""
@@ -134,6 +266,28 @@ class Elm:
                 break
         return out or None
 
+    def mil(self):
+        """(lamp on, number of stored codes) from mode 01 PID 01, or None.
+        Every engine computer that answers counts: the lamp is on if any
+        says so, the counts add up (a transmission computer says 0)."""
+        found = None
+        for line in self.lines("0101"):
+            text = line.replace(" ", "").upper()
+            i = text.find("4101")
+            if i < 0 or re.fullmatch(r"[0-9A-F]{2}", text[i + 4:i + 6]) is None:
+                continue
+            a = int(text[i + 4:i + 6], 16)
+            on, count = found or (False, 0)
+            found = (on or bool(a & 0x80), count + (a & 0x7F))
+        return found
+
+    def dtcs(self, mode):
+        """The trouble codes of mode "03" (stored) or "07" (pending), as
+        'P0301'. Empty when there are none or the car doesn't say."""
+        if mode not in ("03", "07"):
+            raise ValueError(f"no trouble codes in mode {mode!r}")
+        return parse_dtcs(self.lines(mode), "43" if mode == "03" else "47")
+
 
 def convert(pid, d):
     """A PID's bytes as the dashboard's units (mph, psi, °F)."""
@@ -156,12 +310,15 @@ class ObdReader(QObject):
     itself stopped answering with the adapter still there: the key going
     off (backend/ignition.py). `voltage` carries the battery whenever it's
     read, with the car answering or not. `baro` carries a new outside air
-    pressure (kPa) to keep for the next start."""
+    pressure (kPa) to keep for the next start. `codes` carries the check-engine
+    lamp and the trouble codes: {"mil", "count", "stored", "pending"}, when
+    the count of stored codes changed (and on the first read of a session)."""
     reading = pyqtSignal(dict)
     lost = pyqtSignal()
     quiet = pyqtSignal()
     voltage = pyqtSignal(float)
     baro = pyqtSignal(float)
+    codes = pyqtSignal(dict)
 
     def __init__(self, baro=None, parent=None):
         """`baro`: the outside air pressure kept from the last drive (kPa,
@@ -283,13 +440,36 @@ class ObdReader(QObject):
             safe_emit(self, "baro", self._baro)
         return True
 
+    def _read_codes(self, elm, state):
+        """Once CODES_EVERY_S (and on the first round), whether the lamp is
+        on and how many codes are stored; the codes themselves only when
+        either changed. The last result is said again each time, so the
+        dashboard doesn't forget it. `state` is [when asked last, (lamp,
+        count) the codes were read for, last result]. It never counts as
+        the car not answering: one that has no PID 01 is fine."""
+        if state[0] is not None and time.monotonic() - state[0] < CODES_EVERY_S:
+            return
+        state[0] = time.monotonic()
+        lamp = elm.mil()
+        if lamp is not None and lamp != state[1]:
+            on, count = lamp
+            stored = elm.dtcs("03") if count else []
+            pending = elm.dtcs("07")
+            state[2] = {"mil": on, "count": count, "stored": stored, "pending": pending}
+            # Stored codes it didn't give are asked for again next time.
+            state[1] = lamp if stored or not count else None
+        if state[2] is not None:
+            safe_emit(self, "codes", dict(state[2]))
+
     def _poll(self, elm):
         """Reads the car until it stops answering."""
         self._start_baro(elm)
         misses, turn, logged, last = 0, 0, 0.0, {}
         still, kept = [], False         # manifold readings in this stop; one kept yet?
+        codes = [None, None, None]
         while misses < GIVE_UP_AFTER:
             started = time.monotonic()
+            self._read_codes(elm, codes)
             values = {}
             for item in FAST + (SLOW[turn % len(SLOW)],):
                 if item == "ATRV":

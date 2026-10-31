@@ -151,6 +151,7 @@ def main():
     obd.reading.connect(vehicle.apply_obd)
     obd.lost.connect(vehicle.lost_obd)
     obd.voltage.connect(vehicle.apply_voltage)
+    obd.codes.connect(vehicle.apply_codes)
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio(settings=settings)
     spotify = SpotifyPlayer()

@@ -146,6 +146,8 @@ def parse_map_url(url):
         coords, _, query = body.partition("?")
         q = urllib.parse.parse_qs(query).get("q", [""])[0]
         ll = _latlon(coords.split(";")[0])
+        if ll == (0, 0):                  # geo:0,0 means "look at q": a position there, or just words
+            ll = _latlon(q.split("(")[0])
         label = re.sub(r"^[-\d.]+,[-\d.]+\s*", "", q).strip("() ")
         return ll, label
     parts = urllib.parse.urlsplit(url)

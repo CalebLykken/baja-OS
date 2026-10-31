@@ -10,6 +10,8 @@
 #   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off,
 #     and the dashboard may join networks (the phone's hotspot), use the phone
 #     over Bluetooth as a backup, and reboot or shut down the Pi (polkit)
+#   - "Online" from NetworkManager's connectivity check: plain HTTP every 30 s
+#     (a captive portal can intercept it), in baja-connectivity.conf
 #   - The equalizer in front of the speakers (a user PipeWire filter)
 #   - gpsd for the GPS receiver (a u-blox on USB), always reading
 #   - libgpiod's Python bindings, for the volume knob on the pin header

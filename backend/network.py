@@ -7,6 +7,7 @@ checks every few seconds, since the TCP probe has nothing else to go on.
 """
 
 import getpass
+import os
 import shutil
 import socket
 import subprocess
@@ -21,6 +22,8 @@ from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
 CHECK_EVERY_MS = 5000
 SAFETY_CHECK_MS = 30000     # while NetworkManager's signals are coming through
 PROBE_HOST = ("1.1.1.1", 53)  # Cloudflare DNS: answers quickly when online
+TCP_PROBE = ("1.1.1.1", 443)  # the port an online device can reach on any network
+NM_CHECK_CONF = "/etc/NetworkManager/conf.d/baja-connectivity.conf"  # from setup-pi.sh
 
 
 def local_ip():
@@ -69,7 +72,7 @@ def nm_connectivity():
 
 def tcp_online():
     try:
-        with socket.create_connection(PROBE_HOST, timeout=2):
+        with socket.create_connection(TCP_PROBE, timeout=2):
             return True
     except OSError:
         return False
@@ -77,9 +80,12 @@ def tcp_online():
 
 def internet_state():
     """(online, portal). NetworkManager's check sees captive portals, which a
-    TCP probe can't; the probe is the fallback where NM isn't there (the Mac)."""
+    TCP probe can't. The probe decides where NM has no answer (the Mac), and
+    when NM's can't be trusted: "limited" may only mean its one check host is
+    down, and with no check set up (setup-pi.sh's drop-in) "full" only means
+    there's a default route."""
     state = nm_connectivity()
-    if state is None:
+    if state is None or state == "limited" or (state == "full" and not os.path.exists(NM_CHECK_CONF)):
         return tcp_online(), False
     return state == "full", state == "portal"
 

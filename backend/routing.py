@@ -321,6 +321,16 @@ class Route:
         (px, py), (ex, ey) = _xy(p, self.lat0), _xy(self.shape[-1], self.lat0)
         self.to_end = math.hypot(ex - px, ey - py)
 
+    def along_of(self, p, within=500.0):
+        """Metres along the route to the point nearest `p` from the truck's
+        segment on, or None if the route never comes within `within`."""
+        best = None
+        for i in range(self.seg, len(self.shape) - 1):
+            d, t = _project(p, self.shape[i], self.shape[i + 1], self.lat0)
+            if d <= within and (best is None or d < best[0] - 5):
+                best = (d, self.cum[i] + t * (self.cum[i + 1] - self.cum[i]))
+        return best[1] if best else None
+
     def _wrong_way(self, i, heading):
         """Segment i runs too far off the truck's heading."""
         b = self.bearing[i]
@@ -699,7 +709,14 @@ class Router(QObject):
     @pyqtSlot(str, float, float, result=bool)
     def addStop(self, name, lon, lat):
         """A stop after the others, before the destination of the route shown."""
-        return self._change_stops(self._stops + [(name, lon, lat)], f"Couldn't add {name}")
+        at = len(self._stops)
+        r = self._route
+        if r and [tuple(s) for s in self._stops] == [tuple(s) for s in r.stops[r.leg:]]:
+            pos = r.along_of((lon, lat))
+            if pos is not None:         # in the order the route reaches them
+                at = sum(1 for k in range(len(self._stops)) if r.cum[r.leg_ends[r.leg + k]] < pos)
+        return self._change_stops(self._stops[:at] + [(name, lon, lat)] + self._stops[at:],
+                                  f"Couldn't add {name}")
 
     @pyqtSlot(int, result=bool)
     def removeStop(self, index):
@@ -909,6 +926,12 @@ class Router(QObject):
     def segment(self):
         """The route segment the truck is on (the map draws the line from there)."""
         return self._route.seg if self._route else 0
+
+    @pyqtProperty(float, notify=progressChanged)
+    def alongSegment(self):
+        """Metres the truck is along that segment."""
+        r = self._route
+        return max(0.0, r.along - r.cum[r.seg]) if r else 0.0
 
     @pyqtProperty(float, notify=progressChanged)
     def remainingDistance(self):

@@ -346,6 +346,19 @@ class StopsTest(unittest.TestCase):
         self.assertEqual(self.router.nextStopName, "Cafe")
         self.assertEqual(self.router.stops[0]["lon"], STOP_B[1])
 
+    def test_a_stop_goes_in_the_order_the_route_reaches_it(self):
+        self.driving()
+        self.router.addStop("Diner", *ll(0, 1500))
+        self.assertEqual(self.asked[-1][0], [STOP_A, ("Diner", *ll(0, 1500)), STOP_B])
+        self.driving()
+        self.router.addStop("Early", *ll(0, 500))
+        self.assertEqual([s[0] for s in self.asked[-1][0]], ["Early", "Gas", "Cafe"])
+
+    def test_a_stop_far_from_the_route_goes_last(self):
+        self.driving()
+        self.router.addStop("Island", *ll(9000, 9000))
+        self.assertEqual(self.asked[-1][0][-1][0], "Island")
+
     def test_no_route_no_stop(self):
         self.router.addStop(*STOP_A)
         self.assertEqual(self.asked, [])

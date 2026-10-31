@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 try:
-    from backend.maps import make_server
+    from backend.maps import MapService, make_server
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
 
@@ -136,6 +136,15 @@ class FolderTest(unittest.TestCase):
 
     def test_it_listens_on_loopback_only(self):
         self.assertEqual(self.server.server_address[0], "127.0.0.1")
+
+
+class SearchAlongTest(unittest.TestCase):
+    def test_junk_shapes_dont_raise(self):
+        with tempfile.TemporaryDirectory() as d:
+            maps = MapService(d)
+            for shape in ([], [[1]], [["a", "b"]], [None], None, 5, [[1.0, 2.0], [3.0, 4.0]]):
+                maps.searchAlong("gas", shape, 0, 0.0)
+            self.assertEqual(maps._query, "along:gas")
 
 
 if __name__ == "__main__":

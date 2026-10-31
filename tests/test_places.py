@@ -5,10 +5,12 @@ come back in, on a tiny in-memory index with the real table layout.
     python3 -m unittest tests.test_places
 """
 
+import math
 import sqlite3
+import time
 import unittest
 
-from backend.places import _fts_query, looks_like_address, nearby, search, search_addresses, street_part
+from backend.places import _fts_query, along_route, looks_like_address, nearby, search, search_addresses, street_part
 
 SEATTLE = (-122.3321, 47.6062)
 
@@ -140,6 +142,102 @@ class NearbyTest(unittest.TestCase):
         db = index([("Near Gas", "fuel", "Seattle", 1, -122.33, 47.61)])
         self.assertEqual(nearby(db, "nope", SEATTLE), [])
         self.assertEqual(nearby(db, "gas", None), [])
+
+
+class AlongRouteTest(unittest.TestCase):
+    # A road due north from (-122.3, 47.5): 0.001 degrees of latitude is 110.54 m.
+    LON = -122.3
+    ROAD = [(-122.3, 47.5 + i * 0.001) for i in range(0, 101)]    # about 11 km
+
+    def gas(self, name, lat, east_m=0.0, area="Town"):
+        lon = self.LON + east_m / (111320 * math.cos(math.radians(47.5)))
+        return (name, "fuel", area, 1, lon, lat)
+
+    def test_ahead_close_to_the_road_in_order(self):
+        db = index([self.gas("Far", 47.55), self.gas("Near", 47.52, 100),
+                    self.gas("Too Far Off", 47.53, 1000)])
+        got = along_route(db, "gas", self.ROAD, 0)
+        self.assertEqual(names(got), ["Near", "Far"])
+        self.assertAlmostEqual(got[0]["distance"], 0.02 * 110540, delta=5)
+        self.assertAlmostEqual(got[0]["off"], 100, delta=2)
+
+    def test_behind_the_truck_is_left_out(self):
+        db = index([self.gas("Behind", 47.51), self.gas("Ahead", 47.53)])
+        self.assertEqual(names(along_route(db, "gas", self.ROAD, 20)), ["Ahead"])
+
+    def test_distance_counts_from_the_trucks_segment(self):
+        db = index([self.gas("Ahead", 47.53)])
+        got = along_route(db, "gas", self.ROAD, 20)
+        self.assertAlmostEqual(got[0]["distance"], 0.01 * 110540, delta=5)
+
+    def test_other_kinds_and_repeats(self):
+        db = index([self.gas("Shell", 47.52), self.gas("Shell", 47.53),
+                    self.gas("Shell", 47.54, area="Elsewhere"),
+                    ("A Cafe", "cafe", "Town", 1, self.LON, 47.52)])
+        got = along_route(db, "gas", self.ROAD, 0)
+        self.assertEqual([r["area"] for r in got], ["Town", "Elsewhere"])
+        self.assertEqual(names(along_route(db, "coffee", self.ROAD, 0)), ["A Cafe"])
+
+    def test_nothing_to_search(self):
+        db = index([self.gas("Near", 47.52)])
+        self.assertEqual(along_route(db, "nope", self.ROAD, 0), [])
+        self.assertEqual(along_route(db, "gas", [], 0), [])
+        self.assertEqual(along_route(db, "gas", self.ROAD[:1], 0), [])
+        self.assertEqual(along_route(db, "gas", self.ROAD, 500), [])
+        self.assertEqual(along_route(db, "gas", [("x", "y")], 0), [])
+
+    def test_only_the_next_stretch_counts(self):
+        # 300 km north: a station 200 km on is past the reach.
+        road = [(self.LON, 47.5 + i * 0.01) for i in range(0, 271)]
+        db = index([self.gas("Soon", 47.6), self.gas("Much Later", 49.4)])
+        self.assertEqual(names(along_route(db, "gas", road, 0)), ["Soon"])
+
+    def test_the_trucks_place_on_its_segment(self):
+        # 50 m into the first 110 m segment: a station 30 m back is behind, one 200 m on is ahead.
+        db = index([self.gas("Just Passed", 47.5 + 0.0002), self.gas("Ahead", 47.5 + 0.0020)])
+        got = along_route(db, "gas", self.ROAD, 0, 50)
+        self.assertEqual(names(got), ["Ahead"])
+        self.assertAlmostEqual(got[0]["distance"], 0.002 * 110540 - 50, delta=5)
+
+    def test_behind_the_start_of_the_first_segment_is_not_ahead(self):
+        road = [(self.LON, 47.5), (self.LON, 47.51)]
+        db = index([self.gas("Behind", 47.5 - 0.0025), self.gas("Ahead", 47.505)])      # 277 m back
+        self.assertEqual(names(along_route(db, "gas", road, 0)), ["Ahead"])
+
+    def test_behind_the_truck_on_a_road_of_short_segments(self):
+        # 276 m behind a truck 50 m into segment 20: the next segment's start is within the corridor.
+        db = index([self.gas("Behind", 47.52 - 0.0025, area="A"), self.gas("Ahead", 47.53, area="B")])
+        self.assertEqual(names(along_route(db, "gas", self.ROAD, 20, 50)), ["Ahead"])
+
+    def test_an_outer_corner_is_still_found(self):
+        # North 500 m then east: a station just past the corner, off both legs' ends by 100 m.
+        road = [(self.LON, 47.5), (self.LON, 47.5045), (self.LON + 0.01, 47.5045)]
+        db = index([self.gas("Corner", 47.5055, -20)])
+        self.assertEqual(names(along_route(db, "gas", road, 0)), ["Corner"])
+
+    def test_a_dead_end_station_just_passed_is_found_on_the_way_back(self):
+        # Out 1 km (truck 800 m along) and back: the station at 700 m is behind now, ahead on the return.
+        road = [(self.LON, 47.5), (self.LON, 47.509), (self.LON + 0.0000001, 47.5), ]
+        db = index([self.gas("Passed", 47.5 + 700 / 110540, 100)])
+        got = along_route(db, "gas", road, 0, 800)
+        self.assertEqual(names(got), ["Passed"])
+        self.assertGreater(got[0]["distance"], 200)
+
+    def test_a_spur_reports_the_first_pass(self):
+        # Out 1 km north and back down the same way: the place is passed twice.
+        road = [(self.LON, 47.5), (self.LON, 47.51), (self.LON + 0.0000001, 47.5101), (self.LON, 47.5)]
+        db = index([self.gas("Spur", 47.505)])
+        got = along_route(db, "gas", road, 0)
+        self.assertAlmostEqual(got[0]["distance"], 0.005 * 110540, delta=5)
+
+    def test_a_long_route_is_quick(self):
+        road = [(self.LON + 0.00001 * (i % 7), 47.0 + i * 0.0001) for i in range(12000)]
+        rows = [self.gas(f"G{i}", 47.0 + i * 0.00024, 50 * (i % 5)) for i in range(5000)]
+        db = index(rows)
+        start = time.monotonic()
+        got = along_route(db, "gas", road, 0, limit=5)
+        self.assertEqual(len(got), 5)
+        self.assertLess(time.monotonic() - start, 1.0)
 
 
 class AddressSearchTest(unittest.TestCase):

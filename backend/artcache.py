@@ -81,6 +81,14 @@ def writing(path):
     prune(keep=path)
 
 
+def drop_stale_temp(folder):
+    """Delete temp files a crash left in `folder` (the art cache's own go in prune)."""
+    for f in folder.glob(_TMP + "*"):
+        with contextlib.suppress(OSError):
+            if time.time() - f.stat().st_mtime > STALE_TMP_S:
+                f.unlink()
+
+
 def store(name, data):
     """Cache bytes under `name` unless it's there already; returns the path."""
     path, hit = lookup(name)

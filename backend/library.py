@@ -127,11 +127,12 @@ def _load_cache(root):
 
 def _save_cache(root, files):
     """Written whole under a temporary name and moved into place, so a crash
-    never leaves half a file."""
+    never leaves half a file (only a temporary one, cleared up here later)."""
     path = cache_file()
     tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        artcache.drop_stale_temp(path.parent)
         with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=".tmp-", delete=False) as f:
             tmp = f.name
             json.dump({"version": CACHE_VERSION, "folder": str(root), "files": files}, f)

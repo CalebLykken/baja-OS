@@ -171,6 +171,17 @@ class ScanCacheTest(ScanBase):
         self.assertEqual(self.reads(), 1)
         self.assertEqual(len(self.tracks), 3)
 
+    def test_saving_clears_temp_files_a_crash_left(self):
+        self.reads()
+        stale, fresh = (library.cache_file().parent / n for n in (".tmp-old", ".tmp-new"))
+        stale.write_text("{")
+        fresh.write_text("{")
+        os.utime(stale, (0, 0))
+        write_wav(self.file, 0.002)              # so there's something to save
+        self.reads()
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())          # another save may be under way
+
     def test_a_corrupt_cache_is_ignored_and_replaced(self):
         self.reads()
         library.cache_file().write_text("{not json")

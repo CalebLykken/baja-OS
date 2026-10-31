@@ -60,7 +60,8 @@ MANEUVER_ICONS = {
     11: "turn_sharp_right", 12: "u_turn_right", 13: "u_turn_left", 14: "turn_sharp_left",
     15: "turn_left", 16: "turn_slight_left", 17: "straight", 18: "ramp_right", 19: "ramp_left",
     20: "ramp_right", 21: "ramp_left", 22: "straight", 23: "fork_right", 24: "fork_left",
-    25: "merge", 26: "roundabout_right", 27: "roundabout_right", 37: "merge", 38: "merge",
+    25: "merge", 26: "roundabout_right", 27: "roundabout_right", 28: "ferry", 29: "ferry",
+    37: "merge", 38: "merge",
 }
 
 
@@ -75,6 +76,48 @@ def costing_options(settings):
         return {}
     auto = {opt: 0 for key, opt in AVOID.items() if str(settings.get(key, "false")) == "true"}
     return {"auto": auto} if auto else {}
+
+
+FERRY_ENTER = 28                      # Valhalla maneuver type: board a ferry
+FERRY_NAME = re.compile(r"^Take the (?!ferry\b)(.+) ferry\.?$", re.I)
+
+
+def ferry_name(m):
+    """A ferry maneuver's name: its street name, else the instruction's, else "Ferry"."""
+    names = m.get("street_names")
+    if isinstance(names, list) and names and isinstance(names[0], str):
+        name = re.sub(r"\s+ferry$", "", names[0].strip(), flags=re.I).strip()
+        if name and name.lower() != "ferry":
+            return name
+    found = FERRY_NAME.match(str(m.get("instruction") or "").strip())
+    return found.group(1).strip() if found and found.group(1).strip() else "Ferry"
+
+
+def ferry_legs(maneuvers):
+    """The ferry parts of a route: [{"name", "time" (s), "length" (m)}].
+
+    Valhalla flags them with "ferry": true (and type 28 boards one).
+    Consecutive ferry maneuvers are one crossing. Never raises on odd
+    data: a route must still load."""
+    out, on = [], False
+    for m in maneuvers:
+        if not isinstance(m, dict) or (m.get("ferry") is not True and m.get("type") != FERRY_ENTER):
+            on = False
+            continue
+        if not on or m.get("type") == FERRY_ENTER:
+            out.append({"name": "Ferry", "time": 0.0, "length": 0.0})
+            on = True
+        leg = out[-1]
+        if leg["name"] == "Ferry":
+            leg["name"] = ferry_name(m)
+        for key, scale in (("time", 1), ("length", 1000)):
+            try:
+                v = float(m.get(key) or 0) * scale   # length is in km in our request
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(v):
+                leg[key] += v
+    return out
 
 
 def tidy(text):
@@ -168,6 +211,7 @@ class Route:
         self.length = self.cum[-1]
         self.time = float(data["trip"]["summary"]["time"])
         self.maneuvers = leg["maneuvers"]
+        self.ferries = ferry_legs(self.maneuvers) if isinstance(self.maneuvers, list) else []
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
         self.off = 0.0                # metres from the line
@@ -661,6 +705,14 @@ class Router(QObject):
     def shape(self):
         """The route as [[lon, lat], ...] for the map."""
         return [list(p) for p in self._route.shape] if self._route else []
+
+    @pyqtProperty("QVariantList", notify=changed)
+    def ferries(self):
+        """The ferry crossings on the route: [{name, minutes}], minutes 0 when unknown."""
+        if not self._route:
+            return []
+        return [{"name": f["name"], "minutes": max(1, round(f["time"] / 60)) if f["time"] > 0 else 0}
+                for f in self._route.ferries]
 
     @pyqtProperty(bool, notify=progressChanged)
     def arrived(self):

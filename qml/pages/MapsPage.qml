@@ -607,6 +607,23 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
+                    // A ferry on the way, one row per crossing.
+                    Repeater {
+                        model: page.hasRouting && routing.previewing ? routing.ferries : []
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
+                            MapLabel {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - 40
+                                wrapMode: Text.WordWrap
+                                text: "Ferry" + (modelData.name !== "Ferry" ? ": " + modelData.name : "") + (modelData.minutes > 0 ? ", " + modelData.minutes + " min" : "")
+                                color: page.cDim
+                                font.pixelSize: Theme.fontBody
+                            }
+                        }
+                    }
                     // Being worked out again (a route option changed), or that failed.
                     MapLabel {
                         visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")

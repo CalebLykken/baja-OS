@@ -830,5 +830,73 @@ class ManeuverTest(unittest.TestCase):
         self.assertIsNone(r.then_maneuver())
 
 
+class FerryTest(unittest.TestCase):
+    def route(self, *extra):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["maneuvers"][1:1] = list(extra)
+        return Route(data, "Shop")
+
+    def test_no_ferry(self):
+        self.assertEqual(Route(ROUTE, "Shop").ferries, [])
+
+    def test_detected_from_type_and_named(self):
+        r = self.route({"type": 28, "instruction": "Take the Fauntleroy - Vashon ferry.",
+                        "time": 600, "length": 8.0})
+        self.assertEqual(r.ferries, [{"name": "Fauntleroy - Vashon", "time": 600.0, "length": 8000.0}])
+
+    def test_detected_from_travel_mode_and_merged(self):
+        r = self.route({"type": 28, "travel_mode": "drive", "ferry": True, "instruction": "Take the A - B ferry.",
+                        "time": 300, "length": 4.0},
+                       {"type": 29, "travel_mode": "drive", "ferry": True, "instruction": "Exit the ferry.",
+                        "time": 300, "length": 4.0})
+        self.assertEqual(len(r.ferries), 1)
+        self.assertEqual(r.ferries[0]["name"], "A - B")
+        self.assertEqual(r.ferries[0]["time"], 600.0)
+        self.assertEqual(r.ferries[0]["length"], 8000.0)
+
+    def test_unnamed_ferry(self):
+        r = self.route({"ferry": True, "instruction": "Board."})
+        self.assertEqual(r.ferries[0]["name"], "Ferry")
+
+    def test_missing_keys_do_not_raise(self):
+        r = self.route({"type": 28}, {"ferry": True, "time": None, "length": "x"})
+        self.assertEqual(r.ferries, [{"name": "Ferry", "time": 0.0, "length": 0.0}])
+
+    def test_two_ferries_stay_separate(self):
+        r = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 60},
+                       {"type": 10, "instruction": "Turn right."},
+                       {"type": 28, "instruction": "Take the B ferry.", "time": 120})
+        self.assertEqual([f["name"] for f in r.ferries], ["A", "B"])
+
+    def test_unflagged_exit_is_not_a_ferry(self):
+        r = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 60},
+                       {"type": 29, "travel_mode": "drive", "instruction": "Exit.", "time": 99})
+        self.assertEqual(r.ferries[0]["time"], 60.0)
+
+    def test_names(self):
+        for text, names, want in (
+                ("Take the ferry toward Kingston Ferry Terminal.", None, "Ferry"),
+                ("Take the Fauntleroy Ferry Dock - Vashon Ferry.", None, "Fauntleroy Ferry Dock - Vashon"),
+                ("Take the ferry.", ["Bainbridge FERRY"], "Bainbridge"),
+                ("Take the ferry.", [" ferry "], "Ferry")):
+            m = {"type": 28, "instruction": text}
+            if names:
+                m["street_names"] = names
+            self.assertEqual(self.route(m).ferries[0]["name"], want, text)
+
+    def test_nan_and_inf_do_not_raise(self):
+        r = self.route({"type": 28, "time": float("nan"), "length": float("inf")},
+                       {"ferry": True, "time": float("inf")})
+        router = Router(FakeGps())
+        router._route = r
+        self.assertEqual(router.ferries, [{"name": "Ferry", "minutes": 0}])
+
+    def test_router_properties(self):
+        router = Router(FakeGps())
+        self.assertEqual(router.ferries, [])
+        router._route = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 10})
+        self.assertEqual(router.ferries, [{"name": "A", "minutes": 1}])
+
+
 if __name__ == "__main__":
     unittest.main()

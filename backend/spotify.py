@@ -189,6 +189,7 @@ class SpotifyPlayer(QObject):
         if item != self._item:
             self._item = item
             self.trackChanged.emit()
+            self._clear_error()
             self._command("get_queue", limit=10)
             if self._fill_subtitle():
                 self.recentsChanged.emit()
@@ -234,10 +235,15 @@ class SpotifyPlayer(QObject):
         """A short message when Soloist reported an error (offline, rate limited), else ''."""
         return self._error
 
+    def _clear_error(self):
+        if self._error:
+            self._error = ""
+            self.changed.emit()
+
     def _set_status(self, status):
         if status and status != self._status:
             self._status = status
-            self._error = ""
+            self._clear_error()
             self.playingChanged.emit()
 
     def _set_position(self, pos):

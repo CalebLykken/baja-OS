@@ -38,6 +38,9 @@ Item {
     readonly property var albums: media.albums
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
+    // Only while Spotify is what's playing or being looked at.
+    readonly property string spotifyError: typeof spotify !== "undefined"
+                                           && (media.source === "spotify" || page.tab === "spotify") ? spotify.error : ""
 
     function mmss(s) {
         var m = Math.floor(s / 60), r = s % 60
@@ -107,8 +110,8 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: media.artist
-                    color: Theme.textDim
+                    text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                    color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                     font.pixelSize: Theme.fontBody
                     elide: Text.ElideRight
                 }

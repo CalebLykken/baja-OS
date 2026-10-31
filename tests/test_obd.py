@@ -292,6 +292,157 @@ class StoppedEngineTest(unittest.TestCase):
         self.assertEqual((reader._baro, kept), (95.0, []))
 
 
+class Clock:
+    """A clock that only the reader's sleeps move."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class RetryWaitTest(unittest.TestCase):
+    def wait_after(self, quiet_s):
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + quiet_s):
+            return obd.retry_wait(1000.0)
+
+    def test_often_then_rarely_then_very_rarely(self):
+        self.assertEqual(self.wait_after(0), obd.RETRY_S)
+        self.assertEqual(self.wait_after(obd.SLOW_AFTER_S - 1), obd.RETRY_S)
+        self.assertEqual(self.wait_after(obd.SLOW_AFTER_S), obd.RETRY_SLOW_S)
+        self.assertEqual(self.wait_after(obd.SLOWEST_AFTER_S - 1), obd.RETRY_SLOW_S)
+        self.assertEqual(self.wait_after(obd.SLOWEST_AFTER_S), obd.RETRY_SLOWEST_S)
+        self.assertEqual(self.wait_after(86400), obd.RETRY_SLOWEST_S)
+
+    def test_a_charging_battery_keeps_the_slow_tier(self):
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + 86400):
+            self.assertEqual(obd.retry_wait(1000.0, charging=True), obd.RETRY_SLOW_S)
+            self.assertEqual(obd.retry_wait(1000.0, charging=False), obd.RETRY_SLOWEST_S)
+
+    def test_the_reader_stays_slow_while_its_last_battery_reading_is_charging(self):
+        reader = ObdReader()
+        reader._since = 1000.0
+        with mock.patch.object(obd.time, "monotonic", lambda: 1000.0 + 86400):
+            reader._volts(CannedElm({"ATRV": "14.1V"}))
+            self.assertEqual(reader._retry(), obd.RETRY_SLOW_S)
+            reader._volts(CannedElm({"ATRV": "12.5V"}))
+            self.assertEqual(reader._retry(), obd.RETRY_SLOWEST_S)
+
+    def test_the_longest_wait_is_at_most_two_minutes(self):
+        self.assertLessEqual(obd.RETRY_SLOWEST_S, 120.0)
+        self.assertGreater(obd.RETRY_SLOWEST_S, obd.RETRY_SLOW_S)
+
+
+class Stop(Exception):
+    pass
+
+
+class HoldTest(unittest.TestCase):
+    """A held reader sends nothing; released, it carries on."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.sleeps = []
+        self.on_sleep = lambda n: None
+        p = mock.patch.object(obd.time, "monotonic", self.clock.monotonic)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(obd.time, "sleep", self.sleep)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(obd.os.path, "exists", lambda path: True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.reader = ObdReader()
+        self.reader._since = self.clock.now
+        self.volts = []
+        self.reader.voltage.connect(self.volts.append)
+
+    def sleep(self, seconds):
+        self.clock.sleep(seconds)
+        self.sleeps.append(seconds)
+        self.on_sleep(len(self.sleeps))
+
+    def test_held_wait_sends_nothing_then_resumes(self):
+        elm = CannedElm({"ATRV": "12.5V", "0100": "41 00 98 3A 80 13"})
+
+        def on_sleep(n):
+            if n == 20:
+                self.assertEqual(elm.asked, [])
+                self.reader.release()
+        self.on_sleep = on_sleep
+        self.reader.hold()
+        self.assertTrue(self.reader._wait(elm, "/dev/x"))
+        self.assertEqual(elm.asked, ["ATRV", "0100"])
+        self.assertEqual(self.volts, [12.5])
+        self.assertLessEqual(max(self.sleeps), 1.0)
+
+    def test_a_long_wait_sleeps_in_short_slices_and_asks_every_two_minutes(self):
+        elm = CannedElm({"ATRV": "12.5V"})
+        self.clock.now += obd.SLOWEST_AFTER_S + 1       # parked a long while
+        self.reader._since = 1000.0
+
+        def on_sleep(n):
+            if self.clock.now > 1000.0 + obd.SLOWEST_AFTER_S + 300:
+                raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._wait(elm, "/dev/x")
+        self.assertLessEqual(max(self.sleeps), 1.0)
+        asks = elm.asked.count("0100")
+        self.assertIn(asks, (3, 4))                     # about every 120 s over 300 s
+        self.assertEqual(elm.asked.count("ATRV"), asks)  # the battery with each try
+
+    def test_hold_stops_the_battery_reads_too(self):
+        elm = CannedElm({"ATRV": "12.5V"})
+
+        def on_sleep(n):
+            if n == 3:
+                self.reader.hold()
+                self.asked_at_hold = len(elm.asked)
+            if n == 50:
+                raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._wait(elm, "/dev/x")
+        self.assertGreater(self.asked_at_hold, 0)
+        self.assertEqual(len(elm.asked), self.asked_at_hold)
+
+    def test_held_poll_sends_nothing_then_resumes(self):
+        elm = CannedElm(IDLING, rounds=3)
+        readings = []
+        self.reader.reading.connect(readings.append)
+
+        def on_sleep(n):
+            if n == 10:
+                self.assertEqual(elm.asked, [])
+                self.reader.release()
+        self.on_sleep = on_sleep
+        self.reader.hold()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.reader._poll(elm)
+        self.assertTrue(readings)
+
+    def test_a_hold_mid_round_sends_no_more(self):
+        elm = CannedElm(IDLING)
+        self.reader._start_baro = lambda elm: None
+        self.reader._read_codes = lambda elm, state: self.reader.hold()
+        readings = []
+        self.reader.reading.connect(readings.append)
+
+        def on_sleep(n):
+            raise Stop
+        self.on_sleep = on_sleep
+        with self.assertRaises(Stop):
+            self.reader._poll(elm)
+        self.assertEqual(elm.asked, [])
+        self.assertEqual(readings, [])
+
+
 class ConvertTest(unittest.TestCase):
     def test_rpm_is_quarters(self):
         self.assertEqual(convert(0x0C, [0x0C, 0x80]), ("rpm", 800.0))

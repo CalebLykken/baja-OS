@@ -209,6 +209,15 @@ class Signal:
 class FakeObd:
     reading, quiet, voltage = Signal(), Signal(), Signal()
 
+    def __init__(self):
+        self.calls = []
+
+    def hold(self):
+        self.calls.append("hold")
+
+    def release(self):
+        self.calls.append("release")
+
 
 class FakeGps:
     realFix, speed = False, 0.0
@@ -233,7 +242,8 @@ class DashboardTest(unittest.TestCase):
         _, self.print = [p.start() for p in patches]
         for p in patches:
             self.addCleanup(p.stop)
-        self.k = KeyOff(FakeObd(), FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now))
+        self.obd = FakeObd()
+        self.k = KeyOff(self.obd, FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now))
 
     def key_off(self):
         """A drive, then the key off and the countdown to 0."""
@@ -255,6 +265,54 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(len(self.powered), 1)    # no retry loop
         self.k.dismiss()
         self.assertEqual(self.k.error, "")
+
+    def test_the_reader_is_held_at_power_off_and_released_on_failure(self):
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + WARN_S - 1
+        self.k._tick()
+        self.assertEqual(self.obd.calls, [])       # still counting down
+        self.now += 1
+        self.k._tick()
+        self.assertEqual(self.obd.calls, ["hold"])
+        self.k._tick()
+        self.assertEqual(self.obd.calls, ["hold"])
+        self.k.power_failed("Access denied")
+        self.assertEqual(self.obd.calls, ["hold", "release"])
+
+    def test_a_reading_after_the_hold_doesnt_strand_the_reader(self):
+        self.key_off()
+        self.k._answered({"speed": 0})             # the car answers once more
+        self.assertEqual(self.k.countdown, -1)
+        self.k.power_failed("Access denied")
+        self.assertEqual(self.obd.calls, ["hold", "release"])
+
+    def test_a_failure_from_settings_doesnt_release(self):
+        self.k.power_failed("Access denied")
+        self.assertEqual(self.obd.calls, [])
+
+    def test_no_hold_when_the_shutdown_is_off(self):
+        self.k.setEnabled(False)
+        self.key_off()
+        self.assertEqual(self.obd.calls, [])
+        self.assertEqual(self.powered, [])
+
+    def test_no_hold_when_the_countdown_is_cancelled(self):
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + 5
+        self.k._tick()
+        self.k.keepOn()
+        self.now += 60
+        self.k._tick()
+        self.assertEqual(self.obd.calls, [])
+        self.k._answered({"speed": 0})            # the car came back
+        self.assertEqual(self.obd.calls, [])
+
+    def test_keep_on_releases_a_held_reader(self):
+        self.key_off()
+        self.k.keepOn()
+        self.assertEqual(self.obd.calls, ["hold", "release"])
 
     def test_the_next_key_off_still_shuts_down(self):
         self.key_off()

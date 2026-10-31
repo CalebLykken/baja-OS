@@ -39,18 +39,15 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend.obd import VOLTS_FOR_S
+from backend.obd import RUNNING_V, VOLTS_FOR_S
 
 QUIET_S = 15.0          # the car quiet this long before the countdown starts
 WARN_S = 10.0           # the countdown on screen, with "Keep on"
 MOVING_MPH = 3.0        # faster than this, it's a hiccup, not the key
-# The battery: about 13.6-14.5 V with the alternator charging (the engine
-# running), falling to about 12.4-12.8 V within a minute or so of the
-# engine stopping. Not measured on this truck yet: the journal's "Key off?
-# Battery" lines give it once a second for the first two minutes after the
-# car goes quiet. Measure idling with the lights and fan on, and a real
-# key-off, and set this between the two.
-RUNNING_V = 13.3        # over this, the engine's running: a dropout, not the key
+# RUNNING_V (backend/obd.py, which needs it too) is the battery over which the
+# engine is running: about 13.6-14.5 V charging, 12.4-12.8 V soon after it stops.
+# Not measured on this truck yet: the journal's "Key off? Battery" lines give it
+# once a second for the first two minutes after the car goes quiet.
 VOLTS_FRESH_S = 30.0    # an older reading doesn't count (the reader stopped)
 MPH_TO_MS = 0.44704
 SETTING = "shutdownWhenOff"
@@ -140,7 +137,8 @@ class KeyOff(QObject):
 
     def __init__(self, obd, gps, settings, power_off, parent=None):
         super().__init__(parent)
-        self._gps, self._settings, self._power_off = gps, settings, power_off
+        self._obd, self._gps, self._settings, self._power_off = obd, gps, settings, power_off
+        self._held = False                  # the OBD reader is told to keep quiet
         self._logic = KeyOffLogic()
         self._enabled = str(settings.get(SETTING, "false")) == "true"
         self._countdown = -1
@@ -191,14 +189,22 @@ class KeyOff(QObject):
             self.changed.emit()
         if self._logic.power_off_now(left):
             print("Key off: the car has been quiet; shutting down", flush=True)
+            self._hold(True)                # the adapter stays quiet while the Pi powers off
             self._power_off()
+
+    def _hold(self, on):
+        """Tell the OBD reader to stop sending, or carry on. Only once each way."""
+        if on != self._held:
+            self._held = on
+            (self._obd.hold if on else self._obd.release)()
 
     def power_failed(self, why):
         """systemctl poweroff didn't work: show why instead of the countdown."""
-        if self._countdown < 0 and not self._logic.done:
+        if not self._held and self._countdown < 0 and not self._logic.done:
             return                          # not from here (Settings > Shut down)
         print(f"Key off: couldn't shut down: {why}", flush=True)
         self._logic.failed()
+        self._hold(False)
         self._error = why
         self._tick()
         self.changed.emit()
@@ -234,5 +240,6 @@ class KeyOff(QObject):
     @pyqtSlot()
     def keepOn(self):
         self._logic.keep_on()
+        self._hold(False)
         print("Key off: kept on", flush=True)
         self._tick()

@@ -24,6 +24,11 @@ shows the engine values as unknown (backend/vehicle.py). While it waits for the 
 reads the battery: the adapter measures that itself (ATRV), so it works
 with the engine computer silent, and it tells key-off (backend/ignition.py)
 whether the engine is still running.
+
+`hold()` stops it for the shutdown (backend/ignition.py): no new step (a
+poll, a wake attempt, a battery read) begins until `release()`, so the
+adapter is quiet while the Pi powers off. At most the step in progress
+finishes.
 """
 
 import glob
@@ -46,7 +51,17 @@ ROUND_MIN_S = 0.1                    # at most 10 updates a second, however fast
 # Waiting for the car: often at first (key just turned off and on), then
 # rarely, so a parked car's adapter can go to sleep instead of being woken
 # every few seconds (it draws from the car's battery).
+# After 10 minutes, every 2 minutes: a key-on after the truck sat parked that
+# long waits at most 2 minutes for the dashboard to notice. The car going
+# live resets the clock (`_since`). Not while the battery says the engine's
+# running (only the K-line dropped): the key-off guard needs a battery
+# reading every 30 s or so, so that stays at RETRY_SLOW_S.
 RETRY_S, RETRY_SLOW_S, SLOW_AFTER_S = 3.0, 20.0, 60.0
+RETRY_SLOWEST_S, SLOWEST_AFTER_S = 120.0, 600.0
+# The battery over this: the alternator is charging, the engine's running.
+# Not measured on this truck yet (see backend/ignition.py).
+RUNNING_V = 13.3
+HOLD_NAP_S = 0.5                     # how long a held reader sleeps between looks
 # Waking the car: the first time the adapter searches for its protocol,
 # which can take several seconds. Cut short, the next command stops it.
 WAKE_TIMEOUT_S = 15.0
@@ -173,8 +188,13 @@ def parse_dtcs(lines, head):
     return found
 
 
-def retry_wait(since):
-    return RETRY_S if time.monotonic() - since < SLOW_AFTER_S else RETRY_SLOW_S
+def retry_wait(since, charging=False):
+    """Seconds between tries to wake the car, `since` it went quiet.
+    `charging`: the battery's last reading says the engine's running."""
+    quiet = time.monotonic() - since
+    if quiet < SLOW_AFTER_S:
+        return RETRY_S
+    return RETRY_SLOW_S if quiet < SLOWEST_AFTER_S or charging else RETRY_SLOWEST_S
 
 
 def pid_supported(bitmap, base, pid):
@@ -333,14 +353,31 @@ class ObdReader(QObject):
         if plausible_baro(kept):
             self._baro = self._saved = kept
         self._baro_pid = None                 # does the car answer PID 0x33? None: not asked yet
+        self._held = threading.Event()        # set: send nothing new
+        self._volts_last = None               # the battery's latest reading
+
+    def hold(self):
+        """Stop sending: the Pi is about to power off. Thread safe."""
+        self._held.set()
+
+    def release(self):
+        """Carry on after a hold (the shutdown didn't happen). Thread safe."""
+        self._held.clear()
 
     def start(self):
         threading.Thread(target=self._run, name="obd", daemon=True).start()
+
+    def _retry(self):
+        charging = self._volts_last is not None and self._volts_last > RUNNING_V
+        return retry_wait(self._since, charging)
 
     def _run(self):
         self._since = time.monotonic()        # when the car last went quiet
         self._protocol = "0"                  # search, until the car has answered
         while True:
+            if self._held.is_set():
+                time.sleep(HOLD_NAP_S)
+                continue
             path = find_port()
             if path:
                 try:
@@ -348,7 +385,14 @@ class ObdReader(QObject):
                 except (OSError, termios.error):
                     pass                      # unplugged mid-read: look again
                 safe_emit(self, "lost")
-            time.sleep(retry_wait(self._since))
+            # Looking for an adapter (or a plugged-back one) is never slower than RETRY_SLOW_S.
+            self._nap(min(self._retry(), RETRY_SLOW_S))
+
+    def _nap(self, seconds):
+        """Sleeps, in short slices so a hold or release is noticed soon."""
+        end = time.monotonic() + seconds
+        while (left := end - time.monotonic()) > 0 and not self._held.is_set():
+            time.sleep(min(1.0, left))
 
     def _session(self, path):
         elm = Elm(path)
@@ -359,7 +403,7 @@ class ObdReader(QObject):
                 elm.send(c)
             while self._wait(elm, path):
                 print("OBD: the car answered", flush=True)
-                if self._protocol == "0":
+                if self._protocol == "0" and not self._held.is_set():
                     # The protocol the search found ("A5" is ISO 14230-4,
                     # KWP fast init), so a reconnect doesn't search again.
                     found = elm.send("ATDPN").lstrip("A")
@@ -371,7 +415,8 @@ class ObdReader(QObject):
                 safe_emit(self, "quiet")
                 safe_emit(self, "lost")
                 # Ask it the same way until it answers again: no search.
-                elm.send("ATSP" + self._protocol)
+                if not self._held.is_set():
+                    elm.send("ATSP" + self._protocol)
         finally:
             elm.close()
 
@@ -379,22 +424,28 @@ class ObdReader(QObject):
         """Wakes the engine computer (with the key off it doesn't answer):
         True once it answers, False if the adapter goes away. Reads the
         battery meanwhile."""
-        ask_at = time.monotonic()
+        ask_at = volts_at = time.monotonic()
         while os.path.exists(path):
-            self._volts(elm)
-            if time.monotonic() >= ask_at:
+            if self._held.is_set():
+                time.sleep(HOLD_NAP_S)
+                continue
+            now = time.monotonic()
+            live = now - self._since < VOLTS_FOR_S      # battery each second for a while
+            if (live and now >= volts_at) or now >= ask_at:
+                self._volts(elm)
+                volts_at = now + VOLTS_EVERY_S
+            if now >= ask_at and not self._held.is_set():
                 if elm.pid(0x00, WAKE_TIMEOUT_S):
                     return True
-                ask_at = time.monotonic() + retry_wait(self._since)
-            if time.monotonic() - self._since < VOLTS_FOR_S:
-                time.sleep(VOLTS_EVERY_S)
-            else:
-                time.sleep(max(0.0, ask_at - time.monotonic()))
+                ask_at = time.monotonic() + self._retry()
+            now = time.monotonic()
+            time.sleep(min(1.0, max(0.0, (volts_at if live else ask_at) - now)))
         return False
 
     def _volts(self, elm):
         volts = elm.volts()
         if volts is not None:
+            self._volts_last = volts
             safe_emit(self, "voltage", volts)
         return volts
 
@@ -405,7 +456,7 @@ class ObdReader(QObject):
         key-on corrects it)."""
         if self._baro_pid is None:
             self._baro_pid = self._ask_baro_pid(elm)
-        if self._baro_pid:
+        if self._baro_pid and not self._held.is_set():
             d = elm.pid(BARO_PID)
             if d:
                 self._note_baro(d[0])
@@ -449,9 +500,11 @@ class ObdReader(QObject):
         the car not answering: one that has no PID 01 is fine."""
         if state[0] is not None and time.monotonic() - state[0] < CODES_EVERY_S:
             return
+        if self._held.is_set():
+            return
         state[0] = time.monotonic()
         lamp = elm.mil()
-        if lamp is not None and lamp != state[1]:
+        if lamp is not None and lamp != state[1] and not self._held.is_set():
             on, count = lamp
             stored = elm.dtcs("03") if count else []
             pending = elm.dtcs("07")
@@ -463,15 +516,22 @@ class ObdReader(QObject):
 
     def _poll(self, elm):
         """Reads the car until it stops answering."""
+        while self._held.is_set():
+            time.sleep(HOLD_NAP_S)
         self._start_baro(elm)
         misses, turn, logged, last = 0, 0, 0.0, {}
         still, kept = [], False         # manifold readings in this stop; one kept yet?
         codes = [None, None, None]
         while misses < GIVE_UP_AFTER:
+            if self._held.is_set():
+                time.sleep(HOLD_NAP_S)
+                continue
             started = time.monotonic()
             self._read_codes(elm, codes)
             values = {}
             for item in FAST + (SLOW[turn % len(SLOW)],):
+                if self._held.is_set():
+                    break
                 if item == "ATRV":
                     volts = self._volts(elm)
                     if volts is not None:
@@ -488,6 +548,8 @@ class ObdReader(QObject):
                     continue
                 if key:
                     values[key] = value
+            if self._held.is_set():
+                continue                # partial round: say nothing, wait for the release
             # With the engine stopped (key on), the manifold settles to the
             # outside air pressure: the zero for boost from here on. Only once
             # it has held still, not on its way back up after a stall, and

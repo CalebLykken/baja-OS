@@ -18,7 +18,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
 from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
-                             route_record, saved_route, tidy)
+                             route_record, saved_route, short_instruction, tidy)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -896,6 +896,139 @@ class FerryTest(unittest.TestCase):
         self.assertEqual(router.ferries, [])
         router._route = self.route({"type": 28, "instruction": "Take the A ferry.", "time": 10})
         self.assertEqual(router.ferries, [{"name": "A", "minutes": 1}])
+
+
+class ShortInstructionTest(unittest.TestCase):
+    @staticmethod
+    def el(*texts):
+        return [{"text": t} for t in texts]
+
+    def m(self, kind, text="Valhalla says this.", streets=(), **sign):
+        out = {"type": kind, "instruction": text, "street_names": list(streets)}
+        if sign:
+            out["sign"] = {f"exit_{k}_elements": self.el(*v) for k, v in sign.items()}
+        return out
+
+    def test_exit_with_number_and_toward_or_branch(self):
+        self.assertEqual(short_instruction(self.m(20, number=["165B"], toward=["I-5 S"])),
+                         "Exit 165B toward I-5 S")
+        self.assertEqual(short_instruction(self.m(21, number=["165B"], branch=["I-5 S"])),
+                         "Exit 165B onto I-5 S")
+        both = self.m(20, number=["165B"], toward=["Tacoma"], branch=["I-5 S"])
+        self.assertEqual(short_instruction(both), "Exit 165B toward Tacoma")
+        self.assertEqual(short_instruction(self.m(20, toward=["Tacoma", "Seattle"])),
+                         "Exit toward Tacoma / Seattle")
+
+    def test_ramp(self):
+        self.assertEqual(short_instruction(self.m(18, toward=["Tacoma"])), "Ramp toward Tacoma")
+        self.assertEqual(short_instruction(self.m(19, branch=["SR 16 W"])), "Ramp onto SR 16 W")
+        self.assertEqual(short_instruction(self.m(18, "Take the ramp on the right.")),
+                         "Take the ramp on the right")
+
+    def test_turns(self):
+        self.assertEqual(short_instruction(self.m(15, streets=["Pine St"])), "Turn left onto Pine St")
+        self.assertEqual(short_instruction(self.m(10, streets=["Pine St"])), "Turn right onto Pine St")
+        both = {"type": 10, "begin_street_names": ["Oak Ave"], "street_names": ["Pine St"],
+                "instruction": "x."}
+        self.assertEqual(short_instruction(both), "Turn right onto Oak Ave")
+        for kind in (2, 3):                      # start right/left: "Head north on X"
+            self.assertEqual(short_instruction(self.m(kind, "Head north on Pine St.", ["Pine St"])),
+                             "Head north on Pine St")
+        self.assertEqual(short_instruction(self.m(9, streets=["Pine St"])), "Bear right onto Pine St")
+        self.assertEqual(short_instruction(self.m(16, streets=["Pine St"])), "Bear left onto Pine St")
+        self.assertEqual(short_instruction(self.m(11, streets=["Pine St"])), "Sharp right onto Pine St")
+        self.assertEqual(short_instruction(self.m(14, streets=["Pine St"])), "Sharp left onto Pine St")
+        begin = {"type": 10, "begin_street_names": ["Oak Ave"], "instruction": "x."}
+        self.assertEqual(short_instruction(begin), "Turn right onto Oak Ave")
+        self.assertEqual(short_instruction(self.m(15, "Turn left.")), "Turn left")     # no street
+
+    def test_keep(self):
+        self.assertEqual(short_instruction(self.m(23, toward=["I-5 S"])), "Keep right toward I-5 S")
+        self.assertEqual(short_instruction(self.m(24, streets=["Main St"])), "Keep left onto Main St")
+        self.assertEqual(short_instruction(self.m(22, streets=["Main St"])), "Keep straight on Main St")
+        self.assertEqual(short_instruction(self.m(23, "Keep right at the fork.")), "Keep right at the fork")
+
+    def test_merge(self):
+        for kind, text in ((25, "Merge onto"), (37, "Merge right onto"), (38, "Merge left onto")):
+            self.assertEqual(short_instruction(self.m(kind, branch=["I-5 S"])), f"{text} I-5 S")
+        self.assertEqual(short_instruction(self.m(25, streets=["I-90 E"])), "Merge onto I-90 E")
+
+    def test_roundabout(self):
+        m = self.m(26, streets=["Main St"])
+        for n, word in ((1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"), (11, "11th"), (22, "22nd")):
+            m["roundabout_exit_count"] = n
+            self.assertEqual(short_instruction(m), f"Roundabout, take the {word} exit")
+        self.assertEqual(short_instruction(m), "Roundabout, take the 22nd exit")
+        del m["roundabout_exit_count"]
+        self.assertEqual(short_instruction(m), "Valhalla says this")
+
+    def test_continue(self):
+        self.assertEqual(short_instruction(self.m(8, streets=["Main St"])), "Continue on Main St")
+        self.assertEqual(short_instruction(self.m(7, streets=["Main St"])), "Continue on Main St")
+        self.assertEqual(short_instruction(self.m(8, "Continue.")), "Continue")
+
+    def test_ferry_arrival_and_unknown_keep_valhalla_text(self):
+        for kind in (28, 29, 4, 5, 6, 12, 13, 99, None):
+            self.assertEqual(short_instruction(self.m(kind, "Take the Bremerton ferry.", ["X"],
+                                                      toward=["Y"])), "Take the Bremerton ferry")
+        self.assertEqual(short_instruction({"type": 5, "instruction": "Arrive at Cafe"}), "Arrive at Cafe")
+
+    def test_junk_never_raises(self):
+        for junk in (None, [], "text", 5, {}, {"type": "x"}, {"type": 20, "sign": "no"},
+                     {"type": 20, "sign": {"exit_toward_elements": "I-5"}},
+                     {"type": 20, "sign": {"exit_toward_elements": [None, 3, {"text": None}, {"x": 1}]},
+                      "instruction": "Take the exit."},
+                     {"type": 15, "street_names": "Pine", "instruction": "Turn left."},
+                     {"type": 15, "street_names": [None, 4], "instruction": "Turn left."},
+                     {"type": 26, "roundabout_exit_count": "2", "instruction": None},
+                     {"type": 26, "roundabout_exit_count": True},
+                     {"type": [1], "instruction": 7}):
+            self.assertIsInstance(short_instruction(junk), str)
+        self.assertEqual(short_instruction(
+            {"type": 20, "sign": {"exit_toward_elements": [None, 3, {"text": None}]},
+             "instruction": "Take the exit."}), "Take the exit")
+        self.assertEqual(short_instruction({"type": 15, "street_names": "Pine", "instruction": "Turn left."}),
+                         "Turn left")
+
+    def test_length_cap(self):
+        long_names = ["Interstate 5 Southbound Express Lanes", "Tacoma Narrows Bridge", "Gig Harbor"]
+        out = short_instruction(self.m(20, number=["165B"], toward=long_names))
+        self.assertEqual(out, "Exit 165B toward Interstate 5 Southbound Express Lanes")
+        self.assertLessEqual(len(out), 60)
+        out = short_instruction(self.m(15, streets=["Martin Luther King Junior Memorial Way South East"]))
+        self.assertLessEqual(len(out), 60)
+        self.assertEqual(out, "Turn left onto Martin Luther King Junior Memorial Way South")
+        out = short_instruction(self.m(15, streets=["Supercalifragilisticexpialidocious" * 3]))
+        self.assertLessEqual(len(out), 60)
+        self.assertTrue(out.startswith("Turn left onto"))
+
+    def test_screen_short_speech_full(self):
+        route = {"trip": {"summary": {"time": 200.0}, "legs": [{
+            "shape": polyline6([START, CORNER, END]),
+            "maneuvers": [
+                {"type": 1, "begin_shape_index": 0, "instruction": "Drive north.",
+                 "verbal_pre_transition_instruction": "Drive north."},
+                {"type": 10, "begin_shape_index": 1, "street_names": ["Pine St"],
+                 "instruction": "Turn right onto Pine Street.",
+                 "verbal_pre_transition_instruction": "Turn right onto Pine Street, then arrive.",
+                 "verbal_transition_alert_instruction": "Turn right onto Pine Street."},
+                {"type": 4, "begin_shape_index": 2, "instruction": "You have arrived."},
+            ]}]}}
+        gps = FakeGps()
+        router = Router(gps)
+        said = []
+        router.speak.connect(said.append)
+        router._request = lambda *a, **k: None
+        router.routeTo("Shop", *END)
+        answer(router, route, "", "Shop", False)
+        router.go()
+        self.assertEqual(said, ["Drive north."])
+        gps.at(CORNER[0], 47.0195)
+        router._on_fix()
+        self.assertEqual(router.instruction, "Turn right onto Pine St")
+        self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
+        router.repeatLast()
+        self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
 
 
 if __name__ == "__main__":

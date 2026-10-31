@@ -82,6 +82,98 @@ def costing_options(settings):
     auto = {opt: 0 for key, opt in AVOID.items() if str(settings.get(key, "false")) == "true"}
     return {"auto": auto} if auto else {}
 
+SHORT_MAX = 60                        # characters of on-screen instruction
+
+TURN_WORDS = {10: "Turn right", 15: "Turn left",
+              9: "Bear right", 16: "Bear left", 11: "Sharp right", 14: "Sharp left"}
+KEEP_WORDS = {22: "Keep straight", 23: "Keep right", 24: "Keep left"}
+
+
+def _texts(value):
+    """The strings in a Valhalla list of names or {"text": ...} sign elements; junk is skipped."""
+    out = []
+    for e in value if isinstance(value, list) else []:
+        t = e.get("text") if isinstance(e, dict) else e
+        if isinstance(t, str) and t.strip():
+            out.append(t.strip())
+    return out
+
+
+def _fit(head, names):
+    """head + names, dropping trailing names (then trailing words) to stay under SHORT_MAX."""
+    names = list(names)
+    while len(names) > 1 and len(f"{head} {' / '.join(names)}") > SHORT_MAX:
+        names.pop()
+    text = f"{head} {' / '.join(names)}" if names else head
+    if len(text) > SHORT_MAX:
+        cut = text[:SHORT_MAX + 1]
+        text = cut.rsplit(" ", 1)[0] if " " in cut else text[:SHORT_MAX]
+    return text
+
+
+def _ordinal(n):
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _fallback(m):
+    return str(m.get("instruction") or "").strip().rstrip(".")
+
+
+def short_instruction(m):
+    """The on-screen text for a maneuver ("Exit 165B toward I-5 S"); the spoken text stays full.
+
+    Built from Valhalla's type, street names and sign; anything it can't make a clean
+    short form of keeps Valhalla's own instruction."""
+    if not isinstance(m, dict):
+        return ""
+    try:
+        return _short(m) or _fallback(m)
+    except Exception:
+        return _fallback(m)
+
+
+def _short(m):
+    kind = m.get("type")
+    sign = m.get("sign") if isinstance(m.get("sign"), dict) else {}
+    toward, branch = _texts(sign.get("exit_toward_elements")), _texts(sign.get("exit_branch_elements"))
+    number = _texts(sign.get("exit_number_elements"))
+    street = _texts(m.get("street_names")) or _texts(m.get("begin_street_names"))
+    via = [("toward", toward), ("onto", branch)]
+    if kind in (20, 21):
+        head = "Exit " + number[0] if number else "Exit"
+        for word, names in via:
+            if names:
+                return _fit(f"{head} {word}", names)
+        return head if number else (_fit("Exit onto", street) if street else "")
+    if kind in (18, 19):
+        for word, names in via:
+            if names:
+                return _fit(f"Ramp {word}", names)
+        return ""
+    if kind in KEEP_WORDS:
+        word = KEEP_WORDS[kind]
+        for w, names in [("toward", toward), ("on" if kind == 22 else "onto", branch or street)]:
+            if names:
+                return _fit(f"{word} {w}", names)
+        return ""
+    if kind in (25, 37, 38):
+        names = branch or street
+        word = {37: "Merge right onto", 38: "Merge left onto"}.get(kind, "Merge onto")
+        return _fit(word, names) if names else ""
+    if kind in TURN_WORDS:
+        # begin_street_names is the street turned onto; street_names comes after it
+        names = _texts(m.get("begin_street_names")) or street
+        return _fit(f"{TURN_WORDS[kind]} onto", names) if names else ""
+    if kind == 26:
+        count = m.get("roundabout_exit_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            return ""
+        return f"Roundabout, take the {_ordinal(count)} exit"   # street_names is the circle's
+    if kind in (7, 8):
+        return _fit("Continue on", street) if street else ""
+    return ""
+
 
 FERRY_ENTER = 28                      # Valhalla maneuver type: board a ferry
 FERRY_NAME = re.compile(r"^Take the (?!ferry\b)(.+) ferry\.?$", re.I)
@@ -897,7 +989,7 @@ class Router(QObject):
         if self._arrived:
             return "You've arrived at " + self._route.name
         # The short form on screen; the spoken form chains the next step.
-        return (self._route.next_maneuver().get("instruction") or "").rstrip(".")
+        return short_instruction(self._route.next_maneuver())
 
     @pyqtProperty(str, notify=progressChanged)
     def maneuverIcon(self):

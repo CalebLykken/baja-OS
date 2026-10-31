@@ -389,15 +389,15 @@ class Gps(QObject):
             used = False
             try:
                 used = self._read_gpsd()
-            except OSError:
-                pass
+            except (OSError, ValueError, termios.error) as e:
+                print(f"GPS: gpsd read failed ({e}); retrying", flush=True)
             if not used:
                 path = find_receiver()
                 if path:
                     try:
                         self._read_receiver(path)
-                    except OSError:
-                        pass                      # unplugged: look again
+                    except (OSError, termios.error) as e:   # unplugged: look again
+                        print(f"GPS: lost the receiver ({e}); retrying", flush=True)
             safe_emit(self, "_report", {"gpsd": False})
             time.sleep(5)
 
@@ -492,27 +492,35 @@ class Gps(QObject):
                     f = nmea_fields(raw.decode("ascii", "replace"))
                     if not f or len(f[0]) < 5:
                         continue
-                    kind = f[0][2:]
-                    if kind == "RMC" and len(f) > 2 and (f[2] == "A") != found:
-                        found = f[2] == "A"
-                        print("GPS: " + (f"position found, {used} satellites" if found
-                                         else "lost the position"), flush=True)
-                    if kind == "RMC" and len(f) > 8 and f[2] == "A":
-                        lat, lon = nmea_coord(f[3], f[4]), nmea_coord(f[5], f[6])
-                        if lat is not None and lon is not None:
-                            safe_emit(self, "_report", {
-                                "lat": lat, "lon": lon,
-                                "speed": float(f[7] or 0) * KNOTS_TO_MS,
-                                "heading": float(f[8]) if f[8] else None,
-                                "source": "gps",
-                            })
-                    elif kind == "GSV" and len(f) > 3 and f[3].isdigit():
-                        in_view[f[0][:2]] = int(f[3])     # per system: GPS, GLONASS, BeiDou...
-                    elif kind == "GGA" and len(f) > 7:
-                        used = int(f[7]) if f[7].isdigit() else 0
-                        safe_emit(self, "_report", {"sats": used, "view": sum(in_view.values())})
+                    try:
+                        found, used = self._sentence(f, found, used, in_view)
+                    except ValueError as e:         # one bad sentence isn't a lost receiver
+                        print(f"GPS: skipped a bad {f[0]} sentence ({e})", flush=True)
         finally:
             os.close(fd)
+
+    def _sentence(self, f, found, used, in_view):
+        """Act on one checked NMEA sentence's fields; the new (found, used)."""
+        kind = f[0][2:]
+        if kind == "RMC" and len(f) > 2 and (f[2] == "A") != found:
+            found = f[2] == "A"
+            print("GPS: " + (f"position found, {used} satellites" if found
+                             else "lost the position"), flush=True)
+        if kind == "RMC" and len(f) > 8 and f[2] == "A":
+            lat, lon = nmea_coord(f[3], f[4]), nmea_coord(f[5], f[6])
+            if lat is not None and lon is not None:
+                safe_emit(self, "_report", {
+                    "lat": lat, "lon": lon,
+                    "speed": float(f[7] or 0) * KNOTS_TO_MS,
+                    "heading": float(f[8]) if f[8] else None,
+                    "source": "gps",
+                })
+        elif kind == "GSV" and len(f) > 3 and f[3].isdigit():
+            in_view[f[0][:2]] = int(f[3])     # per system: GPS, GLONASS, BeiDou...
+        elif kind == "GGA" and len(f) > 7:
+            used = int(f[7]) if f[7].isdigit() else 0
+            safe_emit(self, "_report", {"sats": used, "view": sum(in_view.values())})
+        return found, used
 
     # ---- the simulated drive ----------------------------------------------------
     def _tick(self):

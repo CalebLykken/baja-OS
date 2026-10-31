@@ -669,3 +669,44 @@ class BinaryJunkTest(unittest.TestCase):
         fixes = [x for x in seen if "lat" in x]
         self.assertEqual(len(fixes), 1)
         self.assertAlmostEqual(fixes[0]["lat"], 47.606, places=2)
+
+
+class ReaderSurvivesTest(unittest.TestCase):
+    RMC = "GNRMC,120000.00,A,4736.37200,N,12219.92000,W,{},90.0,010125,,,A"
+
+    def test_a_bad_sentence_is_skipped_not_fatal(self):
+        stream = (sentence(self.RMC.format("1O.0")) + "\r\n" + sentence(self.RMC.format("10.0")) + "\r\n").encode()
+        r, w = os.pipe()
+        os.write(w, stream)
+        os.close(w)
+        g = Gps(None)
+        seen = []
+        g._report.disconnect()
+        g._report.connect(seen.append)
+        with mock.patch("backend.gps.termios.tcgetattr", return_value=[0] * 7), \
+                mock.patch("backend.gps.termios.tcsetattr"), mock.patch("backend.gps.os.open", return_value=r), \
+                mock.patch("backend.gps.configure_receiver"), redirect_stdout(io.StringIO()):
+            g._read_receiver("/dev/serial/by-id/usb-u-blox-if00")
+        self.assertEqual(len([x for x in seen if "lat" in x]), 1)
+
+    def test_a_termios_error_means_retry_not_a_dead_thread(self):
+        import termios
+        g = Gps(None)
+        calls = []
+
+        def read(path):
+            calls.append(path)
+            raise termios.error(5, "Input/output error")
+
+        class Stop(Exception):
+            pass
+
+        out = io.StringIO()
+        with mock.patch.object(g, "_read_gpsd", return_value=False), \
+                mock.patch("backend.gps.find_receiver", return_value="/dev/ttyACM0"), \
+                mock.patch.object(g, "_read_receiver", read), \
+                mock.patch("backend.gps.time.sleep", side_effect=Stop), redirect_stdout(out):
+            with self.assertRaises(Stop):     # reached the 5 s wait, i.e. the error was caught
+                g._receiver_loop()
+        self.assertEqual(calls, ["/dev/ttyACM0"])
+        self.assertIn("lost the receiver", out.getvalue())

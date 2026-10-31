@@ -48,7 +48,8 @@ class FakeSource(QObject):
     deviceName = art = title = artist = ""
     duration = position = 0
     volume = 50
-    hasVolume = hasPlayer = available = active = True
+    hasVolume = hasPlayer = available = active = canSeek = True
+    sought = None
     recents = upNext = []
 
     def __init__(self):
@@ -68,6 +69,9 @@ class FakeSource(QObject):
 
     def setVolume(self, value):
         pass
+
+    def seek(self, seconds):
+        self.sought = seconds
 
 
 def saved(source, playing, index=3, position=50):
@@ -123,6 +127,18 @@ class HubTest(unittest.TestCase):
         self.assertEqual(self.state()["local"]["position"], 10)     # not on every tick
         hub._save_timer.timeout.emit()
         self.assertEqual(self.state()["local"]["position"], 12)
+
+    def test_seek_goes_to_the_source_that_can(self):
+        hub = self.make(music=saved("local", False))
+        self.phone.canSeek = False
+        self.spotify.play()
+        self.assertEqual((hub.source, hub.canSeek), ("spotify", True))
+        hub.seek(42)
+        self.assertEqual(self.spotify.sought, 42)
+        self.phone.play()
+        self.assertEqual((hub.source, hub.canSeek), ("phone", False))
+        hub.seek(10)                                 # AVRCP has no seek: ignored
+        self.assertIsNone(self.phone.sought)
 
     def test_reading_what_was_saved(self):
         self.assertIsNone(read_state(""))

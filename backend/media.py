@@ -119,6 +119,11 @@ class MediaPlayer(QObject):
         return False
 
     @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        """AVRCP has no seek: the bar stays inert."""
+        return False
+
+    @pyqtProperty(bool, constant=True)
     def shuffle(self):
         return False
 

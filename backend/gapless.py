@@ -464,7 +464,9 @@ class GaplessEngine(QObject):
     def position(self):
         """Seconds into the song being heard."""
         with self._lock:
-            if not self._songs or self._pending is not None:
+            if self._pending is not None:
+                return self._pending[1] // BYTES_PER_S    # a seek shows where it's going
+            if not self._songs:
                 return 0
             # Paused, what's queued in the stream is silence: counting it
             # would put a restored song (and each save of it) a bit earlier.

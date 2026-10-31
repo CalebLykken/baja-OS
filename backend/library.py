@@ -396,6 +396,22 @@ class LibraryPlayer(QObject):
         """Shuffle and repeat work on this source."""
         return True
 
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        return True
+
+    @pyqtSlot(int)
+    def seek(self, seconds):
+        """Jump within the song. A long file re-decodes from its start, so a
+        deep seek is silent for a moment."""
+        if not self._queue:
+            return
+        dur = self.duration
+        # Not quite the end: the song would end before it was heard.
+        seconds = max(0, min(int(seconds), dur - 1 if dur > 1 else 0))
+        self._engine.seek(seconds)
+        self.positionChanged.emit()
+
     @pyqtProperty(bool, notify=modesChanged)
     def shuffle(self):
         return self._shuffle

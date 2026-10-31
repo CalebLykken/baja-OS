@@ -342,7 +342,15 @@ class SpotifyPlayer(QObject):
 
     @pyqtSlot(int)
     def seek(self, seconds):
-        self._command("seek", position_ms=max(0, int(seconds)) * 1000)
+        ms = max(0, int(seconds)) * 1000
+        self._command("seek", position_ms=ms)
+        # Show it now rather than when the server's next event arrives.
+        self._pos = (ms, time.monotonic(), self._pos[2])
+        self.positionChanged.emit()
+
+    @pyqtProperty(bool, constant=True)
+    def canSeek(self):
+        return True
 
     @pyqtSlot(int)
     def setVolume(self, value):

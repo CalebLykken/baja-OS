@@ -102,13 +102,37 @@ Item {
                 }
                 Item { Layout.fillHeight: true }
 
-                ProgressBar {
+                // Tap or drag to seek. The touch area is much taller than the bar;
+                // the song only jumps on release, so a drag doesn't re-decode.
+                Item {
+                    id: seekArea
                     Layout.fillWidth: true
-                    value: media.duration > 0 ? media.position / media.duration : 0
+                    Layout.preferredHeight: 48
+                    readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
+                    property real dragValue: 0
+                    property bool dragging: false
+                    function at(x) { return Math.max(0, Math.min(1, x / width)) }
+                    ProgressBar {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width
+                        value: seekArea.dragging ? seekArea.dragValue
+                                                 : (media.duration > 0 ? media.position / media.duration : 0)
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: seekArea.canSeek
+                        onPressed: (m) => { seekArea.dragValue = seekArea.at(m.x); seekArea.dragging = true }
+                        onPositionChanged: (m) => seekArea.dragValue = seekArea.at(m.x)
+                        onReleased: (m) => {
+                            seekArea.dragging = false
+                            media.seek(Math.round(seekArea.at(m.x) * media.duration))
+                        }
+                        onCanceled: seekArea.dragging = false
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: page.idle ? "" : page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? seekArea.dragValue * media.duration : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                     Item { Layout.fillWidth: true }
                     Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                 }

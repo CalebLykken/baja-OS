@@ -508,6 +508,16 @@ class MediaHub(QObject):
         """What Spotify plays next (display only)."""
         return self._sources["spotify"].upNext if self._source == "spotify" else []
 
+    @pyqtProperty(bool, notify=sourceChanged)
+    def canSeek(self):
+        """The bar can be dragged: not on a phone, which has no seek."""
+        return self._active.canSeek
+
+    @pyqtSlot(int)
+    def seek(self, seconds):
+        if self._active.canSeek:
+            self._active.seek(seconds)
+
     @pyqtProperty(bool, notify=modesChanged)
     def hasModes(self):
         """Shuffle and repeat can be set: the Pi's own music is the source."""

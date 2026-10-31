@@ -383,6 +383,14 @@ class ModesTest(unittest.TestCase):
     def follows(self):
         return [self.player._after(i) for i in range(4)]
 
+    def test_seek_shows_where_it_is_going_and_stays_inside_the_song(self):
+        self.player.playIndex(0)
+        self.player.seek(-3)                         # clamped to the start
+        self.assertEqual(self.player.position, 0)
+        with mock.patch.object(self.engine, "seek") as seek:
+            self.player.seek(99)
+            seek.assert_called_once_with(max(0, self.player.duration - 1))
+
     def test_the_default_is_how_it_always_played(self):
         self.assertEqual((self.player.shuffle, self.player.repeat), (False, "all"))
         self.assertEqual(self.follows(), [1, 2, 3, 0])

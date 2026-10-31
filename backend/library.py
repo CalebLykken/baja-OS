@@ -220,13 +220,13 @@ def _read_track(path, folder_art):
 
 def _reuse(entry, stamp, path, folder_art):
     """The cached entry for a file that hasn't changed (a copy: the old
-    cache stays as it was to compare against), or None to read it again."""
+    cache stays as it was to compare against), or None to read it again. A
+    file that couldn't be read is always read again: the fault may have been
+    the moment's (a full disk, a read error), not the file's."""
     try:
         if entry["stamp"] != stamp or type(entry["embedded"]) is not bool:
             return None
         track = entry["track"]
-        if track is None:
-            return dict(entry)              # unreadable last time, and the same file
         if not _valid_track(track):
             return None
         track = dict(track)

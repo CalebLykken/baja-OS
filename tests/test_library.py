@@ -157,6 +157,20 @@ class ScanCacheTest(ScanBase):
         self.assertEqual(len(self.tracks), 3)
         self.assertEqual(len(cached_tracks(self.top)), 3)
 
+    def test_a_failed_read_doesnt_hide_a_song_for_good(self):
+        with mock.patch.object(library, "_extract_art", side_effect=OSError("disk full")), \
+                mock.patch("builtins.print"):
+            self.assertEqual(scan(self.top), [])
+        self.assertEqual(self.reads(), 4)
+        self.assertEqual(len(self.tracks), 4)
+
+    def test_an_unreadable_file_is_read_again_each_scan(self):
+        self.reads()
+        self.file.write_bytes(b"this is no song")
+        self.assertEqual(self.reads(), 1)
+        self.assertEqual(self.reads(), 1)
+        self.assertEqual(len(self.tracks), 3)
+
     def test_a_corrupt_cache_is_ignored_and_replaced(self):
         self.reads()
         library.cache_file().write_text("{not json")

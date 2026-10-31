@@ -5,14 +5,24 @@ with a clock that's just a number; and which updates count as a new fix.
     python3 -m unittest tests.test_gps
 """
 
+import io
 import json
+import os
+import select
+import tempfile
+import threading
+import tty
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 from types import SimpleNamespace
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.gps import DemoRoute, Gps, Position, nmea_coord, nmea_fields, sky_report
+from backend import gps as gpsmod
+from backend.gps import (DemoRoute, Gps, Position, configure_receiver, nmea_coord, nmea_fields,
+                         sky_report, ubx_frame, ubx_nav5_frame, ubx_rate_frame, ubx_replies,
+                         ubx_valset_frame)
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -394,3 +404,268 @@ class DemoDriveFollowsTheEngineDataTest(unittest.TestCase):
 
     def test_a_quiet_truck_shows_no_position(self):    # key off, no receiver
         self.assertIsNone(self.tick(simulated=False))
+
+
+def fletcher(data):
+    """The UBX checksum, worked out on its own for the tests."""
+    a = b = 0
+    for x in data:
+        a = (a + x) % 256
+        b = (b + a) % 256
+    return bytes([a, b])
+
+
+def frames(data):
+    """Split concatenated UBX frames into (class, id, payload), checking each."""
+    out = []
+    while data:
+        assert data[:2] == b"\xb5\x62", data[:2]
+        n = int.from_bytes(data[4:6], "little")
+        assert fletcher(data[2:6 + n]) == data[6 + n:8 + n]
+        out.append((data[2], data[3], data[6:6 + n]))
+        data = data[8 + n:]
+    return out
+
+
+class UbxFramesTest(unittest.TestCase):
+    def test_frame_layout_and_checksum(self):
+        f = ubx_frame(0x06, 0x08, b"\x01\x02\x03")
+        self.assertEqual(f[:6], b"\xb5\x62\x06\x08\x03\x00")
+        self.assertEqual(f[6:9], b"\x01\x02\x03")
+        self.assertEqual(f[9:], fletcher(f[2:9]))
+
+    def test_the_documented_5_hz_command(self):
+        # CFG-RATE 200 ms, 1, GPS time: the vector u-blox tutorials print.
+        self.assertEqual(ubx_rate_frame().hex(" "), "b5 62 06 08 06 00 c8 00 01 00 01 00 de 6a")
+
+    def test_valset_is_ram_only_with_the_three_items(self):
+        (cls, mid, payload), = frames(ubx_valset_frame())
+        self.assertEqual((cls, mid), (0x06, 0x8A))
+        self.assertEqual(len(payload), 4 + 5 + 6 + 6)
+        self.assertEqual(payload[:4], b"\x00\x01\x00\x00")           # version 0, RAM only
+        self.assertEqual(payload[4:], bytes.fromhex("21001120" "04" "01002130" "c800" "02002130" "0100"))
+
+    def test_nav5_sets_only_the_dynamic_model(self):
+        (cls, mid, payload), = frames(ubx_nav5_frame())
+        self.assertEqual((cls, mid, len(payload)), (0x06, 0x24, 36))
+        self.assertEqual(payload[:3], b"\x01\x00\x04")
+        self.assertEqual(payload[3:], bytes(33))
+
+    def test_nothing_is_ever_saved_to_the_receiver(self):
+        sent = ubx_valset_frame() + ubx_nav5_frame() + ubx_rate_frame()
+        self.assertNotIn((0x06, 0x09), [(c, i) for c, i, _ in frames(sent)])
+        self.assertEqual(gpsmod.RATE_HZ, 5)
+        self.assertEqual(gpsmod.DYNMODEL, 4)
+
+    def test_replies_are_found_among_nmea(self):
+        ack = ubx_frame(5, 1, b"\x06\x8a")
+        nak = ubx_frame(5, 0, b"\x06\x24")
+        data = b"$GNGGA,1*00\r\n" + ack + b"\r\n$GNRMC,2*00\r\n" + nak
+        self.assertEqual(ubx_replies(data), [(True, 6, 0x8A), (False, 6, 0x24)])
+        self.assertEqual(ubx_replies(ack[:-1]), [])
+        self.assertEqual(ubx_replies(ack[:-1] + b"\x00"), [])         # bad checksum
+
+
+class ConfigureReceiverTest(unittest.TestCase):
+    def test_other_receivers_are_never_written_to(self):
+        with mock.patch("backend.gps.os.open") as op, mock.patch("backend.gps.os.write") as wr:
+            for name in ("usb-Generic_GNSS_Receiver-if00", "usb-GPS_thing-if00", "usb-FTDI_OBD-if00", ""):
+                configure_receiver("/dev/serial/by-id/" + name, 5)
+            configure_receiver(None, 5)
+        op.assert_not_called()
+        wr.assert_not_called()
+
+    def test_it_never_opens_the_port_itself(self):
+        path = "/dev/serial/by-id/usb-u-blox_AG_u-blox_GNSS_receiver-if00"
+        with mock.patch("backend.gps.os.open") as op:
+            self.assertFalse(configure_receiver(path, None))
+        op.assert_not_called()
+
+    def test_errors_are_swallowed(self):
+        path = "/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00"
+        with mock.patch("backend.gps.os.write", side_effect=OSError("gone")), redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(configure_receiver(path, 99, sleep=lambda s: None))
+        self.assertIn("couldn't set the receiver up (gone)", out.getvalue())
+
+    def test_a_pty_gets_the_exact_bytes_and_the_replies_are_read(self):
+        master, slave = os.openpty()
+        tty.setraw(slave)                  # the reader has set the port raw by now
+        got = []
+
+        def receiver():
+            if select.select([master], [], [], 3)[0]:
+                got.append(os.read(master, 4096))
+                os.write(master, b"$GNGGA,1*00\r\n" + ubx_frame(5, 1, b"\x06\x8a")
+                         + ubx_frame(5, 0, b"\x06\x24") + ubx_frame(5, 1, b"\x06\x08"))
+
+        t = threading.Thread(target=receiver)
+        t.start()
+        path = "/dev/serial/by-id/usb-u-blox_AG_u-blox_GNSS_receiver-if00"
+        with mock.patch.object(gpsmod, "SETUP_WAIT_S", 0.6), redirect_stdout(io.StringIO()) as out:
+            self.assertTrue(configure_receiver(path, slave))
+        t.join()
+        os.close(master)
+        os.close(slave)
+        self.assertEqual(got, [ubx_valset_frame() + ubx_nav5_frame() + ubx_rate_frame()])
+        self.assertIn("GPS: set automotive mode and 5 Hz (acked: VALSET ack, NAV5 nak, RATE ack)", out.getvalue())
+
+
+class SetupRetryTest(unittest.TestCase):
+    PATH = "/dev/serial/by-id/usb-u-blox_AG_u-blox_GNSS_receiver-if00"
+
+    def run_setup(self, answers):
+        sleeps = []
+        with mock.patch("backend.gps.configure_fd", side_effect=answers) as cf, redirect_stdout(io.StringIO()):
+            ok = configure_receiver(self.PATH, fd=7, sleep=sleeps.append)
+        return ok, cf.call_count, sleeps
+
+    def test_it_asks_up_to_three_times_when_nothing_is_acked(self):
+        self.assertEqual(self.run_setup([False, False, False]), (False, 3, [gpsmod.SETUP_RETRY_S] * 2))
+
+    def test_it_stops_at_the_first_ack(self):
+        self.assertEqual(self.run_setup([False, True, True]), (True, 2, [gpsmod.SETUP_RETRY_S]))
+
+    def test_the_log_says_set_only_when_something_was_acked(self):
+        nak = ubx_frame(5, 0, b"\x06\x8a")
+        ok, text = gpsmod.setup_summary(nak)
+        self.assertFalse(ok)
+        self.assertNotIn("set automotive", text)
+        self.assertIn("VALSET nak", text)
+        self.assertIn("heard nothing", gpsmod.setup_summary(b"$GNGGA*00")[1])
+        ok, text = gpsmod.setup_summary(nak + ubx_frame(5, 1, b"\x06\x24"))
+        self.assertTrue(ok)
+        self.assertIn("set automotive mode and 5 Hz (acked: VALSET nak, NAV5 ack)", text)
+
+
+class DirectReaderSetupTest(unittest.TestCase):
+    def test_setup_runs_first_on_the_readers_own_port_then_fixes_are_read(self):
+        rmc = "GNRMC,120000.00,A,4736.37200,N,12219.92000,W,10.0,90.0,010125,,,A"
+        c = 0
+        for ch in rmc:
+            c ^= ord(ch)
+        master, slave = os.openpty()
+        got = []
+
+        def receiver():
+            if select.select([master], [], [], 3)[0]:
+                got.append(os.read(master, 4096))
+                os.write(master, ubx_frame(5, 1, b"\x06\x8a"))
+                select.select([], [], [], 0.9)      # past the setup's listening time
+                os.write(master, f"${rmc}*{c:02X}\r\n".encode())
+                select.select([], [], [], 0.3)
+                os.close(master)
+
+        t = threading.Thread(target=receiver)
+        t.start()
+        g = Gps(None)
+        seen = []
+        g._report.disconnect()
+        g._report.connect(seen.append)
+        with tempfile.TemporaryDirectory() as d:
+            link = os.path.join(d, "usb-u-blox_AG_u-blox_GNSS_receiver-if00")
+            os.symlink(os.ttyname(slave), link)
+            with mock.patch.object(gpsmod, "SETUP_WAIT_S", 0.6), mock.patch.object(gpsmod, "SETUP_RETRY_S", 0), \
+                    redirect_stdout(io.StringIO()) as out:
+                try:
+                    g._read_receiver(link)
+                except OSError:
+                    pass                      # the pty's far end closed: "unplugged"
+        t.join()
+        os.close(slave)
+        self.assertEqual(got, [gpsmod.setup_frames()])
+        self.assertIn("set automotive mode and 5 Hz (acked: VALSET ack)", out.getvalue())
+        self.assertEqual(len([x for x in seen if "lat" in x]), 1)
+
+    def test_a_non_ublox_receiver_is_only_read(self):
+        opened = []
+        with mock.patch("backend.gps.os.open", side_effect=lambda p, flags: opened.append(flags) or 5), \
+                mock.patch("backend.gps.termios.tcgetattr", return_value=[0] * 7), \
+                mock.patch("backend.gps.termios.tcsetattr"), mock.patch("backend.gps.os.read", return_value=b""), \
+                mock.patch("backend.gps.select.select", return_value=([5], [], [])), \
+                mock.patch("backend.gps.os.write") as wr, mock.patch("backend.gps.os.close"), \
+                redirect_stdout(io.StringIO()):
+            Gps(None)._read_receiver("/dev/serial/by-id/usb-Generic_GNSS_Receiver-if00")
+        wr.assert_not_called()
+        self.assertFalse(opened[0] & os.O_RDWR)
+        self.assertFalse(opened[0] & os.O_WRONLY)
+
+
+class GpsdSetupTest(unittest.TestCase):
+    def run_gpsd(self, lines, found=None):
+        sock = mock.MagicMock()
+        sock.__enter__.return_value = sock
+        sock.makefile.return_value = [json.dumps(x) + "\n" for x in lines]
+        g = Gps(None)
+        g._report.disconnect()
+        g._report.connect(lambda r: None)
+        with mock.patch("backend.gps.socket.create_connection", return_value=sock), \
+                mock.patch("backend.gps.find_receiver", return_value=found), redirect_stdout(io.StringIO()) as out:
+            g._read_gpsd()
+        sent = [c.args[0] for c in sock.sendall.call_args_list if c.args[0].startswith(b"?DEVICE")]
+        return sent, out.getvalue()
+
+    def test_a_ublox_behind_gpsd_gets_the_frames_through_gpsd_once(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox"}
+        sent, out = self.run_gpsd([{"class": "DEVICES", "devices": [dev]}, dev, dev])
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0].startswith(b"?DEVICE=") and sent[0].endswith(b";\n"))
+        cmd = json.loads(sent[0][len(b"?DEVICE="):-2])
+        self.assertEqual(cmd["path"], "/dev/ttyACM0")
+        self.assertEqual(bytes.fromhex(cmd["hexdata"]), gpsmod.setup_frames())
+        self.assertEqual([(c, i) for c, i, _ in frames(bytes.fromhex(cmd["hexdata"]))],
+                         [(6, 0x8A), (6, 0x24), (6, 8)])
+        self.assertIn("through gpsd (unverified", out)
+
+    def test_a_replugged_receiver_is_sent_the_frames_again(self):
+        up = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox", "activated": "2025-01-01T00:00:00Z"}
+        down = {"class": "DEVICE", "path": "/dev/ttyACM0", "activated": 0}
+        sent, _ = self.run_gpsd([up, up, down, up])
+        self.assertEqual(len(sent), 2)
+        sent, _ = self.run_gpsd([down])
+        self.assertEqual(sent, [])
+
+    def test_other_receivers_behind_gpsd_are_left_alone(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyUSB0", "driver": "NMEA0183"}
+        sent, _ = self.run_gpsd([{"class": "DEVICES", "devices": [dev]}], found="/dev/serial/by-id/usb-FTDI-if00")
+        self.assertEqual(sent, [])
+
+    def test_a_send_error_is_swallowed(self):
+        sock = mock.MagicMock()
+        sock.__enter__.return_value = sock
+        sock.sendall.side_effect = [None, OSError("closed")]
+        sock.makefile.return_value = [json.dumps({"class": "DEVICE", "path": "/dev/x", "driver": "u-blox"}) + "\n"]
+        g = Gps(None)
+        with mock.patch("backend.gps.socket.create_connection", return_value=sock), redirect_stdout(io.StringIO()) as out:
+            g._read_gpsd()
+        self.assertIn("couldn't set the receiver up through gpsd", out.getvalue())
+
+
+class BinaryJunkTest(unittest.TestCase):
+    """The receiver's UBX replies share the NMEA stream."""
+
+    def test_binary_lines_are_not_sentences(self):
+        junk = ubx_frame(5, 1, b"\x06\x8a") + bytes(range(256))
+        for line in junk.split(b"\n"):
+            self.assertIsNone(nmea_fields(line.decode("ascii", "replace")))
+
+    def test_the_direct_reader_survives_junk(self):
+        rmc = "GNRMC,120000.00,A,4736.37200,N,12219.92000,W,10.0,90.0,010125,,,A"
+        c = 0
+        for ch in rmc:
+            c ^= ord(ch)
+        text = f"${rmc}*{c:02X}\r\n".encode()
+        stream = ubx_frame(5, 1, b"\x06\x8a") + b"\r\n" + ubx_frame(5, 0, b"\x06\x24") + b"\xff\xfe\n" + text
+        r, w = os.pipe()
+        os.write(w, stream)
+        os.close(w)
+        g = Gps(None)
+        seen = []
+        g._report.disconnect()
+        g._report.connect(seen.append)
+        with mock.patch("backend.gps.termios.tcgetattr", return_value=[0] * 7), \
+                mock.patch("backend.gps.termios.tcsetattr"), mock.patch("backend.gps.os.open", return_value=r), \
+                mock.patch("backend.gps.configure_receiver"), redirect_stdout(io.StringIO()):
+            g._read_receiver("/dev/serial/by-id/usb-u-blox-if00")
+        fixes = [x for x in seen if "lat" in x]
+        self.assertEqual(len(fixes), 1)
+        self.assertAlmostEqual(fixes[0]["lat"], 47.606, places=2)

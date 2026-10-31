@@ -40,6 +40,9 @@ ROUTE = Path(__file__).with_name("demo_route.json")
 EARTH_M = 6371000.0
 MPH_TO_MS = 0.44704
 STALE_S = 10            # a real fix older than this no longer counts
+RATE_HZ = 5             # position reports per second the receiver is asked for
+DYNMODEL = 4            # u-blox "automotive": a truck on a road, not a walker
+SETUP_WAIT_S = 1.0      # how long to listen for the receiver's ACK/NAK replies
 
 
 def _metres(a, b):
@@ -63,6 +66,138 @@ def find_receiver():
         if found:
             return found[0]
     return None
+
+
+def ubx_frame(cls, msg_id, payload=b""):
+    """A u-blox binary (UBX) message: sync B5 62, class, id, little-endian
+    length, payload, then a Fletcher-8 checksum over class..payload."""
+    body = bytes([cls, msg_id]) + len(payload).to_bytes(2, "little") + bytes(payload)
+    a = b = 0
+    for byte in body:
+        a = (a + byte) & 0xFF
+        b = (b + a) & 0xFF
+    return b"\xb5\x62" + body + bytes([a, b])
+
+
+def ubx_valset_frame():
+    """M9N and newer: CFG-VALSET into RAM only (layer bit 0, so nothing is
+    saved to flash): automotive dynamic model, a measurement every
+    1000/RATE_HZ ms, one navigation solution per measurement."""
+    items = (0x20110021).to_bytes(4, "little") + bytes([DYNMODEL])                          # CFG-NAVSPG-DYNMODEL
+    items += (0x30210001).to_bytes(4, "little") + (1000 // RATE_HZ).to_bytes(2, "little")   # CFG-RATE-MEAS
+    items += (0x30210002).to_bytes(4, "little") + (1).to_bytes(2, "little")                 # CFG-RATE-NAV
+    return ubx_frame(0x06, 0x8A, bytes([0, 0x01, 0, 0]) + items)          # version 0, layers RAM
+
+
+def ubx_nav5_frame():
+    """u-blox 7 and 8: CFG-NAV5 with only the dynamic model set (mask bit 0)."""
+    payload = bytearray(36)
+    payload[0:2] = (0x0001).to_bytes(2, "little")
+    payload[2] = DYNMODEL
+    return ubx_frame(0x06, 0x24, bytes(payload))
+
+
+def ubx_rate_frame():
+    """u-blox 7 and 8: CFG-RATE, a measurement every 1000/RATE_HZ ms, one
+    navigation solution per measurement, GPS time (timeRef 1)."""
+    return ubx_frame(0x06, 0x08, (1000 // RATE_HZ).to_bytes(2, "little") + (1).to_bytes(2, "little")
+                     + (1).to_bytes(2, "little"))
+
+
+def ubx_replies(data):
+    """The (acked, class, id) of each UBX-ACK-ACK / ACK-NAK found in `data`
+    (the NMEA text around them is skipped)."""
+    out, i = [], 0
+    while True:
+        i = data.find(b"\xb5\x62\x05", i)
+        if i < 0 or i + 10 > len(data):
+            return out
+        if data[i + 3] in (0, 1) and data[i + 4:i + 6] == b"\x02\x00":
+            if data[i:i + 10] == ubx_frame(5, data[i + 3], data[i + 6:i + 8]):
+                out.append((data[i + 3] == 1, data[i + 6], data[i + 7]))
+                i += 10
+                continue
+        i += 1
+
+
+def is_ublox(path):
+    """Only a u-blox is sent UBX commands: anything else on the port is not ours to configure."""
+    return "u-blox" in os.path.basename(path).lower()
+
+
+SETUP_TRIES = 3         # asks before giving up on an answer from the receiver
+SETUP_RETRY_S = 3       # between those asks
+
+
+def setup_frames():
+    """Everything a u-blox is sent: the M9N's VALSET, then u-blox 7/8's NAV5 and RATE
+    (a receiver NAKs the generation it doesn't know)."""
+    return ubx_valset_frame() + ubx_nav5_frame() + ubx_rate_frame()
+
+
+def setup_summary(data):
+    """(ok, text) for what the receiver answered in `data`: ok when any
+    setup frame was acked. One NAK per generation is expected (VALSET on a
+    u-blox 7/8; NAV5 and RATE possibly on an M9)."""
+    names = {(0x06, 0x8A): "VALSET", (0x06, 0x24): "NAV5", (0x06, 0x08): "RATE"}
+    heard = [(names[(c, i)], ok) for ok, c, i in ubx_replies(data) if (c, i) in names]
+    text = ", ".join(f"{n} " + ("ack" if ok else "nak") for n, ok in heard)
+    if any(ok for _, ok in heard):
+        return True, f"GPS: set automotive mode and {RATE_HZ} Hz (acked: {text})"
+    return False, "GPS: receiver setup not acked (" + (text or "heard nothing") + ")"
+
+
+def configure_fd(fd):
+    """Send the setup frames on an open receiver port and listen for the
+    replies. Returns ok (see setup_summary). Never raises."""
+    try:
+        os.write(fd, setup_frames())
+        data, end = b"", time.monotonic() + SETUP_WAIT_S
+        while time.monotonic() < end:
+            if select.select([fd], [], [], 0.2)[0]:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                data += chunk
+    except (OSError, ValueError) as e:
+        print(f"GPS: couldn't set the receiver up ({e})", flush=True)
+        return False
+    ok, text = setup_summary(data)
+    print(text, flush=True)
+    return ok
+
+
+def configure_receiver(path, fd, tries=SETUP_TRIES, sleep=time.sleep):
+    """Put a u-blox receiver in automotive mode at RATE_HZ, in RAM only (it
+    is set again each time it's opened; nothing is saved to the receiver).
+    `fd` is the reader's own open port, so no one else is reading the
+    replies; this never opens the port itself. Asks up to `tries` times
+    until something is acked. Returns whether it was. Never raises; other
+    receivers are never written to."""
+    if not path or fd is None or not is_ublox(path):
+        return False
+    for n in range(tries):
+        if n:
+            sleep(SETUP_RETRY_S)
+        if configure_fd(fd):
+            return True
+    return False
+
+
+def gpsd_setup(device):
+    """The ?DEVICE command that sends the setup frames through gpsd (which
+    holds the port exclusively), for a gpsd DEVICE/DEVICES entry that is a
+    u-blox, else None. gpsd gives no ACK to check."""
+    if not isinstance(device, dict) or not isinstance(device.get("path"), str):
+        return None
+    # gpsd names the device by its driver once it has recognised it; before
+    # that, the by-id name of the same device tells.
+    found = find_receiver()
+    byid = bool(found) and is_ublox(found) and os.path.realpath(found) == os.path.realpath(device["path"])
+    if "u-blox" not in str(device.get("driver") or "").lower() and not byid:
+        return None
+    cmd = {"path": device["path"], "hexdata": setup_frames().hex()}
+    return ("?DEVICE=" + json.dumps(cmd) + ";\n").encode()
 
 
 def nmea_fields(line):
@@ -275,6 +410,7 @@ class Gps(QObject):
             s.settimeout(30)
             safe_emit(self, "_report", {"gpsd": True})
             talking = False
+            configured = set()            # device paths already sent the setup
             for line in s.makefile("r", encoding="utf-8", errors="replace"):
                 try:
                     msg = json.loads(line)
@@ -284,6 +420,21 @@ class Gps(QObject):
                 if not talking and (kind == "TPV" or kind == "DEVICES" and msg.get("devices")):
                     talking = True                # a receiver, not just gpsd on its own
                     safe_emit(self, "_report", {"receiver": True})
+                if kind in ("DEVICES", "DEVICE"):
+                    devices = msg.get("devices") if kind == "DEVICES" else [msg]
+                    for device in devices if isinstance(devices, list) else []:
+                        if isinstance(device, dict) and "activated" in device and not device["activated"]:
+                            configured.discard(device.get("path"))   # closed: send again when it's back
+                            continue
+                        cmd = gpsd_setup(device)
+                        if cmd and device["path"] not in configured:
+                            configured.add(device["path"])      # once per appearance
+                            try:
+                                s.sendall(cmd)
+                                print(f"GPS: sent automotive mode and {RATE_HZ} Hz to {device['path']} "
+                                      "through gpsd (unverified: gpsd gives no ack)", flush=True)
+                            except OSError as e:
+                                print(f"GPS: couldn't set the receiver up through gpsd ({e})", flush=True)
                 if kind == "SKY":
                     report = sky_report(msg)
                     if report:
@@ -303,7 +454,8 @@ class Gps(QObject):
     def _read_receiver(self, path):
         """Read the receiver's NMEA sentences straight from its serial port
         until it's unplugged or gpsd starts."""
-        fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        # Read-write only for a u-blox, which is sent its setup; the rest are only listened to.
+        fd = os.open(path, (os.O_RDWR if is_ublox(path) else os.O_RDONLY) | os.O_NOCTTY | os.O_NONBLOCK)
         try:
             a = termios.tcgetattr(fd)
             a[0] = a[1] = a[3] = 0
@@ -313,6 +465,7 @@ class Gps(QObject):
             safe_emit(self, "_report", {"gpsd": True})
             safe_emit(self, "_report", {"receiver": True})
             print(f"GPS: reading {os.path.basename(path)}", flush=True)
+            configure_receiver(path, fd)          # before the loop: no one else reads, so the acks are seen
             buf, in_view, checked = b"", {}, time.monotonic()
             found, used, logged = False, 0, time.monotonic()
             while True:

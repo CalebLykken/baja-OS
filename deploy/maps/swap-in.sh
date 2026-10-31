@@ -10,6 +10,8 @@
 #   fonts/ sprites/    swapped as folders: the old one is renamed aside, the
 #                      new one renamed in, then the old one deleted
 #   places.sqlite      the search index
+#   addresses.sqlite   street addresses for search (if it was rebuilt)
+#   controls.geojson   traffic lights and stop signs (if it was rebuilt)
 #   region.json        what the map covers
 #   basemap.pmtiles    last: the dashboard counts the map as installed once
 #                      this exists, so a first install is never seen half
@@ -39,5 +41,7 @@ swap_file() {
 swap_dir fonts
 swap_dir sprites
 swap_file places.sqlite
+swap_file addresses.sqlite
+swap_file controls.geojson
 swap_file region.json
 swap_file basemap.pmtiles

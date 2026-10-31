@@ -910,6 +910,30 @@ Item {
         }
 
         // ================================================================================
+        // The truck is off the offline map: the camera still follows, but
+        // there's nothing drawn. Under "Where to?" while browsing; beside the
+        // turn card or search panel otherwise (top centre is taken by the
+        // Home/Work keys when browsing).
+        Rectangle {
+            readonly property bool shown: page.map !== null && page.map.outside && page.mapReady
+            visible: shown
+            x: whereTo.visible ? 16 : page.panelWidth + 32
+            y: whereTo.visible ? whereTo.y + whereTo.height + 12 : 16
+            width: outsideText.implicitWidth + 44
+            height: 56
+            radius: height / 2
+            color: page.cBanner
+            MapLabel {
+                id: outsideText
+                anchors.centerIn: parent
+                text: "Outside the offline map"
+                color: "white"
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+        }
+
+        // ================================================================================
         // The speed limit and the truck's speed, on the right.
         Column {
             visible: page.mapReady && page.hasFix && !page.typing

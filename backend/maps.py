@@ -237,7 +237,9 @@ class MapService(QObject):
                 env.update(BBOX=bbox, REGION=self._info.get("region", "Seattle area"))
             steps = {"Getting the pmtiles": "Getting the download tool",
                      "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons",
-                     "Indexing places": "Indexing places for search"}
+                     "Indexing places": "Indexing places for search",
+                     "Indexing street": "Indexing street addresses",
+                     "Finding traffic": "Finding traffic lights and signs"}
             try:
                 proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

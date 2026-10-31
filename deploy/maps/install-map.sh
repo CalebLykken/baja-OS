@@ -12,6 +12,8 @@
 #   basemap.pmtiles   the map tiles
 #   region.json       what's in it (shown on the Maps page)
 #   places.sqlite     names and positions for the offline search
+#   addresses.sqlite, controls.geojson  street addresses and traffic signs
+#                     (rebuilt here too when install-routing.sh has run)
 #   fonts/, sprites/  label glyphs and icons
 set -eu
 
@@ -100,6 +102,24 @@ EOF
 echo "Indexing places for search..."
 APP=$(cd "$(dirname "$0")/../.." && pwd)
 (cd "$APP" && python3 -m backend.places build "$work")
+
+# Street addresses and traffic lights/signs come from the routing extract,
+# clipped to this map's box (region.json, just written). Only when the
+# routing tools and extract are there (install-routing.sh); a failure here
+# leaves the old ones in place and doesn't stop the map update. The builders
+# write a temp name and rename, so $work never holds half a file.
+ROUTING="${BAJA_ROUTING_DIR:-$HOME/.local/share/baja-os/valhalla}"
+pbf=$(ls -t "$ROUTING"/osm/*-latest.osm.pbf 2>/dev/null | head -n 1 || true)
+if [ -n "$pbf" ] && "$ROUTING/venv/bin/python" -c "import osmium" 2>/dev/null; then
+    echo "Indexing street addresses for search..."
+    "$ROUTING/venv/bin/python" "$APP/deploy/maps/build_addresses.py" "$pbf" "$work" \
+        || echo "Couldn't index street addresses; keeping the old ones"
+    echo "Finding traffic lights and stop signs for the map..."
+    "$ROUTING/venv/bin/python" "$APP/deploy/maps/build_controls.py" "$pbf" "$work" \
+        || echo "Couldn't find traffic lights and stop signs; keeping the old ones"
+else
+    echo "Skipping street addresses and signs: run install-routing.sh"
+fi
 
 # All built: now put it in place (swap-in.sh says how). Until here the live
 # map hasn't been touched, so a download that fails leaves it as it was.

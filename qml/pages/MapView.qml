@@ -19,6 +19,7 @@ WebEngineView {
     property real insetLeft: 0           // dashboard pixels covered on the left by panels
     property real bearing: 0
     property bool following: false
+    property bool outside: false          // the truck is off the offline map
     property string road: ""             // the road under the truck while following
 
     // Everything is drawn 1.7x (still sharp) so labels read from the
@@ -65,10 +66,12 @@ WebEngineView {
             if (m.kind === "ready") {
                 // The look may have been set before the page could hear it.
                 web.call("setMode('" + web.mode + "')")
+                web.outside = m.outside === true    // the page says if the truck is already out
                 web.sendInsets(); web.ready(m.ms); web.sendPosition(); web.syncRoute(true)
                 stableTimer.restart()       // up for a minute: the crashes are over
             }
             else if (m.kind === "follow") web.following = m.on
+            else if (m.kind === "outside") web.outside = m.on
             else if (m.kind === "road") web.road = m.name
             else if (m.kind === "touched") web.touched()
             else if (m.kind === "error") console.warn("map:", m.message)

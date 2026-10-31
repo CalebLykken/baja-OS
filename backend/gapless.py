@@ -100,7 +100,7 @@ class _Feed(QIODevice):
 class _Output(QObject):
     """The stream and its feed. Lives on the audio thread; reads the songs
     and fade state the engine shares under its lock."""
-    joined = pyqtSignal(int, int, int)  # a song took over: its index, generation, ms until heard
+    joined = pyqtSignal(int, int, int, int)  # a song took over: index, generation, rebases, ms until heard
     wantDecode = pyqtSignal()           # songs changed: the main thread decodes
     ran_out = pyqtSignal(int, int)      # nothing follows the last song: generation, ms until it's heard
 
@@ -190,7 +190,7 @@ class _Output(QObject):
                     if e._songs:
                         ahead = held + len(out)
                         nxt = e._songs[0]
-                        self.joined.emit(nxt.index, nxt.gen, int(ahead * 1000 / BYTES_PER_S))
+                        self.joined.emit(nxt.index, nxt.gen, e._epoch, int(ahead * 1000 / BYTES_PER_S))
                     self.wantDecode.emit()
                 else:
                     break                       # decoding hasn't caught up
@@ -289,13 +289,13 @@ class GaplessEngine(QObject):
     def set_volume(self, v):
         self._toVolume.emit(float(v))
 
-    def _joined(self, index, gen, ms):
+    def _joined(self, index, gen, epoch, ms):
         """Say song `index` is playing once the audio queued ahead of it has
         been heard, unless play_from has started something else by then:
-        the index would be into a list that's gone."""
+        the index would be into a list that's gone. `epoch` is as it was when
+        the index was read: a rebase can land before this gets to the main thread."""
         if DEBUG:
             print(f"audio: song {index} joins in {ms} ms", flush=True)
-        epoch = self._epoch
 
         def heard():
             if gen != self._gen:

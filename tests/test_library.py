@@ -250,7 +250,7 @@ class TapAlbumAsSongEndsTest(unittest.TestCase):
 
     def test_a_join_from_the_old_queue_is_dropped(self):
         engine = self.player._engine
-        engine._joined(1, engine._gen, 50)         # the long album's song 2 takes over...
+        engine._joined(1, engine._gen, engine._epoch, 50)         # the long album's song 2 takes over...
         self.player.playAlbum(self.short, 0)       # ...just as the short album is tapped
         spin(200)
         self.assertEqual(self.player.index, 0)
@@ -264,7 +264,7 @@ class TapAlbumAsSongEndsTest(unittest.TestCase):
 
     def test_a_join_for_the_current_queue_still_shows(self):
         engine = self.player._engine
-        engine._joined(6, engine._gen, 50)
+        engine._joined(6, engine._gen, engine._epoch, 50)
         spin(200)
         self.assertEqual(self.player.index, 6)
         self.assertEqual(self.player.title, "Long 7")
@@ -588,7 +588,7 @@ class SetTracksTest(unittest.TestCase):
             self.assertIsNotNone(engine._pending)
         started = []
         engine.trackStarted.connect(started.append)
-        engine._joined(1, engine._gen, 50)
+        engine._joined(1, engine._gen, engine._epoch, 50)
         player.set_tracks(self.tracks)                     # Blue arrives first: song 1 is now 4
         spin(200)
         self.assertEqual(started, [4])

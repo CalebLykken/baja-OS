@@ -349,6 +349,7 @@ class Voice(QObject):
         self._enabled = str(settings.get("voice", "false")) == "true"
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
+        self._owed = 0                  # releases held back while the output was stuck high
         self._piper = None
         self._ducker = Ducker()
         self._level = clamp_level(settings.get("voiceVolume", VOICE_LEVEL_DEFAULT))
@@ -394,23 +395,22 @@ class Voice(QObject):
             return False
         return True
 
-    def _target(self):
-        """How loud a line should be at the speaker, 0-1: the voice level
-        as a share of the output ceiling (Settings > Sound > Loudest volume)."""
+    def _ceiling(self):
+        """The output ceiling, 0.3-1 (Settings > Sound > Loudest volume). Read
+        on the main thread: the settings object isn't for the voice thread."""
         try:
-            ceiling = max(30, min(100, int(float(str(self._settings.get("maxVolume", 100)))))) / 100
+            return max(30, min(100, int(float(str(self._settings.get("maxVolume", 100)))))) / 100
         except (TypeError, ValueError):
-            ceiling = 1.0
-        return self._level / 100 * ceiling
+            return 1.0
 
-    def _plan_levels(self):
+    def _plan_levels(self, ceiling):
         """(stream volume for pw-play, output level to raise to or None, scale
         for ducking the music). The stream is only ever turned down, never
         amplified (Piper's WAVs are near full scale), so an output quieter
         than the target is raised instead. Without a reading of the output
         the stream just plays at the level. wpctl volumes are cubic in amplitude
         and pw-play's is linear, so the stream gets the ratio cubed."""
-        target = self._target()
+        target = self._level / 100 * ceiling
         sink = _volume(SINK)
         if sink is None:
             return (self._level / 100) ** 3, None, 1.0
@@ -426,7 +426,7 @@ class Voice(QObject):
             print(f"Voice: couldn't put back volumes from a last run ({e!r})", flush=True)
         while True:
             try:
-                text, queued_at = self._jobs.get(timeout=RETRY_S if self._ducker.pending else None)
+                text, queued_at, ceiling = self._jobs.get(timeout=RETRY_S if self._ducker.pending else None)
             except queue.Empty:
                 try:
                     self._ducker.retry()
@@ -440,7 +440,7 @@ class Voice(QObject):
                 out = str(self._tmp / f"baja-voice-{n % 4}.wav")
                 if not self._synthesize(text, out):
                     continue
-                gain, raise_to, scale = self._plan_levels()
+                gain, raise_to, scale = self._plan_levels(ceiling)
                 raised = None
                 try:
                     ducked = self._ducker.duck(scale)
@@ -453,32 +453,45 @@ class Voice(QObject):
                                    capture_output=True, timeout=30)
                 finally:
                     # The output first, while the music is still ducked, then the music.
-                    self._put_back_output(raised, scale)
-                    self._ducker.release()
+                    if self._put_back_output(raised, scale):
+                        self._ducker.release()
+                        while self._owed:           # lines whose output was stuck high
+                            self._owed -= 1
+                            self._ducker.release()
+                    else:
+                        # Still raised: the music stays ducked (blasting it would
+                        # be worse); the next line that puts the output back frees it.
+                        self._owed += 1
+                        print("Voice: couldn't lower the output; music stays down", flush=True)
             except Exception as e:                  # never end this thread
                 print(f"Voice: couldn't speak a line ({e!r}); on to the next", flush=True)
 
     def _put_back_output(self, raised, scale):
         """Lower the output again, unless something (the knob) moved it meanwhile.
         Only when the music is back to its own level does it matter: with another
-        line queued the next one raises it again."""
+        line queued the next one raises it again. False if it's still raised."""
         if raised is None:
-            return
+            return True
         now = _volume(SINK)
-        if now is None or abs(now - raised) <= DUCK_TOL:     # unreadable: put it back anyway
-            _set_volumes({SINK: raised * scale})
+        if now is not None and abs(now - raised) > DUCK_TOL:
+            return True                                      # moved by hand: leave it
+        for _ in range(2):                                   # unreadable: put it back anyway
+            if SINK in _set_volumes({SINK: raised * scale}):
+                return True
+        return False
 
     # ---- what QML and the router use -----------------------------------------------
     @pyqtSlot(str)
     def say(self, text):
         if self._available and self._enabled and text:
-            self._jobs.put((text, time.monotonic()))
+            self._jobs.put((text, time.monotonic(), self._ceiling()))
 
     @pyqtSlot()
     def test(self):
         """Say a sample line, even if spoken directions are off."""
         if self._available:
-            self._jobs.put(("In a quarter mile, turn right onto Broad Street.", time.monotonic()))
+            self._jobs.put(("In a quarter mile, turn right onto Broad Street.", time.monotonic(),
+                              self._ceiling()))
 
     @pyqtProperty(bool, constant=True)
     def available(self):

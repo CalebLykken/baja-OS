@@ -19,7 +19,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 try:
     from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSignal
-    from PyQt6.QtMultimedia import QAudio, QMediaDevices
+    from PyQt6.QtMultimedia import QAudio
     from backend import gapless, library
     from backend.library import LibraryPlayer, _number, group_albums, play_order, resume_point, scan, step
 except ImportError as e:
@@ -247,15 +247,23 @@ class RestoreTest(unittest.TestCase):
         self.assertGreaterEqual(self.player.position, 1)
 
     def test_play_after_a_paused_restore_goes_on_from_there(self):
-        if not QMediaDevices.defaultAudioOutput().isFormatSupported(gapless.audio_format()):
-            self.skipTest("the default audio output can't play the engine's format")
-        self.player.restore({"album": None, "path": self.tracks[0]["path"], "index": 0, "position": 2})
-        self.player.start()
-        spin(200)
-        self.player.togglePlay()
-        spin(1500)
-        # A second of the song's 3 was left: on into the next one.
-        self.assertEqual(self.player.title, "Blue 2")
+        # A FakeSink, pulled by hand: no audio device, no waiting on real time.
+        with mock.patch.object(gapless, "QAudioSink", FakeSink):
+            player = LibraryPlayer(self.tracks)
+            self.addCleanup(player._engine._shutdown)
+            player.restore({"album": None, "path": self.tracks[0]["path"], "index": 0, "position": 2})
+            player.start()
+            spin(300)
+            player.togglePlay()
+            engine = player._engine
+            engine._out.wantDecode.disconnect()      # see test_the_feed_stops_after_the_last_song...
+            for _ in range(40):                      # a second of the song's 3 was left
+                engine._out.pull(48000 * 4)
+                if player.title == "Blue 2":
+                    break
+                spin(50)
+            spin(300)
+            self.assertEqual(player.title, "Blue 2")
 
 
 class EmptyPlayerTest(unittest.TestCase):
@@ -455,6 +463,29 @@ class ModesTest(unittest.TestCase):
         self.assertFalse(self.player.playing)
         self.assertEqual(self.player.index, 0)                # back at the first, paused
         self.assertEqual(self.player.title, "Blue 1")
+
+    def test_the_album_play_key_starts_a_shuffle_anywhere_but_a_tapped_song_leads(self):
+        self.player.toggleShuffle()
+        with mock.patch.object(library.random, "randrange", return_value=2):
+            self.player.playAlbum(0, -1)
+        self.assertEqual((self.player.index, self.player._order[0]), (2, 2))
+        self.player.playAlbum(0, 0)
+        self.assertEqual((self.player.index, self.player._order[0]), (0, 0))
+        self.player.toggleShuffle()
+        self.player.playAlbum(0, -1)
+        self.assertEqual(self.player.index, 0)
+
+    def test_a_failed_song_followed_by_a_bad_one_stops_the_feed(self):
+        engine = self.engine
+        engine._after = lambda i, failed=False: (i + 1) % 2   # two songs, round and round
+        self.assertEqual(engine._next(0), 1)
+        engine._bad.add(0)
+        self.assertEqual(engine._next(0), 1)                  # 1 may still play
+        engine._bad.add(1)
+        self.assertIsNone(engine._next(0))                    # both failed: stop
+        engine._after = lambda i, failed=False: i             # a one-song queue
+        engine._bad = {0}
+        self.assertIsNone(engine._next(0))
 
     def test_after_the_end_a_shuffle_starts_from_another_song(self):
         self.player.toggleShuffle()

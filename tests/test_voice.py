@@ -399,6 +399,16 @@ class VoiceTest(unittest.TestCase):
         argv = self.played[0]
         return float(argv[argv.index("--volume") + 1])
 
+    def test_an_output_that_will_not_come_down_is_tried_again_and_keeps_the_music_ducked(self):
+        v = self.start("ok")
+        with mock.patch.object(voice, "_volume", return_value=None), \
+                mock.patch.object(voice, "_set_volumes", side_effect=[set(), {self.SINK}]) as sets:
+            self.assertTrue(v._put_back_output(0.8, 0.5))          # the second try took
+            self.assertEqual(sets.call_count, 2)
+        with mock.patch.object(voice, "_volume", return_value=None), \
+                mock.patch.object(voice, "_set_volumes", return_value=set()):
+            self.assertFalse(v._put_back_output(0.8, 0.5))         # run() then doesn't release
+
     def sink_sets(self):
         return [v for n, v in self.sets if n == self.SINK]
 

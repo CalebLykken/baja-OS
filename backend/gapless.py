@@ -120,13 +120,6 @@ class _Output(QObject):
         if self.sink is not None:
             self.sink.setVolume(v)
 
-    @pyqtSlot()
-    def stop(self):
-        if self.sink is not None:
-            self.sink.stop()
-            self.sink.deleteLater()
-            self.sink = None
-
     def latency(self):
         return max(0, self.sink.bufferSize() - self.sink.bytesFree()) if self.sink else 0
 
@@ -215,7 +208,6 @@ class GaplessEngine(QObject):
     ended = pyqtSignal()                # the last song has been heard and nothing follows
     _toDevice = pyqtSignal(object)
     _toVolume = pyqtSignal(float)
-    _toStop = pyqtSignal()
 
     def __init__(self, path_of, count, device, parent=None, after=None):
         """`after(i, failed)` is the song to play after song i, or None to stop
@@ -246,9 +238,9 @@ class GaplessEngine(QObject):
         self._out.ran_out.connect(self._ran_out)
         self._toDevice.connect(self._out.make_sink)
         self._toVolume.connect(self._out.set_volume)
-        self._toStop.connect(self._out.stop)
-        # The stream and its feed belong to the audio thread: delete them there
-        # as it ends, not from whichever thread happens to collect them later.
+        # The stream and its feed belong to the audio thread: deleting _out there
+        # as it ends takes its sink and feed with it, not whichever thread
+        # happens to collect them later.
         self._thread.finished.connect(self._out.deleteLater)
         self._thread.start(QThread.Priority.TimeCriticalPriority)
         self._toDevice.emit(device)
@@ -257,10 +249,9 @@ class GaplessEngine(QObject):
             app.aboutToQuit.connect(self._shutdown)
 
     def _shutdown(self):
-        """Stop the stream, the audio thread and any decoder still running.
+        """End the audio thread (which deletes the stream) and stop any decoder still running.
         Safe to call twice (a test, then the app quitting)."""
         self._closed = True
-        self._toStop.emit()
         self._thread.quit()
         self._thread.wait(1000)
         with self._lock:
@@ -282,7 +273,10 @@ class GaplessEngine(QObject):
         QTimer.singleShot(ms, lambda: gen == self._gen and self.trackStarted.emit(index))
 
     def _next(self, index):
-        return self._after(index, index in self._bad)
+        nxt = self._after(index, index in self._bad)
+        # After a song that won't decode, one that already failed means a loop
+        # of failures (a one-song queue, or nothing readable): stop instead.
+        return None if index in self._bad and nxt in self._bad else nxt
 
     def _ran_out(self, gen, ms):
         """The list ended: once its last song has been heard, stop, paused."""

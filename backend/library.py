@@ -275,7 +275,9 @@ class LibraryPlayer(QObject):
         """The song that follows `index` by itself (also called on the audio
         thread, so it only reads): the same one on repeat one (unless it
         won't play: then the next, round), the next in order, and at the end
-        the first again on repeat all, else None."""
+        the first again on repeat all, else None. `failed`: song `index` won't
+        play, so never itself; the engine stops (None) once the song after it
+        is a bad one too."""
         if self._repeat == "one" and 0 <= index < len(self._queue):
             return step(self._order, index, 1, True) if failed else index
         return step(self._order, index, 1, self._repeat == "all")
@@ -455,13 +457,16 @@ class LibraryPlayer(QObject):
 
     @pyqtSlot(int, int)
     def playAlbum(self, album, start=0):
-        """Play an album from one of its songs; it becomes the queue."""
+        """Play an album from one of its songs; it becomes the queue. A negative
+        `start` is the album's own Play key: song 1, or any song when shuffling."""
         if not 0 <= album < len(self._albums):
             return
         self._queue = [self._all[i] for i in self._albums[album]["tracks"]]
         self._album = album
         self._reorder()
         self.queueChanged.emit()
+        if start < 0:
+            start = random.randrange(len(self._queue)) if self._shuffle else 0
         self.playIndex(start)
 
     @pyqtSlot()

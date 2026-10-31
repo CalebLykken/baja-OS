@@ -342,7 +342,7 @@ Item {
                             text: "Play"
                             icon: "play"
                             primary: true
-                            onClicked: media.playAlbum(page.openAlbum, 0)
+                            onClicked: media.playAlbum(page.openAlbum, -1)
                         }
                     }
                     ListView {

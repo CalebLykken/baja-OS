@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Baja carputer dashboard: entry point.
 
-Runs the QML interface with mock vehicle and media data so the UI can be
-built and tested before real OBD-II and audio hardware is wired in.
+Runs the QML interface on the real hardware (OBD-II, GPS, Bluetooth and
+Spotify audio, local music). On a Mac or bench Pi with nothing attached it
+falls back to a simulated drive and a demo queue; --demo / --no-demo force it.
 
     python3 main.py               # 1280x800 window (Mac / desktop)
     python3 main.py --fullscreen  # full screen (the Pi in the car)

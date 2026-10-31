@@ -3,8 +3,9 @@
 `MediaPlayer` fakes a playlist so the music screens have something to show
 (on a Mac; the truck only shows what's real). Given an empty queue it's an
 empty player instead: nothing playing, and every key does nothing.
-Later this becomes a real player (MPD, a Bluetooth/AirPlay sink, or Spotify
-audio metadata), and `volumeUp`/`volumeDown` get wired to the dash knob.
+The real players are backend/library.py (local files), bluetooth.py (phone)
+and spotify.py; this is the stand-in the UI shows when none is wired.
+`volumeUp`/`volumeDown` are what the dash knob drives.
 """
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot

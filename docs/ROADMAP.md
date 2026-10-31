@@ -239,8 +239,7 @@ dashboard alone, including a missed turn, in airplane mode.
 Maps, Apple Maps and Waze, NHTSA's glance guidelines and ISO 15008:**
 full-screen map beside the rail with the clock in the rail; light by day
 and dark at night for the whole dashboard (by the sun, or Settings); a
-simplified warm-neutral map palette with a blue route (the truck stays in the
-Trail colours); Overpass (highway-sign lettering) for the map labels and controls,
+simplified warm-neutral map palette with a blue route; Overpass (highway-sign lettering) for the map labels and controls,
 with glyphs made by tools/make_glyphs.py; type and keys sized for 70-90 cm;
 search panel with Home, recents and categories; street-address search
 (910,000 addresses from OpenStreetMap); route preview with Go at the bottom;

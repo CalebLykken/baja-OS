@@ -43,7 +43,7 @@ import urllib.request
 from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
-from backend import artcache, safe_emit
+from backend import artcache, retry, safe_emit
 
 PHONE_RECONNECT_GRACE_S = 10
 # Soft pause and play, like a car stereo: music cut off mid-wave clicks.
@@ -108,8 +108,10 @@ def cached_art(url):
         return url
     out, hit = artcache.lookup(artcache.digest(url) + ".img")
     if not hit:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            data = r.read()
+        def get():
+            with urllib.request.urlopen(url, timeout=10) as r:
+                return r.read()
+        data = retry.call(get)        # back-off on timeouts, 429 and 5xx; callers are worker threads
         with artcache.writing(out) as tmp:
             tmp.write_bytes(data)
     return QUrl.fromLocalFile(str(out)).toString()

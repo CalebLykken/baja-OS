@@ -106,6 +106,12 @@ class SoloistEventsTest(unittest.TestCase):
         self.send(type="volume_changed", volume=30)
         self.assertEqual(self.sp.volume, 30)
 
+    def test_a_soloist_error_shows_a_short_message_until_playback_moves(self):
+        self.send(type="error", message="429 too many requests")
+        self.assertEqual(self.sp.error, "Spotify isn't answering right now")
+        self.send(type="playback_state", status="playing")
+        self.assertEqual(self.sp.error, "")
+
 
 if __name__ == "__main__":
     unittest.main()

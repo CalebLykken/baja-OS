@@ -29,7 +29,7 @@ ASSETS_SHA256=57e40e8c512bd8042d0a3a251f19d0d1c8523ad963c666c3c6643bada4dc92d0
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 fetch() {  # url, file, expected sha256
-    curl -fsSL --retry 3 -o "$2" "$1"
+    curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 1000 --speed-time 60 -o "$2" "$1"
     got=$(sha256 "$2")
     if [ "$got" != "$3" ]; then
         echo "Checksum mismatch for $1 (got $got)" >&2
@@ -74,7 +74,7 @@ case "$asset" in
 esac
 
 # ---- the extract: only the tiles inside BBOX are downloaded ----
-build=$(curl -fsSL --retry 3 https://build-metadata.protomaps.dev/builds.json \
+build=$(curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 1000 --speed-time 60 https://build-metadata.protomaps.dev/builds.json \
         | python3 -c 'import json, sys; print(json.load(sys.stdin)[-1]["key"])')
 echo "Cutting \"$REGION\" ($BBOX, zoom 0-$MAXZOOM) from build $build..."
 "$work/pmtiles" extract "https://build.protomaps.com/$build" "$work/basemap.pmtiles" \

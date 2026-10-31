@@ -48,12 +48,12 @@ name=$(basename "$EXTRACT")
 pbf="$DIR/osm/$name-latest.osm.pbf"
 url="https://download.geofabrik.de/$EXTRACT-latest.osm.pbf"
 md5of() { if command -v md5sum >/dev/null; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi; }
-want=$(curl -fsSL --retry 3 "$url.md5" | cut -d' ' -f1)
+want=$(curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 1000 --speed-time 60 "$url.md5" | cut -d' ' -f1)
 if [ -f "$pbf" ] && [ "$(md5of "$pbf")" = "$want" ]; then
     echo "Already have the latest $name roads"
 else
     echo "Downloading $name roads from Geofabrik..."
-    curl -fsSL --retry 3 -o "$pbf.part" "$url"
+    curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 1000 --speed-time 60 -o "$pbf.part" "$url"
     if [ "$(md5of "$pbf.part")" != "$want" ]; then
         echo "Checksum mismatch for $url" >&2
         exit 1

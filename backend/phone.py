@@ -20,6 +20,7 @@ page, which shows it with a Go key. Nothing starts driving by itself.
 
 import hmac
 import html
+import http.client
 import ipaddress
 import json
 import os
@@ -41,7 +42,7 @@ from PyQt6.QtGui import QColor, QImage, QPainter
 
 from backend import safe_emit
 
-from backend import places
+from backend import places, retry
 from backend.vendor.qrcodegen import QrCode
 
 PORT = 8780
@@ -110,9 +111,14 @@ def _latlon(value):
     return None
 
 
+class LinkUnreachable(Exception):
+    """A maps short link couldn't be opened (offline, rate limited, server down)."""
+
+
 def expand_short_link(url):
     """One request, no redirects: the Location header of a maps short link
-    has the place in it. Only for known map hosts."""
+    has the place in it. Only for known map hosts. Raises LinkUnreachable
+    when the host can't be reached after a retry."""
     host = urllib.parse.urlsplit(url).hostname or ""
     if not any(host == h or host.endswith("." + h) for h in SHORT_LINK_HOSTS):
         return url
@@ -123,19 +129,27 @@ def expand_short_link(url):
 
     opener = urllib.request.build_opener(NoRedirect)
     req = urllib.request.Request(url, headers={"User-Agent": "BajaOS/1"})
+
+    def fetch():
+        try:
+            opener.open(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            if retry.transient(e):
+                raise                      # retry.call backs off and tries again
+            return e.headers.get("Location")
+        return None
+
     try:
-        opener.open(req, timeout=5)
-    except urllib.error.HTTPError as e:
-        location = e.headers.get("Location")
-        if location:
-            parts = urllib.parse.urlsplit(location)
-            if parts.hostname and parts.hostname.startswith("consent.google."):
-                cont = urllib.parse.parse_qs(parts.query).get("continue")
-                if cont:
-                    return cont[0]
-            return location
-    except (OSError, ValueError):
-        pass
+        location = retry.call(fetch, tries=2, cap=4)
+    except (OSError, ValueError, http.client.HTTPException):
+        raise LinkUnreachable(url)
+    if location:
+        parts = urllib.parse.urlsplit(location)
+        if parts.hostname and parts.hostname.startswith("consent.google."):
+            cont = urllib.parse.parse_qs(parts.query).get("continue")
+            if cont:
+                return cont[0]
+        return location
     return url
 
 
@@ -201,8 +215,13 @@ def resolve(payload, maps_dir):
         raise ValueError("That's a list, not a place")
 
     ll, label = None, ""
+    unreachable = False
     for url in dict.fromkeys(urls):                  # each once, in order
-        u_ll, u_label = parse_map_url(expand_short_link(url))
+        try:
+            expanded = expand_short_link(url)
+        except LinkUnreachable:
+            unreachable, expanded = True, url
+        u_ll, u_label = parse_map_url(expanded)
         ll, label = ll or u_ll, label or u_label
     if not ll and payload.get("lat") not in (None, "") and payload.get("lon") not in (None, ""):
         try:
@@ -228,6 +247,8 @@ def resolve(payload, maps_dir):
             hit = _search_offline(line, maps_dir)
             if hit:
                 return hit
+        if unreachable:
+            raise ValueError("Couldn't open that link (no internet?). Send the address instead")
         raise ValueError("Couldn't find that in the offline map")
 
     lat, lon = ll

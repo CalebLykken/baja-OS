@@ -203,6 +203,8 @@ def gpsd_setup(device):
 def nmea_fields(line):
     """A checked NMEA sentence's fields ('$GNRMC,...*hh' -> ['GNRMC', ...]), or None."""
     line = line.strip()
+    # UBX replies end without a newline, so they can sit in front of the sentence on its line.
+    line = line[line.rfind("$"):] if "$" in line else line
     if not line.startswith("$") or "*" not in line:
         return None
     body, _, check = line[1:].partition("*")

@@ -85,8 +85,10 @@ setconf PairableTimeout 120
 setconf AutoEnable true
 systemctl restart bluetooth
 bluetoothctl system-alias "Baja OS" >/dev/null 2>&1 || true
-cp "$HERE/bluetooth/baja-bt-agent.service" /etc/systemd/system/
-systemctl enable --now baja-bt-agent.service
+# The dashboard is the pairing agent now; a leftover bt-agent would register too and skip its prompt.
+systemctl disable --now baja-bt-agent.service 2>/dev/null || true
+rm -f /etc/systemd/system/baja-bt-agent.service
+systemctl daemon-reload
 WP="/home/$USER_NAME/.config/wireplumber/wireplumber.conf.d"
 install -d -o "$USER_NAME" -g "$USER_NAME" "/home/$USER_NAME/.config/wireplumber" "$WP"
 install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$HERE/bluetooth/80-baja-bluetooth.conf" "$WP/"

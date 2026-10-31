@@ -152,7 +152,7 @@ def main():
     obd.lost.connect(vehicle.lost_obd)
     obd.voltage.connect(vehicle.apply_voltage)
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
-    bluetooth = BluetoothAudio()
+    bluetooth = BluetoothAudio(settings=settings)
     spotify = SpotifyPlayer()
     # Spotify albums and playlists played here, kept between runs.
     try:

@@ -233,6 +233,78 @@ Window {
         opacity: (1 - display.brightness / 100) * 0.85
     }
 
+    // A phone wants to pair (backend/btagent.py): nothing pairs without a
+    // tap here. Phones with no screen have no code to compare.
+    Rectangle {
+        id: pairPrompt
+        readonly property bool asking: typeof bluetooth !== "undefined" && bluetooth.pairPending
+        readonly property string name: asking ? bluetooth.pairName : ""
+        readonly property string address: asking ? bluetooth.pairAddress : ""
+        readonly property string code: asking ? bluetooth.pairCode : ""
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.6)
+        opacity: asking ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+
+        Card {
+            anchors.centerIn: parent
+            width: 720
+            height: pairColumn.implicitHeight + 64
+            ColumnLayout {
+                id: pairColumn
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
+                spacing: 12
+                Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText      // the name comes from the other device
+                    text: "Pair with " + pairPrompt.name + "?"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                    text: pairPrompt.address
+                }
+                Label {
+                    visible: pairPrompt.code !== ""
+                    Layout.topMargin: 8
+                    numeric: true
+                    text: pairPrompt.code
+                    font.pixelSize: Theme.fontHuge
+                    font.weight: Theme.numWeight
+                    font.letterSpacing: 6
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
+                                                 : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
+                }
+                RowLayout {
+                    Layout.topMargin: 12
+                    spacing: 14
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "Pair"; primary: true
+                        onClicked: bluetooth.acceptPairing()
+                    }
+                    TextButton {
+                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                        text: "Cancel"
+                        onClicked: bluetooth.cancelPairing()
+                    }
+                }
+            }
+        }
+    }
+
     // The truck was turned off: the Pi shuts down at the end of the
     // countdown (backend/ignition.py) unless "Keep on" is tapped. If the
     // shutdown fails, it says so instead, until OK.

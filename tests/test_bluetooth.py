@@ -7,7 +7,9 @@ BlueZ is faked, and the worker thread runs right where it's started.
 
 import json
 import subprocess
+import time
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
@@ -42,6 +44,9 @@ def phone(alias, paired=True, trusted=True):
             "Alias": v("s", alias), "Paired": v("b", paired), "Trusted": v("b", trusted),
             "Connected": v("b", True)}},
     }
+
+
+AA = "/org/bluez/hci0/dev_AA"
 
 
 def busctl_says(objects):
@@ -170,6 +175,8 @@ class PollFailureTest(unittest.TestCase):
             if args[0] == "set-property":
                 raise TypeError("trust")
             return busctl_says(phone("Pixel", trusted=False))
+        self.bt._accepted_on_screen(AA)
+        self.bt._bluez._timer.stop()
         with mock.patch("backend.bluetooth._busctl", side_effect=busctl):
             for _ in range(2):
                 self.bt._tick()
@@ -193,21 +200,22 @@ class ParseObjectsTest(unittest.TestCase):
 
     def test_no_adapter_and_nothing_else(self):
         state = parse_objects({})
-        self.assertEqual((state["adapter"], state["device"], state["paired"], state["to_trust"]), (None, None, [], []))
+        self.assertEqual((state["adapter"], state["device"], state["paired"], state["known"]), (None, None, [], {}))
         self.assertEqual((state["transport"], state["volume"], state["discoverable"]), (None, None, False))
 
     def test_a_phone_without_a_player_still_names_the_device(self):
         state = parse_objects(phone("Driver"))
         self.assertEqual((state["adapter"], state["device"], state["player"]), ("/org/bluez/hci0", "Driver", None))
-        self.assertEqual(state["paired"], [{"path": "/org/bluez/hci0/dev_AA", "name": "Driver", "connected": True}])
+        self.assertEqual(state["paired"], [{"path": AA, "name": "Driver", "connected": True,
+                                            "address": "AA", "trusted": True}])
 
-    def test_a_paired_phone_not_yet_trusted_is_to_be_trusted(self):
-        self.assertEqual(parse_objects(phone("Driver", trusted=False))["to_trust"], ["/org/bluez/hci0/dev_AA"])
-        self.assertEqual(parse_objects(phone("Driver", trusted=True))["to_trust"], [])
+    def test_a_paired_phone_not_yet_trusted_stays_listed_as_untrusted(self):
+        self.assertFalse(parse_objects(phone("Driver", trusted=False))["paired"][0]["trusted"])
 
     def test_an_unpaired_phone_is_not_listed(self):
         state = parse_objects(phone("Stranger", paired=False))
-        self.assertEqual((state["paired"], state["to_trust"]), ([], []))
+        self.assertEqual(state["paired"], [])
+        self.assertEqual(state["known"][AA]["name"], "Stranger")      # for the prompt
 
     def test_connected_phones_first_then_by_name(self):
         objects = two_phones("paused", "paused")
@@ -393,6 +401,252 @@ class SignalsTest(unittest.TestCase):
         self.assertTrue(self.bt._volume_settle.isActive())
         self.assertGreater(self.bt._volume_settle.interval(), 1500)
         self.bt._volume_settle.stop()
+
+
+class FakeSettings:
+    def __init__(self, **values):
+        self.values = values
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set(self, key, value):
+        self.values[key] = value
+
+
+class PairingTest(unittest.TestCase):
+    """Only what's accepted on screen gets trusted. The agent's BlueZ side is
+    tests/test_btagent.py; here BlueZ is the faked busctl, as in the polls above."""
+
+    def setUp(self):
+        self.settings = FakeSettings()
+        self.bt = BluetoothAudio(settings=self.settings)
+        self.objects = phone("Pixel", trusted=False)
+        INLINE.start()
+        self.busctl = mock.patch("backend.bluetooth._busctl",
+                                 side_effect=lambda *a, **k: busctl_says(self.objects)).start()
+        mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def poll(self):
+        self.bt._refresh()
+
+    def sets(self):
+        return [c.args for c in self.busctl.call_args_list if c.args[0] == "set-property"]
+
+    def accepted(self, path=AA, code=123456):
+        """The window opens, the device asks, and Pair gets tapped."""
+        self.bt._pairing_until = time.monotonic() + 60
+        self.reply = mock.Mock()
+        self.reply.accept.return_value = True
+        self.bt._agent.confirm(path, code, self.reply)
+        self.bt.acceptPairing()
+        self.bt._bluez._timer.stop()
+
+    def test_a_paired_device_nobody_accepted_is_left_alone_and_flagged(self):
+        self.poll()
+        self.assertEqual(self.sets(), [])
+        entry = self.bt.paired[0]
+        self.assertEqual((entry["name"], entry["trusted"], entry["pairedOn"]), ("Pixel", False, ""))
+
+    def test_a_trusted_phone_is_untouched_listed_and_connectable(self):
+        self.objects = phone("Pixel", trusted=True)
+        self.poll()
+        self.assertEqual(self.sets(), [])
+        self.assertTrue(self.bt.paired[0]["trusted"])
+        self.assertEqual(self.bt.deviceName, "Pixel")
+        self.bt.connectDevice(AA)
+        self.assertEqual(self.busctl.call_args.args[-1], "Connect")
+
+    def test_an_accepted_device_is_trusted_and_dated_once(self):
+        self.accepted()
+        for _ in range(3):
+            self.poll()
+            self.objects = phone("Pixel", trusted=True)
+        self.assertEqual(self.sets(), [("set-property", "org.bluez", AA, "org.bluez.Device1", "Trusted", "b", "true")])
+        entry = self.bt.paired[0]
+        self.assertTrue(entry["trusted"])
+        today = date.today()
+        self.assertEqual(entry["pairedOn"], f"{today:%b} {today.day}, {today.year}")
+        self.assertEqual(self.bt._accepted, {})
+
+    def test_it_waits_for_the_pairing_to_finish(self):
+        self.objects = phone("Pixel", paired=False, trusted=False)
+        self.accepted()
+        self.poll()
+        self.assertEqual(self.sets(), [])
+        self.objects = phone("Pixel", trusted=False)
+        self.poll()
+        self.assertEqual(len(self.sets()), 1)
+
+    def test_a_cancelled_device_is_not_trusted(self):
+        self.bt._pairing_until = time.monotonic() + 60
+        self.bt._agent.confirm(AA, 1, mock.Mock())
+        self.bt.cancelPairing()
+        self.poll()
+        self.assertEqual(self.sets(), [])
+
+    def test_a_refused_trust_is_tried_again_and_not_dated(self):
+        self.accepted()
+        def refused(*args, **kw):
+            code = 1 if args[0] == "set-property" else 0
+            return subprocess.CompletedProcess(["busctl"], code, busctl_says(self.objects).stdout, "")
+        with mock.patch("backend.bluetooth._busctl", side_effect=refused):
+            self.poll()
+        self.assertEqual(self.bt.paired[0]["pairedOn"], "")
+        self.assertFalse(self.bt.paired[0]["trusted"])
+        self.poll()
+        self.assertTrue(self.bt.paired[0]["trusted"])
+
+    def test_an_accepted_device_gets_its_services_before_the_poll_trusts_it(self):
+        self.accepted()
+        reply = mock.Mock()
+        self.bt._agent.authorize_service(AA, "a2dp", reply)
+        reply.accept.assert_called_once()
+
+    def test_a_stranger_gets_no_services(self):
+        self.poll()
+        reply = mock.Mock()
+        self.bt._agent.authorize_service(AA, "a2dp", reply)
+        reply.reject.assert_called_once()
+
+    def test_an_acceptance_runs_out(self):
+        self.accepted()
+        self.bt._accepted[AA] = 1.0                   # long past
+        self.bt._tick()
+        self.assertEqual(self.bt._accepted, {})
+        self.assertEqual(self.sets(), [])
+
+    def test_it_polls_fast_while_a_device_waits_for_trust(self):
+        self.accepted()
+        with mock.patch.object(self.bt._bluez, "live", return_value=True):
+            self.poll()
+            self.assertEqual(self.bt._ticks_left, 1)
+            self.poll()                                 # that one trusted it
+            self.assertEqual(self.bt._ticks_left, SAFETY_TICKS)
+
+    def test_requests_only_count_while_the_window_is_open(self):
+        reply = mock.Mock()
+        self.bt._agent.confirm(AA, 1, reply)
+        reply.reject.assert_called_once()
+        self.assertFalse(self.bt.pairPending)
+        self.bt._pairing_until = time.monotonic() + 60
+        self.bt._agent.confirm(AA, 42, mock.Mock())
+        self.assertTrue(self.bt.pairPending)
+        self.assertEqual(self.bt.pairCode, "000042")
+        self.bt.cancelPairing()
+
+    def test_the_prompt_names_the_device_once_a_poll_knows_it(self):
+        self.objects = {"/org/bluez/hci0": self.objects["/org/bluez/hci0"]}
+        self.poll()
+        self.bt._pairing_until = time.monotonic() + 60
+        self.bt._agent.confirm("/org/bluez/hci0/dev_AA_BB", 1, mock.Mock())
+        self.bt._bluez._timer.stop()
+        self.assertEqual((self.bt.pairName, self.bt.pairAddress), ("AA:BB", "AA:BB"))
+        changes = mock.Mock()
+        self.bt.changed.connect(changes)
+        self.objects["/org/bluez/hci0/dev_AA_BB"] = {"org.bluez.Device1": {"Alias": "Pixel", "Paired": False}}
+        self.poll()
+        self.assertEqual(self.bt.pairName, "Pixel")
+        changes.assert_called()
+        self.bt.cancelPairing()
+
+    def test_stop_pairing_cancels_the_prompt(self):
+        self.poll()
+        self.bt._pairing_until = time.monotonic() + 60
+        reply = mock.Mock()
+        self.bt._agent.confirm(AA, 1, reply)
+        self.bt.setPairing(False)
+        self.assertFalse(self.bt.pairPending)
+        reply.reject.assert_called_once()
+
+    def test_the_window_running_out_cancels_the_prompt(self):
+        self.bt._pairing_until = time.monotonic() + 60
+        reply = mock.Mock()
+        self.bt._agent.confirm(AA, 1, reply)
+        self.bt._pairing_until = 1.0
+        self.bt._tick()
+        self.assertFalse(self.bt.pairPending)
+        reply.reject.assert_called_once()
+
+    def test_dates_survive_a_restart(self):
+        self.accepted()
+        self.poll()
+        stored = json.loads(self.settings.values["btPairedDates"])
+        self.assertEqual(stored, {"AA": date.today().isoformat()})
+        again = BluetoothAudio(settings=self.settings)
+        self.objects = phone("Pixel", trusted=True)
+        again._refresh()
+        self.assertNotEqual(again.paired[0]["pairedOn"], "")
+
+    def test_a_date_is_shown_as_a_date_and_junk_as_none(self):
+        self.settings.values["btPairedDates"] = json.dumps({"AA": "2026-10-03"})
+        bt = BluetoothAudio(settings=self.settings)
+        bt._refresh()
+        self.assertEqual(bt.paired[0]["pairedOn"], "Oct 3, 2026")
+        self.settings.values["btPairedDates"] = json.dumps({"AA": "soon"})
+        bt = BluetoothAudio(settings=self.settings)
+        bt._refresh()
+        self.assertEqual(bt.paired[0]["pairedOn"], "")
+
+    def test_broken_stored_dates_are_no_dates(self):
+        for stored in ("{oops", "[]"):
+            self.assertEqual(BluetoothAudio(settings=FakeSettings(btPairedDates=stored))._dates, {})
+
+    def test_without_settings_dates_stay_in_memory(self):
+        bt = BluetoothAudio()
+        bt._pairing_until = time.monotonic() + 60
+        reply = mock.Mock()
+        reply.accept.return_value = True
+        bt._agent.confirm(AA, 1, reply)
+        bt.acceptPairing()
+        bt._bluez._timer.stop()
+        bt._refresh()
+        self.assertNotEqual(bt.paired[0]["pairedOn"], "")
+
+    def test_a_forgotten_devices_date_goes(self):
+        self.accepted()
+        self.poll()
+        self.objects = {"/org/bluez/hci0": self.objects["/org/bluez/hci0"]}
+        self.poll()
+        self.assertEqual(json.loads(self.settings.values["btPairedDates"]), {})
+
+    def test_bluez_being_down_keeps_the_dates(self):
+        self.accepted()
+        self.poll()
+        self.objects = {}
+        self.poll()
+        self.assertEqual(list(self.bt._dates), ["AA"])
+
+
+class AgentReportTest(unittest.TestCase):
+    """What Settings is told about the agent."""
+
+    def setUp(self):
+        mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_where_theres_no_bluetooth_nothing_nags(self):
+        bt = BluetoothAudio()
+        bt._available = False
+        bt.start()
+        self.assertEqual((bt.agentOk, bt.agentProblem), (False, ""))
+
+    def test_on_a_pi_with_no_bus_it_says_so(self):
+        bt = BluetoothAudio()
+        bt._available = True
+        self.addCleanup(bt._timer.stop)
+        with on_bus(None):
+            bt.start()
+        self.assertFalse(bt.agentOk)
+        self.assertIn("system bus", bt.agentProblem)
+
+    def test_settings_hears_when_it_changes(self):
+        bt = BluetoothAudio()
+        changes = mock.Mock()
+        bt.changed.connect(changes)
+        bt._agent.lost("gone")
+        changes.assert_called_once()
 
 
 class PhoneSeekTest(unittest.TestCase):

@@ -501,6 +501,21 @@ Item {
         id: bluetoothSection
         Scroller {
             Section {
+                visible: !bluetooth.agentOk && bluetooth.agentProblem !== ""
+                Layout.fillWidth: true
+                heading: "Pairing can't be confirmed on this screen"
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.warn
+                    font.pixelSize: Theme.fontBody
+                    text: "A new phone may not pair, or may pair without asking and then be refused. Don't rely on Pair phone until this clears. Phones already paired still connect."
+                }
+                Note { text: bluetooth.agentProblem }
+                Note { text: "It keeps trying by itself. If this stays, restart Baja OS and check bluetooth.service on the Pi." }
+            }
+
+            Section {
                 id: btCard
                 Layout.fillWidth: true
                 heading: "Phone"
@@ -536,7 +551,7 @@ Item {
                     }
                 }
                 Note {
-                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”. Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
+                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”, then tap Pair on this screen when the code matches the phone's (some phones show none). Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
                 }
             }
 
@@ -559,13 +574,24 @@ Item {
                             Label {
                                 width: parent.width
                                 elide: Text.ElideRight
+                                textFormat: Text.PlainText
                                 text: modelData.name
                                 font.pixelSize: Theme.fontBody
                                 font.weight: modelData.connected ? Font.DemiBold : Font.Normal
                             }
                             Label {
-                                text: modelData.connected ? "Connected" : "Not connected"
+                                width: parent.width
+                                elide: Text.ElideRight
+                                text: (modelData.connected ? "Connected" : "Not connected")
+                                      + (modelData.pairedOn !== "" ? " · Paired " + modelData.pairedOn
+                                         : modelData.trusted ? " · Paired before the update" : "")
                                 color: modelData.connected ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Label {
+                                visible: !modelData.trusted
+                                text: "Not accepted on this screen"
+                                color: Theme.warn
                                 font.pixelSize: Theme.fontSmall
                             }
                         }

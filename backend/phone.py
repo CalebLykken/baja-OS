@@ -160,8 +160,9 @@ def parse_map_url(url):
             ll = ll or _latlon(qs.get(key))
         name, address = qs.get("name", ""), qs.get("address", "")
         label = f"{name}, {address}" if name and address else (name or address or qs.get("q") or "")
-        if not label and not _latlon(qs.get("destination", "")):
-            label = qs.get("destination") or qs.get("daddr") or ""
+        dest = qs.get("daddr") or qs.get("destination") or ""
+        if not label and not _latlon(dest):
+            label = dest
     elif "google" in host or "goo.gl" in host:
         m = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", url)
         if m:

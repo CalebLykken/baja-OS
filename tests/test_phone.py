@@ -233,7 +233,6 @@ class ParseMapUrlTest(unittest.TestCase):
         self.assertEqual(phone.parse_map_url("https://maps.apple.com/?daddr=Space%20Needle&dirflg=d"),
                          (None, "Space Needle"))
 
-    @unittest.expectedFailure
     def test_apple_directions_to_a_position(self):
         # phone.py:161 checks `destination` where it means `daddr`, so a daddr that is a position becomes the label.
         self.assertEqual(phone.parse_map_url("https://maps.apple.com/?daddr=47.6097,-122.3422"), (self.PIKE, ""))

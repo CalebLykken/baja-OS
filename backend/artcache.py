@@ -31,9 +31,13 @@ _TMP = ".tmp-"
 _prune_lock = threading.Lock()
 
 
+def cache_root():
+    """~/.cache/baja-os (not created): the library's tag cache lives here too."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or "~/.cache").expanduser() / "baja-os"
+
+
 def cache_dir():
-    base = os.environ.get("XDG_CACHE_HOME") or "~/.cache"
-    d = Path(base).expanduser() / "baja-os" / "art"
+    d = cache_root() / "art"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -75,6 +79,14 @@ def writing(path):
             os.unlink(tmp)
         raise
     prune(keep=path)
+
+
+def drop_stale_temp(folder):
+    """Delete temp files a crash left in `folder` (the art cache's own go in prune)."""
+    for f in folder.glob(_TMP + "*"):
+        with contextlib.suppress(OSError):
+            if time.time() - f.stat().st_mtime > STALE_TMP_S:
+                f.unlink()
 
 
 def store(name, data):

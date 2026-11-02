@@ -20,12 +20,27 @@ Item {
     property bool eqOpen: false
     property string tab: "next"                // "next", "albums" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
+    property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1 }
+    Connections {
+        target: media
+        function onAlbumsChanged() {
+            if (page.openAlbum < 0 || !page.openKey) return
+            var list = media.albums, found = -1
+            for (var i = 0; i < list.length; i++)
+                if (list[i].artist.toLowerCase() === page.openKey[0].toLowerCase()
+                        && list[i].title.toLowerCase() === page.openKey[1].toLowerCase()) { found = i; break }
+            page.openAlbum = found      // closed if it's gone
+        }
+    }
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
+    // Only while Spotify is what's playing or being looked at.
+    readonly property string spotifyError: typeof spotify !== "undefined"
+                                           && (media.source === "spotify" || page.tab === "spotify") ? spotify.error : ""
 
     function mmss(s) {
         var m = Math.floor(s / 60), r = s % 60
@@ -54,6 +69,21 @@ Item {
                     Layout.fillWidth: true
                     SourceBadge {}
                     Item { Layout.fillWidth: true }
+                    // The Pi's own music only: Spotify and the phone have no way to set these from here.
+                    IconButton {
+                        visible: media.hasModes
+                        icon: "shuffle"
+                        size: 60
+                        active: media.shuffle
+                        onClicked: media.toggleShuffle()
+                    }
+                    IconButton {
+                        visible: media.hasModes
+                        icon: media.repeat === "one" ? "repeat_one" : "repeat"
+                        size: 60
+                        active: media.repeat !== "off"
+                        onClicked: media.cycleRepeat()
+                    }
                     IconButton {
                         icon: "equalizer"
                         size: 60
@@ -72,7 +102,7 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 18
-                    text: page.idle ? "Nothing playing" : media.title
+                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
                     color: page.idle ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
@@ -80,20 +110,44 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: media.artist
-                    color: Theme.textDim
+                    text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                    color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                     font.pixelSize: Theme.fontBody
                     elide: Text.ElideRight
                 }
                 Item { Layout.fillHeight: true }
 
-                ProgressBar {
+                // Tap or drag to seek. The touch area is much taller than the bar;
+                // the song only jumps on release, so a drag doesn't re-decode.
+                Item {
+                    id: seekArea
                     Layout.fillWidth: true
-                    value: media.duration > 0 ? media.position / media.duration : 0
+                    Layout.preferredHeight: 48
+                    readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
+                    property real dragValue: 0
+                    property bool dragging: false
+                    function at(x) { return Math.max(0, Math.min(1, x / width)) }
+                    ProgressBar {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width
+                        value: seekArea.dragging ? seekArea.dragValue
+                                                 : (media.duration > 0 ? media.position / media.duration : 0)
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: seekArea.canSeek
+                        onPressed: (m) => { seekArea.dragValue = seekArea.at(m.x); seekArea.dragging = true }
+                        onPositionChanged: (m) => seekArea.dragValue = seekArea.at(m.x)
+                        onReleased: (m) => {
+                            seekArea.dragging = false
+                            media.seek(Math.round(seekArea.at(m.x) * media.duration))
+                        }
+                        onCanceled: seekArea.dragging = false
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: page.idle ? "" : page.mmss(media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                    Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                     Item { Layout.fillWidth: true }
                     Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
                 }
@@ -118,13 +172,15 @@ Item {
                     IconButton { icon: "remove"; size: 60; onClicked: media.volumeDown() }
                     LevelBar {
                         Layout.fillWidth: true
+                        opacity: media.muted ? 0.35 : 1
                         value: media.volume / 100
                         onMoved: (v) => media.setVolume(Math.round(v * 100))
                     }
                     Label {
-                        Layout.preferredWidth: 44
+                        Layout.preferredWidth: 64
                         horizontalAlignment: Text.AlignRight
-                        text: media.volume
+                        color: media.muted ? Theme.warn : Theme.text
+                        text: media.muted ? "Mute" : media.volume
                         font.family: Theme.numFont
                         font.pixelSize: Theme.fontBody
                         font.weight: Font.DemiBold
@@ -207,6 +263,17 @@ Item {
                     clip: true
                     model: spotifyQueue ? media.upNext : media.queue
                     boundsBehavior: Flickable.StopAtBounds
+                    // Open on the playing song, and follow it as it changes.
+                    function showPlaying() {
+                        if (visible && !spotifyQueue && media.index >= 0 && count > 0)
+                            positionViewAtIndex(media.index, ListView.Center)
+                    }
+                    onVisibleChanged: Qt.callLater(showPlaying)
+                    onCountChanged: Qt.callLater(showPlaying)
+                    Connections {
+                        target: media
+                        function onTrackChanged() { Qt.callLater(queue.showPlaying) }
+                    }
                     delegate: SongRow {
                         width: queue.width
                         number: index + 1
@@ -219,7 +286,7 @@ Item {
                     Label {
                         visible: queue.count === 0
                         anchors { left: parent.left; top: parent.top; leftMargin: 10; topMargin: 10 }
-                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : "No songs in ~/Music on the Pi"
+                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : media.scanning ? "Reading your music..." : "No songs in ~/Music on the Pi"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -243,13 +310,13 @@ Item {
                         title: modelData.title
                         subtitle: modelData.artist
                         current: index === media.album
-                        onHit: page.openAlbum = index
+                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = index }
                     }
                     Label {
                         visible: albumGrid.count === 0
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        text: "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
+                        text: media.scanning ? "Reading your music..." : "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }
@@ -261,7 +328,7 @@ Item {
                     visible: page.tab === "albums" && page.openAlbum >= 0 && !page.eqOpen
                     anchors { fill: parent; margins: 16 }
                     readonly property var album: page.openAlbum >= 0 ? page.albums[page.openAlbum] : null
-                    readonly property var tracks: page.openAlbum >= 0 ? media.albumTracks(page.openAlbum) : []
+                    readonly property var tracks: page.openAlbum >= 0 && page.albums ? media.albumTracks(page.openAlbum) : []   // page.albums: re-read when a rescan changes the songs
 
                     RowLayout {
                         id: albumHead
@@ -314,7 +381,7 @@ Item {
                             text: "Play"
                             icon: "play"
                             primary: true
-                            onClicked: media.playAlbum(page.openAlbum, 0)
+                            onClicked: media.playAlbum(page.openAlbum, -1)
                         }
                     }
                     ListView {

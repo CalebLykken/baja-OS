@@ -214,6 +214,7 @@ const region = await fetch(`${origin}/data/region.json`).then(r => r.json()).cat
 // Keep the camera over the extract, with a little room past its edges.
 const [w, s, e, n] = region ? region.bbox : [-122.7, 47.1, -121.7, 48.1];
 const pad = 0.15;
+const extent = [[w - pad, s - pad], [e + pad, n + pad]];
 
 const protocol = new pmtiles.Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);
@@ -226,14 +227,14 @@ const map = new maplibregl.Map({
     minZoom: 8,
     maxZoom: 19,
     maxPitch: 70,
-    maxBounds: [[w - pad, s - pad], [e + pad, n + pad]],
+    maxBounds: extent,
     attributionControl: false,
     fadeDuration: 150,
     // Smooth edges on the 3D truck.
     canvasContextAttributes: { antialias: true },
 });
 
-map.on("load", () => post("ready", { ms: Math.round(performance.now() - started) }));
+map.on("load", () => post("ready", { ms: Math.round(performance.now() - started), outside }));
 map.on("error", (ev) => post("error", { message: String(ev.error && ev.error.message || ev.error) }));
 // The dashboard only needs to know when the bearing really changes.
 let postedBearing = null;
@@ -511,7 +512,22 @@ function step(now) {
     else lastStep = 0;
 }
 
+// Off the extract the camera is let loose so it can follow the truck. About
+// 300 m of margin, so driving along the edge doesn't flicker: it takes 300 m
+// past the edge to go outside and 300 m back in to come back.
+let outside = false;
+function checkOutside(lon, lat) {
+    if (!region) return;
+    const k = outside ? -1 : 1;
+    const out = lon < w - 0.004 * k || lon > e + 0.004 * k || lat < s - 0.0027 * k || lat > n + 0.0027 * k;
+    if (out === outside) return;
+    outside = out;
+    map.setMaxBounds(out ? null : extent);
+    post("outside", { on: out });
+}
+
 function setPosition(lon, lat, heading, speed) {
+    checkOutside(lon, lat);
     // Below walking pace the GPS heading wanders; keep the last one.
     if (fix && speed < 1) heading = fix.heading;
     fix = { lon, lat, heading, speed };

@@ -10,8 +10,12 @@
 #   - Wi-Fi keeps retrying at boot instead of giving up, with power saving off,
 #     and the dashboard may join networks (the phone's hotspot), use the phone
 #     over Bluetooth as a backup, and reboot or shut down the Pi (polkit)
+#   - "Online" from NetworkManager's connectivity check: plain HTTP every 30 s
+#     (a captive portal can intercept it), in baja-connectivity.conf
 #   - The equalizer in front of the speakers (a user PipeWire filter)
 #   - gpsd for the GPS receiver (a u-blox on USB), always reading
+#   - chrony keeps the clock right: internet NTP, else the GPS time from gpsd,
+#     and the Pi 5's RTC (needs a battery) or fake-hwclock for the next boot
 #   - libgpiod's Python bindings, for the volume knob on the pin header
 #   - Quiet boot: no rainbow screen, kernel text, logos or console login
 #   - Baja OS Plymouth boot screen that hands the display straight to the app
@@ -38,7 +42,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     qml6-module-qtquick3d qml6-module-qtquick3d-assetutils qt6-quick3d-assetimporters-plugin \
     bluez bluez-tools libspa-0.2-bluetooth \
     python3-pyqt6.qtwebengine qml6-module-qtwebengine python3-pyqt6.qtwebsockets \
-    gpsd gpsd-clients python3-libgpiod
+    gpsd gpsd-clients python3-libgpiod chrony fake-hwclock
 # The user's PipeWire session (audio) runs at boot without anyone logging in,
 # with the PulseAudio-compatible socket that Qt Multimedia plays through.
 loginctl enable-linger "$USER_NAME"
@@ -83,8 +87,10 @@ setconf PairableTimeout 120
 setconf AutoEnable true
 systemctl restart bluetooth
 bluetoothctl system-alias "Baja OS" >/dev/null 2>&1 || true
-cp "$HERE/bluetooth/baja-bt-agent.service" /etc/systemd/system/
-systemctl enable --now baja-bt-agent.service
+# The dashboard is the pairing agent now; a leftover bt-agent would register too and skip its prompt.
+systemctl disable --now baja-bt-agent.service 2>/dev/null || true
+rm -f /etc/systemd/system/baja-bt-agent.service
+systemctl daemon-reload
 WP="/home/$USER_NAME/.config/wireplumber/wireplumber.conf.d"
 install -d -o "$USER_NAME" -g "$USER_NAME" "/home/$USER_NAME/.config/wireplumber" "$WP"
 install -o "$USER_NAME" -g "$USER_NAME" -m 644 "$HERE/bluetooth/80-baja-bluetooth.conf" "$WP/"
@@ -100,6 +106,15 @@ while read -r con; do
     nmcli con modify "$con" connection.autoconnect-retries 0 802-11-wireless.powersave 2
     echo "   $con: retry forever, power saving off"
 done
+# "Online" comes from NetworkManager's own connectivity check. Plain HTTP so a
+# captive portal can intercept it; 30 s so a lost hotspot shows up quickly.
+cat > /etc/NetworkManager/conf.d/baja-connectivity.conf <<CONF
+[connectivity]
+uri=http://nmcheck.gnome.org/check_network_status.txt
+response=NetworkManager is online
+interval=30
+CONF
+systemctl reload NetworkManager 2>/dev/null || true
 # The dashboard is a service, not a desktop login, so polkit needs telling
 # that it may change networks (and reboot or shut down from Settings).
 sed "s|@USER@|$USER_NAME|g" "$HERE/polkit/50-baja-os.rules" > /etc/polkit-1/rules.d/50-baja-os.rules
@@ -117,6 +132,30 @@ GPSD_OPTIONS="-n"
 GPSD
 systemctl enable --now gpsd.socket >/dev/null 2>&1 || true
 systemctl restart gpsd >/dev/null 2>&1 || true
+
+echo "== Clock"
+# chrony replaces systemd-timesyncd (apt removes or masks it; make sure it's
+# off either way). chrony also clears the kernel's unsynchronized flag, so
+# `timedatectl show -p NTPSynchronized` (baja-soloist.service waits on it)
+# still says yes once chrony has a source, GPS included.
+systemctl disable --now systemd-timesyncd >/dev/null 2>&1 || true
+# Debian's chrony.conf reads /etc/chrony/conf.d; add the line if this one
+# lacks it, so the GPS source below is always picked up.
+install -d /etc/chrony/conf.d
+if ! grep -qE '^(confdir|include) +/etc/chrony/conf\.d' /etc/chrony/chrony.conf; then
+    printf '\nconfdir /etc/chrony/conf.d\n' >> /etc/chrony/chrony.conf
+fi
+install -m 644 "$HERE/chrony/baja-gps.conf" /etc/chrony/conf.d/baja-gps.conf
+# With no RTC battery the clock at boot is the last saved time, or the image's
+# build date; fake-hwclock saves the time periodically so a boot with no RTC
+# battery starts close, not at the build date.
+# The Pi 5 RTC battery: charging is off by default. Only for the rechargeable
+# ML-2020 cell; it must stay off for a non-rechargeable one, since charging a
+# CR2032 is unsafe. Hardware decision: to enable, remove the leading # and reboot.
+grep -q 'rtc_bbat_vchg' "$FW/config.txt" ||
+    printf '\n[all]\n# dtparam=rtc_bbat_vchg=3000000\n' >> "$FW/config.txt"
+systemctl enable chrony >/dev/null 2>&1 || true
+systemctl restart chrony || echo "   chrony didn't start: see journalctl -u chrony"
 
 echo "== Sound board"
 # The InnoMaker HiFi DAC HAT has no ID chip, so the Pi has to be told it's

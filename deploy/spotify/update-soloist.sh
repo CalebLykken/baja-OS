@@ -8,7 +8,7 @@ DEST="$HOME/.local/opt/soloist"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-curl -fsSL --retry 3 -o "$TMP/soloist.tar.gz" "$URL"
+curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 1000 --speed-time 60 -o "$TMP/soloist.tar.gz" "$URL"
 tar -xzf "$TMP/soloist.tar.gz" -C "$TMP"
 NEW=$(find "$TMP" -type f -name soloist | head -1)
 [ -n "$NEW" ] || { echo "no soloist binary in the archive" >&2; exit 1; }

@@ -46,9 +46,13 @@ Known issues:
   on, so the screen still glows a little at night. It does now dim by itself
   after sunset (the sun's position where the truck is) to a saved night
   level, and back to the daylight level after sunrise.
-- **No GPS receiver yet:** gpsd and the map are ready for the GT-U7; until it's
-  plugged in, the map follows a simulated drive around Seattle.
-- **Vehicle data is simulated.**
+- **No working GPS receiver yet:** the first one never got a fix and is going
+  back. gpsd and the map are ready for a replacement; until then the map
+  follows a simulated drive around Seattle, but only on a Mac, a bench Pi or
+  with --demo, never once the car has answered.
+- **Vehicle data is real once the OBD-II adapter answers.** Until the car has
+  answered on this install (a Mac, a bench Pi, or --demo) the gauges show a
+  simulated drive.
 
 ## Milestone M1: first drive
 
@@ -235,8 +239,7 @@ dashboard alone, including a missed turn, in airplane mode.
 Maps, Apple Maps and Waze, NHTSA's glance guidelines and ISO 15008:**
 full-screen map beside the rail with the clock in the rail; light by day
 and dark at night for the whole dashboard (by the sun, or Settings); a
-simplified warm-neutral map palette with orange only for the route and the
-truck; Overpass (highway-sign lettering) for the map labels and controls,
+simplified warm-neutral map palette with a blue route; Overpass (highway-sign lettering) for the map labels and controls,
 with glyphs made by tools/make_glyphs.py; type and keys sized for 70-90 cm;
 search panel with Home, recents and categories; street-address search
 (910,000 addresses from OpenStreetMap); route preview with Go at the bottom;

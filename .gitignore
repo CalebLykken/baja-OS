@@ -11,6 +11,7 @@ venv/
 !qml/assets/*.hdr
 !qml/assets/*.ktx
 .version
+.update-state*
 !qml/assets/truck/*.png
 !tools/sign-icons/*.png
 !web/map/icons/*.png

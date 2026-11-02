@@ -1,10 +1,13 @@
 """Network status for the Settings page: IP address, Wi-Fi name, online.
 
-Checks run on a background thread every few seconds, because looking up the
-Wi-Fi name and testing the internet connection can each take a moment.
+Checks run on a background thread, because looking up the Wi-Fi name and
+testing the internet connection can each take a moment. NetworkManager's
+signals say when to check, with a slow safety check; without them (the Mac) it
+checks every few seconds, since the TCP probe has nothing else to go on.
 """
 
 import getpass
+import os
 import shutil
 import socket
 import subprocess
@@ -14,9 +17,13 @@ import traceback
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
 from backend import safe_emit
+from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
 
 CHECK_EVERY_MS = 5000
+SAFETY_CHECK_MS = 30000     # while NetworkManager's signals are coming through
 PROBE_HOST = ("1.1.1.1", 53)  # Cloudflare DNS: answers quickly when online
+TCP_PROBE = ("1.1.1.1", 443)  # the port an online device can reach on any network
+NM_CHECK_CONF = "/etc/NetworkManager/conf.d/baja-connectivity.conf"  # from setup-pi.sh
 
 
 def local_ip():
@@ -47,36 +54,75 @@ def wifi_name():
     return ""
 
 
-def is_online():
+def nm_connectivity():
+    """NetworkManager's own connectivity check: full/limited/portal/none, or
+    None when nmcli is missing, NM isn't running or it can't say."""
+    if not shutil.which("nmcli"):
+        return None
     try:
-        with socket.create_connection(PROBE_HOST, timeout=2):
+        r = subprocess.run(["nmcli", "-t", "networking", "connectivity"],
+                           capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    state = r.stdout.strip()
+    if r.returncode != 0 or state not in ("full", "limited", "portal", "none"):
+        return None                       # error, or "unknown": ask the probe instead
+    return state
+
+
+def tcp_online():
+    try:
+        with socket.create_connection(TCP_PROBE, timeout=2):
             return True
     except OSError:
         return False
 
 
+def internet_state():
+    """(online, portal). NetworkManager's check sees captive portals, which a
+    TCP probe can't. The probe decides where NM has no answer (the Mac), and
+    when NM's can't be trusted: "limited" may only mean its one check host is
+    down, and with no check set up (setup-pi.sh's drop-in) "full" only means
+    there's a default route."""
+    state = nm_connectivity()
+    if state is None or state == "limited" or (state == "full" and not os.path.exists(NM_CHECK_CONF)):
+        return tcp_online(), False
+    return state == "full", state == "portal"
+
+
 class Network(QObject):
     changed = pyqtSignal()
-    _result = pyqtSignal(object)    # (ip, ssid, online), or None if the check crashed
+    _result = pyqtSignal(object)    # (ip, ssid, online, portal), or None if the check crashed
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._ip = ""
         self._ssid = ""
         self._online = False
+        self._portal = False
         self._checked = False
         self._busy = False
+        self._again = False        # a signal came during a check, which may have looked too early
         self._check_error = ""     # the error the last check died of, while it keeps happening
         self._result.connect(self._apply)  # queued back onto the UI thread
         self._timer = QTimer(self)
         self._timer.setInterval(CHECK_EVERY_MS)
         self._timer.timeout.connect(self._check)
+        self._nm = BusWatch(NM_SERVICE, NM_SIGNALS, self._signalled, self, debounce_ms=NM_DEBOUNCE_MS)
 
     def start(self):
+        self._nm.start()
         self._check()
         self._timer.start()
 
+    def _signalled(self):
+        if self._busy:
+            self._again = True
+        else:
+            self._check()
+
     def _check(self):
+        self._timer.setInterval(SAFETY_CHECK_MS if self._nm.live() else CHECK_EVERY_MS)
         if self._busy:
             return
         self._busy = True
@@ -85,7 +131,7 @@ class Network(QObject):
     def _work(self):
         result = None
         try:
-            result = (local_ip(), wifi_name(), is_online())
+            result = (local_ip(), wifi_name(), *internet_state())
             self._logged()
         except Exception as e:
             self._logged(e)
@@ -105,11 +151,14 @@ class Network(QObject):
 
     def _apply(self, result):
         self._busy = False
+        if self._again:
+            self._again = False
+            self._nm.poke()
         if result is None:
             return                        # the check crashed: keep what we had
-        ip, ssid, online = result
-        if (ip, ssid, online, True) != (self._ip, self._ssid, self._online, self._checked):
-            self._ip, self._ssid, self._online, self._checked = ip, ssid, online, True
+        ip, ssid, online, portal = result
+        if (ip, ssid, online, portal, True) != (self._ip, self._ssid, self._online, self._portal, self._checked):
+            self._ip, self._ssid, self._online, self._portal, self._checked = ip, ssid, online, portal, True
             self.changed.emit()
 
     @pyqtProperty(str, notify=changed)
@@ -123,6 +172,11 @@ class Network(QObject):
     @pyqtProperty(bool, notify=changed)
     def online(self):
         return self._online
+
+    @pyqtProperty(bool, notify=changed)
+    def portal(self):
+        """Connected, but a captive portal wants a sign-in first."""
+        return self._portal
 
     @pyqtProperty(bool, notify=changed)
     def checked(self):

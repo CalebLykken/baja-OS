@@ -6,12 +6,17 @@ the phone and Spotify.
 """
 
 import json
+import tempfile
 import time
 import unittest
+import wave
+from pathlib import Path
 from unittest import mock
 
 try:
     from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
+    from PyQt6.QtMultimedia import QAudio
+    from backend import gapless
     from backend.hub import MediaHub, plays_on_start, read_state
     from backend.media import MediaPlayer
 except ImportError as e:
@@ -43,7 +48,8 @@ class FakeSource(QObject):
     deviceName = art = title = artist = ""
     duration = position = 0
     volume = 50
-    hasVolume = hasPlayer = available = active = True
+    hasVolume = hasPlayer = available = active = canSeek = True
+    sought = None
     recents = upNext = []
 
     def __init__(self):
@@ -63,6 +69,9 @@ class FakeSource(QObject):
 
     def setVolume(self, value):
         pass
+
+    def seek(self, seconds):
+        self.sought = seconds
 
 
 def saved(source, playing, index=3, position=50):
@@ -88,6 +97,13 @@ class HubTest(unittest.TestCase):
         self.assertFalse(self.local.playing)
         self.assertEqual((hub.source, hub.index, hub.position), ("local", 3, 50))
 
+    def test_another_source_taking_over_stops_late_songs_autoplaying(self):
+        hub = self.make(music=saved("local", True))
+        self.local.cancel_autoplay = mock.Mock()
+        self.spotify.play()
+        self.assertEqual(hub.source, "spotify")
+        self.local.cancel_autoplay.assert_called_once_with()
+
     def test_after_the_phone_local_music_waits(self):
         self.make(music=saved("phone", True))
         self.assertFalse(self.local.playing)
@@ -108,7 +124,8 @@ class HubTest(unittest.TestCase):
         self.spotify.play()                          # Spotify takes over: local music pauses
         self.assertEqual(hub.source, "spotify")
         self.assertEqual(self.state(), {"source": "spotify", "playing": True,
-                                        "local": {"album": None, "path": "", "index": 2, "position": 10}})
+                                        "local": {"album": None, "path": "", "index": 2, "position": 10},
+                                        "modes": {"shuffle": False, "repeat": "all"}})
 
     def test_every_few_seconds(self):
         hub = self.make(music=saved("local", True, position=10))
@@ -118,6 +135,18 @@ class HubTest(unittest.TestCase):
         hub._save_timer.timeout.emit()
         self.assertEqual(self.state()["local"]["position"], 12)
 
+    def test_seek_goes_to_the_source_that_can(self):
+        hub = self.make(music=saved("local", False))
+        self.phone.canSeek = False
+        self.spotify.play()
+        self.assertEqual((hub.source, hub.canSeek), ("spotify", True))
+        hub.seek(42)
+        self.assertEqual(self.spotify.sought, 42)
+        self.phone.play()
+        self.assertEqual((hub.source, hub.canSeek), ("phone", False))
+        hub.seek(10)                                 # AVRCP has no seek: ignored
+        self.assertIsNone(self.phone.sought)
+
     def test_reading_what_was_saved(self):
         self.assertIsNone(read_state(""))
         self.assertIsNone(read_state("{"))
@@ -125,6 +154,109 @@ class HubTest(unittest.TestCase):
         self.assertTrue(plays_on_start(read_state(saved("local", True))))
         for source, playing in (("local", False), ("spotify", True), ("phone", True)):
             self.assertFalse(plays_on_start(read_state(saved(source, playing))), source)
+
+
+class FakeSink(QObject):
+    """Stands in for QAudioSink: no audio device needed, nothing asks the feed for data."""
+    stateChanged = pyqtSignal(object)
+
+    def __init__(self, device, fmt, parent=None):
+        super().__init__(parent)
+        self._device, self._size = device, 0
+
+    def setBufferSize(self, n):
+        self._size = n
+
+    def bufferSize(self):
+        return self._size
+
+    def bytesFree(self):
+        return self._size
+
+    def setVolume(self, v):
+        pass
+
+    def start(self, feed):
+        pass
+
+    def stop(self):
+        pass
+
+    def error(self):
+        return QAudio.Error.NoError
+
+    def device(self):
+        return self._device
+
+
+class ModesTest(unittest.TestCase):
+    """Shuffle and repeat: the Pi's own music only, kept between runs."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tracks = []
+        for n in range(1, 5):
+            path = Path(tmp.name) / f"t{n}.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(48000)
+                w.writeframes(bytes(48000 * 4))
+            self.tracks.append({"path": str(path), "title": f"T{n}", "artist": "Band", "duration": 1,
+                                "art": "", "album": "A", "albumArtist": "", "disc": 0, "track": n})
+
+    def make(self, **values):
+        from backend.library import LibraryPlayer
+        patch = mock.patch.object(gapless, "QAudioSink", FakeSink)
+        patch.start()
+        self.addCleanup(patch.stop)          # undone after the engine is shut down
+        self.settings = FakeSettings(**values)
+        self.local = LibraryPlayer(self.tracks)
+        self.addCleanup(self.local._engine._shutdown)
+        with mock.patch("backend.hub.shutil.which", return_value=None):
+            hub = MediaHub(self.local, FakeSource(), FakeSource(), settings=self.settings)
+        hub.start()
+        self.addCleanup(hub._save_timer.stop)
+        return hub
+
+    def test_the_keys_set_and_save_them(self):
+        hub = self.make()
+        self.assertEqual((hub.hasModes, hub.shuffle, hub.repeat), (True, False, "all"))
+        hub.toggleShuffle()
+        hub.cycleRepeat()
+        self.assertEqual((hub.shuffle, hub.repeat), (True, "one"))
+        self.assertEqual(json.loads(self.settings.values["music"])["modes"],
+                         {"shuffle": True, "repeat": "one"})
+
+    def test_they_come_back_after_a_restart(self):
+        state = json.loads(saved("local", False))
+        state["modes"] = {"shuffle": True, "repeat": "off"}
+        hub = self.make(music=json.dumps(state))
+        self.assertEqual((hub.shuffle, hub.repeat), (True, "off"))
+
+    def test_junk_saved_leaves_the_defaults(self):
+        for modes in ("x", {"shuffle": "yes", "repeat": "sideways"}, None):
+            state = json.loads(saved("local", False))
+            state["modes"] = modes
+            hub = self.make(music=json.dumps(state))
+            self.assertEqual((hub.shuffle, hub.repeat), (False, "all"), modes)
+
+    def test_not_on_other_sources(self):
+        hub = self.make()
+        self.assertTrue(hub.hasModes)
+        hub._set_source("spotify")
+        self.assertFalse(hub.hasModes)
+        hub.toggleShuffle()
+        hub.cycleRepeat()
+        self.assertEqual((self.local.shuffle, self.local.repeat), (False, "all"))
+
+    def test_the_demo_player_has_none(self):
+        demo = MediaPlayer()
+        self.assertFalse(demo.hasModes)
+        demo.toggleShuffle()
+        demo.cycleRepeat()
+        self.assertEqual((demo.shuffle, demo.repeat), (False, "all"))
 
 
 class NoMusicTest(unittest.TestCase):

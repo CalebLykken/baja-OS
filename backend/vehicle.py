@@ -23,10 +23,11 @@ simulation) drives the warning on every page and the red readouts.
 import math
 import random
 
-from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend.demo import allowed
 from backend.gps import MPH_TO_MS
+from backend.obd import describe
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
@@ -47,9 +48,10 @@ LIMITS = {
 }
 
 
-def warnings(coolant, voltage, boost):
+def warnings(coolant, voltage, boost, mil=False):
     """The engine readings out of range, most urgent first: 'coolant',
-    'voltage' and 'boost'. A voltage of None (not read lately) can't warn."""
+    'voltage' and 'boost', then 'mil' (the check-engine lamp is on). A
+    voltage of None (not read lately) can't warn."""
     found = []
     if coolant > LIMITS["coolantHigh"]:
         found.append("coolant")
@@ -57,6 +59,8 @@ def warnings(coolant, voltage, boost):
         found.append("voltage")
     if boost > LIMITS["boostHigh"]:
         found.append("boost")
+    if mil:
+        found.append("mil")
     return found
 
 
@@ -77,6 +81,7 @@ class VehicleData(QObject):
     engineKnownChanged = pyqtSignal()
     speedKnownChanged = pyqtSignal()
     voltageKnownChanged = pyqtSignal()
+    codesChanged = pyqtSignal()
 
     def __init__(self, settings=None, demo=None, parent=None):
         """`demo` is main.py's --demo (True), --no-demo (False) or neither
@@ -96,6 +101,7 @@ class VehicleData(QObject):
         self._gear = 1
         self._live = False
         self._volts_real = False  # `_voltage` is the adapter's reading, current
+        self._mil, self._codes, self._codes_count = False, [], 0   # the check-engine lamp, from the car
         self._gps = None
         self._gps_mph = None      # the GPS's speed while its fix is real and fresh
         self._gps_real = False    # the receiver has given a real position (fresh or held)
@@ -164,10 +170,30 @@ class VehicleData(QObject):
     def lost_obd(self):
         """The readings stopped: the car went quiet, or the adapter went.
         The battery reading stays; it ages out by itself."""
+        self._clear_codes()                # unknown while the car isn't answering
         if self._live:
             before = self._flags()
             self._live = False
             self._settle(before)           # no more warnings
+
+    @pyqtSlot(dict)
+    def apply_codes(self, found):
+        """The check-engine lamp and trouble codes from the car (ObdReader's
+        `codes`): {"mil": bool, "count": int, "stored": [...], "pending": [...]}."""
+        self._mil = bool(found.get("mil"))
+        stored = list(found.get("stored", []))
+        self._codes = [{"code": c, "text": describe(c), "pending": False} for c in stored]
+        self._codes += [{"code": c, "text": describe(c), "pending": True}
+                        for c in found.get("pending", []) if c not in stored]
+        self._codes_count = max(int(found.get("count", 0)), len(stored))
+        self.codesChanged.emit()
+        self.changed.emit()
+
+    def _clear_codes(self):
+        if self._mil or self._codes or self._codes_count:
+            self._mil, self._codes, self._codes_count = False, [], 0
+            self.codesChanged.emit()
+            self.changed.emit()
 
     def apply_voltage(self, volts):
         """The battery, from every ATRV reading of the adapter (the car
@@ -228,11 +254,28 @@ class VehicleData(QObject):
 
     @pyqtProperty("QStringList", notify=changed)
     def warnings(self):
-        """The readings out of range ('coolant', 'voltage', 'boost'), from
-        the car only: the simulation never warns."""
+        """The readings out of range ('coolant', 'voltage', 'boost') and
+        'mil' (the check-engine lamp is on), from the car only: the
+        simulation never warns."""
         if not self._live:
             return []
-        return warnings(self._coolant, self._voltage if self._volts_real else None, self._boost)
+        return warnings(self._coolant, self._voltage if self._volts_real else None, self._boost,
+                        mil=self._mil)
+
+    @pyqtProperty(bool, notify=codesChanged)
+    def milOn(self):
+        """The check-engine lamp, as the car last said (off when unknown)."""
+        return self._mil
+
+    @pyqtProperty(int, notify=codesChanged)
+    def codeCount(self):
+        """How many trouble codes the car has stored."""
+        return self._codes_count
+
+    @pyqtProperty("QVariantList", notify=codesChanged)
+    def codes(self):
+        """The stored then pending trouble codes: {code, text, pending}."""
+        return self._codes
 
     # ---- the simulated drive ----------------------------------------------
     def _tick(self):

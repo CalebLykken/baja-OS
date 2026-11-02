@@ -167,12 +167,14 @@ Item {
     // A destination sent from the phone (Settings > Map > Send from phone).
     // While guiding it's offered, not taken: choose() would end the route.
     function receive(p) {
-        if (navigating) offered = p
-        else if (mapReady) choose(p)
+        if (navigating) {
+            offered = p
+            alongOpen = false
+        } else if (mapReady) choose(p)
         else pending = p
     }
     property var pending: null
-    property var offered: null          // a phone place waiting for "Go there instead" or dismiss
+    property var offered: null          // a phone place waiting for an answer on its card
     function takeOffer() {
         var p = offered
         offered = null
@@ -182,7 +184,55 @@ Item {
         if (mapReady) choose(p)
         else pending = p
     }
-    onNavigatingChanged: if (!navigating && offered) {
+    function addOfferAsStop() {
+        if (routing.addStop(offered.name, offered.lon, offered.lat)) offered = null
+    }
+    // Gas, food and the rest along the route ahead, from the keys strip.
+    property bool alongOpen: false
+    property string alongKey: "gas"
+    property string alongSel: ""       // name and area of the result showing its buttons (rows move on a refresh)
+    property bool alongReady: false     // results are the ones asked for, not an older search's
+    readonly property var alongKinds: [
+        { key: "gas", label: "Gas", icon: "gas" }, { key: "food", label: "Food", icon: "food" },
+        { key: "coffee", label: "Coffee", icon: "coffee" }, { key: "parking", label: "Parking", icon: "parking" },
+        { key: "charging", label: "EV", icon: "charging" } ]
+    function searchAlong(key) {
+        alongKey = key
+        alongReady = false
+        alongSel = ""
+        resultsTitle = ""               // so Back from a place lands on search
+        refreshAlong()
+    }
+    function refreshAlong() { maps.searchAlong(alongKey, routing.shape, routing.segment, routing.alongSegment) }
+    function toggleAlong() {
+        alongOpen = !alongOpen
+        if (alongOpen) searchAlong(alongKey)
+    }
+    function addAlongStop(p) {
+        if (routing.addStop(p.name, p.lon, p.lat)) alongOpen = false
+    }
+    function goAlong(p) {
+        alongOpen = false
+        routing.stop()
+        choose(p)
+    }
+    Connections {
+        target: page.hasMaps ? maps : null
+        function onResultsChanged() { if (page.alongOpen) page.alongReady = true }
+    }
+    // Distances go stale as the truck drives or the route changes.
+    Timer { interval: 30000; repeat: true; running: page.alongOpen; onTriggered: page.refreshAlong() }
+    Connections {
+        target: page.hasRouting ? routing : null
+        function onChanged() { if (page.alongOpen) page.refreshAlong() }
+    }
+    property string stopMessage: ""     // why a stop couldn't be added or skipped, for a few seconds
+    Timer { id: stopMessageHide; interval: 4000; onTriggered: page.stopMessage = "" }
+    onNavigatingChanged: if (!navigating) {
+        alongOpen = false
+        if (offered) endOffer()
+    }
+    function endOffer() {
         // The route ended meanwhile: the place is previewed as it would have been.
         var p = offered
         offered = null
@@ -199,6 +249,10 @@ Item {
             page.typing = false
             page.panel = "place"
             if (page.mapReady) page.map.call("showPlace(" + lon + "," + lat + ")")
+        }
+        function onStopsFailed(text) {
+            page.stopMessage = text
+            stopMessageHide.restart()
         }
     }
     function cancelPlace() {
@@ -608,6 +662,40 @@ Item {
                         font.pixelSize: Theme.fontBody
                     }
                     MapLabel {
+                        visible: page.hasRouting && routing.previewing && routing.stopCount > 0
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: page.hasRouting ? "Stops: " + routing.stops.map(s => s.name).join(", ") : ""
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                    // A ferry on the way, one row per crossing.
+                    Repeater {
+                        model: page.hasRouting && routing.previewing ? routing.ferries : []
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
+                            MapLabel {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - 40
+                                wrapMode: Text.WordWrap
+                                text: "Ferry" + (modelData.name !== "Ferry" ? ": " + modelData.name : "") + (modelData.minutes > 0 ? ", " + modelData.minutes + " min" : "")
+                                color: page.cDim
+                                font.pixelSize: Theme.fontBody
+                            }
+                        }
+                    }
+                    // Being worked out again (a route option changed), or that failed.
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: !page.hasRouting ? "" : routing.computing ? "Finding a route" : routing.error
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                    MapLabel {
                         visible: !page.hasRouting || !routing.previewing
                         width: parent.width
                         wrapMode: Text.WordWrap
@@ -735,7 +823,7 @@ Item {
                     }
                 }
             }
-            TapHandler { onTapped: page.map.call("recenter()") }
+            TapHandler { onTapped: routing.repeatLast() }    // say it again (Re-center is its own key)
         }
 
         // ... and the trip, bottom-left: arrival, time left, distance left.
@@ -749,11 +837,45 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 200 } }
             anchors { bottom: parent.bottom; bottomMargin: 16 }
             width: page.panelWidth
-            height: 132
+            height: 132 + (nextStop.visible ? nextStop.height + 8 : 0)
+            Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
             readonly property real timeLeft: page.hasRouting ? routing.remainingTime : 0
             readonly property string distance: page.hasRouting ? Units.distanceText(routing.remainingDistance) : ""
+            Item {
+                id: nextStop
+                readonly property string stopName: page.hasRouting ? routing.nextStopName : ""
+                visible: stopName !== "" || page.stopMessage !== ""
+                anchors { left: parent.left; right: parent.right; top: parent.top
+                          leftMargin: 28; rightMargin: 16; topMargin: 8 }
+                height: 60
+                MapLabel {
+                    anchors { left: parent.left; right: skip.visible ? skip.left : parent.right
+                              rightMargin: 12; verticalCenter: parent.verticalCenter }
+                    elide: Text.ElideRight
+                    text: page.stopMessage !== "" ? page.stopMessage : "Next stop: " + nextStop.stopName
+                    color: page.cDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Rectangle {
+                    id: skip
+                    visible: nextStop.stopName !== ""
+                    anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
+                    width: 104
+                    radius: 18
+                    color: skipTap.pressed ? page.cLine : page.cPanelHi
+                    MapLabel {
+                        anchors.centerIn: parent
+                        text: "Skip"
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    TapHandler { id: skipTap; onTapped: routing.removeStop(0) }
+                }
+            }
             RowLayout {
-                anchors { fill: parent; leftMargin: 14; rightMargin: 16 }
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                          leftMargin: 14; rightMargin: 16 }
+                height: 132
                 spacing: 0
                 TripStat {
                     Layout.preferredWidth: 130
@@ -784,6 +906,30 @@ Item {
                     }
                     TapHandler { id: endTap; onTapped: page.endRoute() }
                 }
+            }
+        }
+
+        // ================================================================================
+        // The truck is off the offline map: the camera still follows, but
+        // there's nothing drawn. Under "Where to?" while browsing; beside the
+        // turn card or search panel otherwise (top centre is taken by the
+        // Home/Work keys when browsing).
+        Rectangle {
+            readonly property bool shown: page.map !== null && page.map.outside && page.mapReady
+            visible: shown
+            x: whereTo.visible ? 16 : page.panelWidth + 32
+            y: whereTo.visible ? whereTo.y + whereTo.height + 12 : 16
+            width: outsideText.implicitWidth + 44
+            height: 56
+            radius: height / 2
+            color: page.cBanner
+            MapLabel {
+                id: outsideText
+                anchors.centerIn: parent
+                text: "Outside the offline map"
+                color: "white"
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
             }
         }
 
@@ -860,6 +1006,12 @@ Item {
                 PillKey { visible: page.showZoom; icon: "remove"; onHit: { page.map.call("zoomOut()"); zoomHide.restart() } }
                 PillKey { visible: page.navigating; icon: "overview"; onHit: page.map.call("overview()") }
                 PillKey {
+                    visible: page.navigating && page.hasRouting && page.hasMaps && maps.canSearch
+                    icon: "search"
+                    lit: page.alongOpen
+                    onHit: page.toggleAlong()
+                }
+                PillKey {
                     visible: page.navigating && typeof voice !== "undefined" && voice.available
                     icon: typeof voice !== "undefined" && voice.enabled ? "volume" : "volume_off"
                     lit: typeof voice !== "undefined" && voice.enabled
@@ -874,7 +1026,153 @@ Item {
             }
         }
 
-        // A place sent from the phone while guiding: switch to it, or keep going.
+        // Gas, food, coffee, parking or charging along the route ahead, between the
+        // turn card and the keys (the phone's offer takes its place).
+        Sheet {
+            id: alongCard
+            visible: page.alongOpen && page.navigating && page.offered === null
+            anchors { left: parent.left; leftMargin: page.panelWidth + 32
+                      bottom: parent.bottom; bottomMargin: 130 }
+            width: parent.width - page.panelWidth - 32 - 140
+            readonly property var rows: page.alongReady ? maps.results.slice(0, 5) : []
+            readonly property int selIndex: {
+                for (var i = 0; i < rows.length; i++)
+                    if (rows[i].name + "|" + rows[i].area === page.alongSel) return i
+                return 0
+            }
+            height: 40 + 90 + 12 + (rows.length > 0 ? rows.length * 70 - 6 + 30 + 68 : 40)
+            Behavior on height { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+            Column {
+                anchors { fill: parent; margins: 20 }
+                spacing: 12
+                RowLayout {
+                    width: parent.width
+                    height: 90
+                    spacing: 10
+                    Repeater {
+                        model: page.alongKinds
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            radius: 22
+                            color: kindTap.pressed ? page.cLine : (page.alongKey === modelData.key ? page.cBlue : page.cPanelHi)
+                            Column {
+                                anchors.centerIn: parent
+                                spacing: 2
+                                Icon {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    name: modelData.icon
+                                    size: 36
+                                    color: page.alongKey === modelData.key ? "white" : page.cText
+                                }
+                                MapLabel {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: modelData.label
+                                    color: page.alongKey === modelData.key ? "white" : page.cText
+                                    font.pixelSize: 21
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+                            TapHandler { id: kindTap; onTapped: page.searchAlong(modelData.key) }
+                        }
+                    }
+                }
+                MapLabel {
+                    visible: page.alongReady && alongCard.rows.length === 0
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: "Nothing along the route"
+                    color: page.cDim
+                    font.pixelSize: Theme.fontBody
+                }
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    Repeater {
+                        model: alongCard.rows
+                        Item {
+                            id: hit
+                            readonly property bool open: index === alongCard.selIndex
+                            width: parent.width
+                            height: open ? 64 + 30 + 68 : 64
+                            Behavior on height { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+                            clip: true
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 22
+                                color: hit.open || hitTap.pressed ? page.cPanelHi : "transparent"
+                            }
+                            MapLabel {
+                                anchors { left: parent.left; right: ahead.left; top: parent.top
+                                          leftMargin: 16; rightMargin: 12 }
+                                height: 64
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                                text: modelData.name
+                                font.pixelSize: Theme.fontBody
+                                font.weight: Font.DemiBold
+                            }
+                            MapLabel {
+                                id: ahead
+                                anchors { right: parent.right; top: parent.top; rightMargin: 16 }
+                                height: 64
+                                verticalAlignment: Text.AlignVCenter
+                                text: Units.distanceText(modelData.distance)
+                                color: page.cDim
+                                font.pixelSize: Theme.fontBody
+                            }
+                            MapLabel {
+                                visible: hit.open
+                                anchors { left: parent.left; right: parent.right; top: parent.top
+                                          topMargin: 56; leftMargin: 16; rightMargin: 16 }
+                                elide: Text.ElideRight
+                                text: Units.distanceText(modelData.distance) + " ahead, "
+                                      + Units.distanceText(modelData.off) + " off the route"
+                                color: page.cDim
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            TapHandler { id: hitTap; onTapped: page.alongSel = modelData.name + "|" + modelData.area }
+                            RowLayout {
+                                visible: hit.open
+                                anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                                          margins: 10 }
+                                height: 56
+                                spacing: 10
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    radius: 20
+                                    color: addTap.pressed ? Qt.darker(page.cBlue, 1.2) : page.cBlue
+                                    MapLabel {
+                                        anchors.centerIn: parent
+                                        text: "Add stop"
+                                        color: "white"
+                                        font.pixelSize: Theme.fontBody
+                                        font.weight: Font.Bold
+                                    }
+                                    TapHandler { id: addTap; enabled: hit.open; onTapped: page.addAlongStop(modelData) }
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    radius: 20
+                                    color: goTap.pressed ? page.cLine : page.cPanel
+                                    MapLabel {
+                                        anchors.centerIn: parent
+                                        text: "Go there"
+                                        font.pixelSize: Theme.fontBody
+                                        font.weight: Font.DemiBold
+                                    }
+                                    TapHandler { id: goTap; enabled: hit.open; onTapped: page.goAlong(modelData) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // A place sent from the phone while guiding: switch to it, add it, or keep going.
         Sheet {
             visible: page.offered !== null && page.navigating
             anchors { left: parent.left; leftMargin: page.panelWidth + 32      // between the turn card and the keys
@@ -901,7 +1199,11 @@ Item {
                         radius: 22
                         color: thereTap.pressed ? Qt.darker(page.cBlue, 1.2) : page.cBlue
                         MapLabel {
-                            anchors.centerIn: parent
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
                             text: "Go there instead"
                             color: "white"
                             font.pixelSize: Theme.fontBody
@@ -910,12 +1212,33 @@ Item {
                         TapHandler { id: thereTap; onTapped: page.takeOffer() }
                     }
                     Rectangle {
-                        Layout.preferredWidth: 200
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 22
+                        color: stopTap.pressed ? page.cLine : page.cPanelHi
+                        MapLabel {
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
+                            text: "Add as a stop"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        TapHandler { id: stopTap; onTapped: page.addOfferAsStop() }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
                         Layout.fillHeight: true
                         radius: 22
                         color: keepTap.pressed ? page.cLine : page.cPanelHi
                         MapLabel {
-                            anchors.centerIn: parent
+                            anchors { fill: parent; margins: 8 }
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            lineHeight: 0.9
                             text: "Keep going"
                             font.pixelSize: Theme.fontBody
                             font.weight: Font.DemiBold

@@ -104,6 +104,9 @@ class MakeMediaPlayerTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.players = []                   # kept alive until the cleanups have run
+        env = mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(Path(tmp.name) / "cache")})
+        env.start()
+        self.addCleanup(env.stop)
         self.empty = Path(tmp.name) / "empty"
         self.empty.mkdir()
         self.songs = Path(tmp.name) / "songs"
@@ -149,11 +152,19 @@ class MakeMediaPlayerTest(unittest.TestCase):
         self.assertDemo(self.make(self.empty / "missing", None, False))
 
     def test_music_is_always_played(self):
+        from backend.library import scan
+        # First run: nothing is read here, the player waits for the scanner.
         for flag in (None, True, False):
             for on_pi in (True, False):
                 player = self.make(self.songs, flag, on_pi)
                 self.assertIsInstance(player, LibraryPlayer, (flag, on_pi))
+                self.assertEqual((player.queue, player.scanning), ([], True), (flag, on_pi))
+        scan(self.songs)                    # what the scanner leaves behind
+        for flag in (None, True, False):
+            for on_pi in (True, False):
+                player = self.make(self.songs, flag, on_pi)
                 self.assertEqual(len(player.queue), 2, (flag, on_pi))
+                self.assertFalse(player.scanning)
 
     def test_asks_whether_this_is_a_pi_unless_told(self):
         with mock.patch("backend.demo.on_pi", return_value=True):

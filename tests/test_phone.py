@@ -217,5 +217,138 @@ class ServerTest(TempTokenFile):
         self.assertEqual(self.scan(self.svc.token)[0], 303)
 
 
+class ParseMapUrlTest(unittest.TestCase):
+    PIKE = (47.6097, -122.3422)
+
+    def test_apple_with_a_position_and_a_name(self):
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?ll=47.6097,-122.3422&q=Pike%20Place%20Market"),
+                         (self.PIKE, "Pike Place Market"))
+
+    def test_apple_place_with_name_and_address(self):
+        url = ("https://maps.apple.com/place?coordinate=47.6097,-122.3422"
+               "&name=Pike%20Place%20Market&address=85%20Pike%20St,%20Seattle,%20WA")
+        self.assertEqual(phone.parse_map_url(url), (self.PIKE, "Pike Place Market, 85 Pike St, Seattle, WA"))
+
+    def test_apple_directions_to_a_name(self):
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?daddr=Space%20Needle&dirflg=d"),
+                         (None, "Space Needle"))
+
+    def test_apple_directions_to_a_position(self):
+        # A daddr that is a position is the position, not the label.
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?daddr=47.6097,-122.3422"), (self.PIKE, ""))
+
+    def test_google_place_page(self):
+        url = ("https://www.google.com/maps/place/Pike+Place+Market/@47.6101,-122.3421,17z/"
+               "data=!3m1!4b1!4m6!3m5!1s0x0:0x0!8m2!3d47.6097!4d-122.3422")
+        self.assertEqual(phone.parse_map_url(url), (self.PIKE, "Pike Place Market"))
+
+    def test_google_place_without_exact_coordinates_uses_the_view(self):
+        ll, label = phone.parse_map_url("https://www.google.com/maps/place/Pike+Place+Market/@47.6101,-122.3421,17z")
+        self.assertEqual((ll, label), ((47.6101, -122.3421), "Pike Place Market"))
+
+    def test_google_query_with_a_position(self):
+        self.assertEqual(phone.parse_map_url("https://www.google.com/maps?q=47.6097,-122.3422"), (self.PIKE, ""))
+
+    def test_google_search_by_words(self):
+        self.assertEqual(phone.parse_map_url("https://www.google.com/maps/search/?api=1&query=Space+Needle"),
+                         (None, "Space Needle"))
+
+    def test_google_directions_end_at_the_last_stop(self):
+        # The @ is the map view, not the destination, so the name is left for offline search.
+        ll, label = phone.parse_map_url("https://www.google.com/maps/dir/Current+Location/Space+Needle/@47.62,-122.35,14z")
+        self.assertEqual((ll, label), (None, "Space Needle"))
+
+    def test_apple_view_centre_is_not_used_when_there_is_a_name(self):
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?q=Space%20Needle&center=47.62,-122.35"),
+                         (None, "Space Needle"))
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?center=47.62,-122.35"), ((47.62, -122.35), ""))
+
+    def test_geo_with_a_position(self):
+        self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422"), (self.PIKE, ""))
+        self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422;u=35"), (self.PIKE, ""))
+
+    def test_geo_with_a_label(self):
+        self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422?q=47.6097,-122.3422(Pike+Place+Market)"),
+                         (self.PIKE, "Pike Place Market"))
+        self.assertEqual(phone.parse_map_url("geo:47.6097,-122.3422?q=Coffee"), (self.PIKE, "Coffee"))
+
+    def test_geo_zero_zero_with_a_label_takes_the_position_from_the_query(self):
+        # The usual Android form: geo:0,0 means "look at q".
+        self.assertEqual(phone.parse_map_url("geo:0,0?q=47.6097,-122.3422(Pike+Place+Market)"),
+                         (self.PIKE, "Pike Place Market"))
+
+    def test_geo_zero_zero_with_words_has_no_position(self):
+        # (0, 0) is not a position: the words in q are searched instead.
+        self.assertEqual(phone.parse_map_url("geo:0,0?q=Space+Needle"), (None, "Space Needle"))
+
+    def test_other_sites_and_junk(self):
+        for url in ("https://example.com/?ll=47.6,-122.3", "", "not a link"):
+            self.assertEqual(phone.parse_map_url(url), (None, ""), url)
+
+    def test_an_impossible_position_is_ignored(self):
+        self.assertEqual(phone.parse_map_url("https://maps.apple.com/?ll=147.6,-322.3&q=Nowhere"), (None, "Nowhere"))
+
+
+class ResolveTest(unittest.TestCase):
+    PIKE = "https://www.google.com/maps/place/Pike+Place+Market/@47.6097,-122.3422,17z"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.maps = Path(tmp.name)
+        (self.maps / "region.json").write_text(json.dumps({"region": "Washington", "bbox": [-125.0, 45.5, -116.9, 49.1]}))
+
+    def test_a_place_inside_the_map(self):
+        self.assertEqual(phone.resolve({"urls": [self.PIKE]}, self.maps),
+                         {"name": "Pike Place Market", "label": "Sent from your phone",
+                          "lon": -122.3422, "lat": 47.6097})
+
+    def test_a_place_outside_the_map_says_where_the_map_is(self):
+        with self.assertRaisesRegex(ValueError, r"outside the offline map \(Washington\)"):
+            phone.resolve({"urls": ["https://maps.apple.com/?ll=40.7128,-74.0060&q=Times+Square"]}, self.maps)
+
+    def test_the_edge_of_the_map_is_inside(self):
+        place = phone.resolve({"lat": 49.1, "lon": -125.0, "name": "Corner"}, self.maps)
+        self.assertEqual((place["lat"], place["lon"]), (49.1, -125.0))
+        for lat, lon in ((49.2, -122.0), (47.0, -126.0), (45.0, -122.0), (47.0, -116.0)):
+            with self.assertRaises(ValueError, msg=(lat, lon)):
+                phone.resolve({"lat": lat, "lon": lon}, self.maps)
+
+    def test_without_a_region_file_nowhere_is_outside(self):
+        (self.maps / "region.json").unlink()
+        place = phone.resolve({"urls": ["geo:40.7128,-74.0060"]}, self.maps)
+        self.assertEqual(place["lon"], -74.006)
+
+    def test_a_link_inside_the_shared_text(self):
+        place = phone.resolve({"text": f"Look at this: {self.PIKE} nice place"}, self.maps)
+        self.assertEqual((place["name"], place["lat"]), ("Pike Place Market", 47.6097))
+
+    def test_a_name_and_address_split_into_name_and_label(self):
+        url = ("https://maps.apple.com/place?coordinate=47.6097,-122.3422"
+               "&name=Pike%20Place%20Market&address=85%20Pike%20St,%20Seattle,%20WA")
+        place = phone.resolve({"urls": url}, self.maps)
+        self.assertEqual((place["name"], place["label"]), ("Pike Place Market", "85 Pike St, Seattle, WA"))
+
+    def test_the_position_and_name_the_phone_sent_stand_in(self):
+        place = phone.resolve({"lat": "47.6097", "lon": "-122.3422", "name": "Pike Place Market"}, self.maps)
+        self.assertEqual((place["name"], place["lon"], place["lat"]), ("Pike Place Market", -122.3422, 47.6097))
+
+    def test_a_bare_coordinate_in_the_text(self):
+        place = phone.resolve({"text": "meet at 47.6097, -122.3422 ok"}, self.maps)
+        self.assertEqual((place["lat"], place["lon"], place["name"]), (47.6097, -122.3422, "Dropped pin"))
+
+    def test_a_list_is_not_a_place(self):
+        with self.assertRaisesRegex(ValueError, "list"):
+            phone.resolve({"urls": ["https://maps.apple.com/guides/?guide=123"]}, self.maps)
+        with self.assertRaisesRegex(ValueError, "list"):
+            phone.resolve({"urls": ["https://www.google.com/maps/@/data=!/lists/abc"]}, self.maps)
+
+    def test_nothing_to_go_on(self):
+        with self.assertRaisesRegex(ValueError, "offline map"):
+            phone.resolve({"text": "see you soon"}, self.maps)
+        with self.assertRaises(ValueError):
+            phone.resolve({}, self.maps)
+
+
 if __name__ == "__main__":
     unittest.main()

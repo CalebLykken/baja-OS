@@ -135,10 +135,26 @@ class ArtCacheTest(unittest.TestCase):
     def test_a_failed_download_leaves_no_broken_file(self):
         fake = mock.MagicMock()
         fake.__enter__.return_value.read.side_effect = OSError("connection dropped")
-        with mock.patch.object(hub.urllib.request, "urlopen", return_value=fake):
+        with mock.patch.object(hub.urllib.request, "urlopen", return_value=fake), \
+                mock.patch.object(hub.retry.time, "sleep"):
             with self.assertRaises(OSError):
                 hub.cached_art("https://i.scdn.co/image/def")
         self.assertEqual(self.names(), [])
+
+    def test_a_429_on_a_cover_is_retried_after_the_wait(self):
+        import email.message
+        import urllib.error
+        headers = email.message.Message()
+        headers["Retry-After"] = "2"
+        limited = urllib.error.HTTPError("https://i.scdn.co/", 429, "slow down", headers, None)
+        fake = mock.MagicMock()
+        fake.__enter__.return_value.read.return_value = b"img"
+        with mock.patch.object(hub.urllib.request, "urlopen", side_effect=[limited, fake]) as get, \
+                mock.patch.object(hub.retry.time, "sleep") as sleep:
+            got = hub.cached_art("https://i.scdn.co/image/r429")
+        self.assertEqual(Path(QUrl(got).toLocalFile()).read_bytes(), b"img")
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_called_once_with(2.0)
 
     def test_the_card_is_a_whole_png_in_the_cache_and_reused(self):
         src = png(self.tmp / "cover.png")

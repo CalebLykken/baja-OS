@@ -10,17 +10,19 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import traceback
 from glob import glob
 from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
 POWER_TIMEOUT_S = 10    # systemctl answers at once, either way
+POWER_HOLD_S = 30       # an update's merge is seconds; the key-off relay holds for minutes
 
 
 def _read(path):
@@ -113,13 +115,14 @@ def power(action):
 
 
 def can_power():
+    """Whether logind will reboot for us, or None if it didn't answer."""
     try:
         out = subprocess.run(["busctl", "--system", "call", "org.freedesktop.login1",
                               "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
                               "CanReboot"], capture_output=True, text=True, timeout=2).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
-    return '"yes"' in out
+        return None
+    return '"yes"' in out if out else None
 
 
 class SystemInfo(QObject):
@@ -131,11 +134,16 @@ class SystemInfo(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._v = {"temp": None, "fan": None, "power": "", "memUsed": 0, "memTotal": 0,
-                   "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False}
+                   "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False,
+                   "errors": 0}
         self._version = version_text()
         self._busy = False
+        self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
         self._read_error = ""      # the error the last reading died of, while it keeps happening
         self._power_error = ""
+        self._hold = lambda: False  # True while reboot and shut down should wait
+        self._held = None           # (action, give up then) while one's waiting
+        self._hold_timer = QTimer(self, interval=500, timeout=self._held_tick)
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
@@ -153,12 +161,15 @@ class SystemInfo(QObject):
             v = {}       # stays empty if a reading crashes, and _apply keeps the old values
             try:
                 used, total = memory_mb()
+                if self._can_power is None:
+                    self._can_power = can_power()
                 disk = shutil.disk_usage("/")
                 v = {
                     "temp": cpu_temp(), "fan": fan_rpm(), "power": power_state(),
                     "memUsed": used, "memTotal": total,
                     "diskFree": disk.free / 1e9, "diskTotal": disk.total / 1e9,
-                    "uptime": uptime_text(), "canPower": can_power(),
+                    "uptime": uptime_text(), "canPower": bool(self._can_power),
+                    "errors": errorlog.log.count(),
                 }
                 self._logged()
             except Exception as e:
@@ -218,6 +229,11 @@ class SystemInfo(QObject):
     def uptime(self):
         return self._v["uptime"]
 
+    @pyqtProperty(int, notify=changed)
+    def errors(self):
+        """Uncaught errors since start (main.log_exception), as of the last check."""
+        return self._v["errors"]
+
     @pyqtProperty(str, constant=True)
     def version(self):
         return self._version
@@ -237,11 +253,33 @@ class SystemInfo(QObject):
         """Why the last reboot or shut down didn't happen, else ''."""
         return self._power_error
 
+    def hold_power_while(self, busy):
+        """Reboot and shut down wait while busy() is True, for at most
+        POWER_HOLD_S: key-off has the relay's hold time to finish in, and
+        what's cut off is put right on the next start (deploy/update-guard.sh)."""
+        self._hold = busy
+
+    def _held_tick(self):
+        action, until = self._held
+        if not self._hold() or time.monotonic() >= until:
+            self._hold_timer.stop()
+            self._held = None
+            self._run_power(action)
+
     def _power(self, action):
-        # On a worker thread: logind can take a moment to say no.
         if self._power_error:
             self._power_error = ""
             self.changed.emit()
+        if self._hold():
+            until = self._held[1] if self._held else time.monotonic() + POWER_HOLD_S
+            self._held = (action, until)
+            self._hold_timer.start()
+            print(f"System: {action} waits for the update, {POWER_HOLD_S} s at most", flush=True)
+            return
+        self._run_power(action)
+
+    def _run_power(self, action):
+        # On a worker thread: logind can take a moment to say no.
         threading.Thread(target=lambda: safe_emit(self, "_power_done", power(action)),
                          daemon=True).start()
 

@@ -41,6 +41,7 @@ from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
 from backend.phone import PhoneSend
+from backend.powerlog import PowerLog
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
 from backend.system import SystemInfo
@@ -185,6 +186,9 @@ def main():
     phone = PhoneSend(args.maps_dir)
     wifi = Wifi(settings)
     system = SystemInfo()
+    # Power and screen trouble, written down for reading afterwards.
+    power_log = PowerLog()
+    obd.voltage.connect(power_log.battery)
     # A simulated drive around Seattle while there's no GPS receiver and no
     # engine data (a Mac, or a Pi on the bench).
     gps = Gps(vehicle, demo=True)
@@ -210,6 +214,7 @@ def main():
     ctx.setContextProperty("eq", eq)
     ctx.setContextProperty("wifi", wifi)
     ctx.setContextProperty("system", system)
+    ctx.setContextProperty("powerLog", power_log)
     ctx.setContextProperty("keyOff", key_off)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
@@ -236,6 +241,7 @@ def main():
     eq.start()
     wifi.start()
     system.start()
+    power_log.start()
     gps.start()
     routing.start()
     road.start()
@@ -251,7 +257,7 @@ def main():
     code = app.exec()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, gps, routing, voice, phone, road, knob, obd, key_off):
+    for obj in (vehicle, local, bluetooth, spotify, media, display, network, maps, eq, wifi, system, power_log, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

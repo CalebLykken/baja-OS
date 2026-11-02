@@ -777,6 +777,13 @@ Item {
                     color: system.power !== "" ? Theme.warn : Theme.textDim
                     text: system.power !== "" ? system.power : "Power supply and temperature are fine"
                 }
+                Label {
+                    Layout.fillWidth: true
+                    visible: powerLog.supply >= 0
+                    font.pixelSize: Theme.fontBody
+                    color: powerLog.lowest < 4.8 ? Theme.warn : Theme.textDim
+                    text: "Pi supply " + powerLog.supply.toFixed(2) + " V, lowest " + powerLog.lowest.toFixed(2) + " V"
+                }
             }
 
             Section {

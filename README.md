@@ -78,6 +78,7 @@ backend/voice.py     spoken directions with Piper, music dipping underneath
 backend/phone.py     "Send to Baja": a destination from the phone
 backend/eq.py        the 5-band equalizer (a PipeWire filter, set live)
 backend/wifi.py      Wi-Fi networks and Bluetooth tethering (NetworkManager)
+backend/powerlog.py  flight recorder for power and screen trouble
 backend/system.py    temperature, fan, power warnings, restart and power
 backend/ignition.py  shuts the Pi down once the truck is off (the car goes quiet on the OBD adapter)
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
@@ -279,6 +280,23 @@ there, otherwise add them at the end), save and quit (in nano: Ctrl-O,
 Enter, Ctrl-X), then `sudo reboot`. Afterwards `rpi-eeprom-config` lists
 both, and Settings > System shouldn't show a power warning with everything
 running.
+
+#### Chasing power trouble
+
+Settings > System shows the Pi's 5 V input now and the lowest it's been since
+the dashboard started. `backend/powerlog.py` keeps a log of it for each boot,
+with the power flags, the car's battery, and every drop of the HDMI link or
+USB device, so a problem on the road can be read about at home. The newest log:
+
+```bash
+ssh baja.local 'cd ~/.local/share/baja-os/power && tail -n 200 "$(ls -t | head -1)"'
+```
+
+Only what changed (`EVENT` lines), from the newest log:
+
+```bash
+ssh baja.local 'cd ~/.local/share/baja-os/power && grep EVENT "$(ls -t | head -1)"'
+```
 
 ## Engine data (OBD-II)
 

@@ -774,6 +774,7 @@ Item {
                 }
             }
             Section {
+                id: gpsSection
                 Layout.fillWidth: true
                 heading: "GPS"
                 readonly property bool has: typeof gps !== "undefined"
@@ -782,13 +783,13 @@ Item {
                     Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         width: 14; height: 14; radius: 7
-                        color: !parent.parent.has ? Theme.textDim
+                        color: !gpsSection.has ? Theme.textDim
                                : gps.realFix ? Theme.ok
                                : gps.receiverConnected ? Theme.accent : Theme.textDim
                     }
                     Label {
                         font.pixelSize: Theme.fontBody
-                        text: !parent.parent.has ? "Not available"
+                        text: !gpsSection.has ? "Not available"
                               : gps.realFix ? "Position found" + (gps.satellites > 0 ? ", " + gps.satellites + " satellites" : "")
                               : gps.stale && gps.receiverConnected ? "Lost the signal"
                               : gps.receiverConnected ? "Looking for satellites" + (gps.satellitesInView > 0 ? ": " + gps.satellitesInView + " in view" : "")
@@ -796,7 +797,7 @@ Item {
                     }
                 }
                 Note {
-                    text: !parent.has ? ""
+                    text: !gpsSection.has ? ""
                           : gps.realFix ? "The map and directions follow the truck's real position."
                           : gps.stale ? "The map holds the truck's last position, and directions wait, until the receiver has a position again."
                           : (gps.receiverConnected ? "The receiver needs a view of the sky: on the dash or by a window, not deep indoors. The first fix can take a minute or two."

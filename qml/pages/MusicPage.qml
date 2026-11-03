@@ -9,7 +9,9 @@ import "../components"
 // - Right: three tabs. Up next (Spotify's queue, or the Pi's songs playing
 //   through); Albums (the Pi's own music by album: open one to play it, or
 //   a song in it); Spotify (albums and playlists played here recently, one
-//   tap to play again).
+//   tap to play again; your playlists, albums and Liked Songs once linked by
+//   a QR code; and the search key, which types over the bottom of the page
+//   like Maps).
 // - While navigating, the next turn sits on top of the right side; tap it
 //   for Maps.
 Item {
@@ -21,7 +23,14 @@ Item {
     property string tab: "next"                // "next", "albums" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
     property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
-    onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1 }
+    property bool searchOpen: false            // the Spotify tab shows search rather than recents
+    property string spotifyView: "recent"      // "recent", "playlists", "albums" or "liked"
+    readonly property bool hasAccount: typeof spotifyAccount !== "undefined"
+    readonly property bool libraryView: spotifyView !== "recent"
+    readonly property bool needsLink: libraryView && hasAccount && !spotifyAccount.linked
+    property bool typing: false                // the keyboard is up
+    property string query: ""
+    onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1; closeSearch() }
     Connections {
         target: media
         function onAlbumsChanged() {
@@ -41,6 +50,16 @@ Item {
     // Only while Spotify is what's playing or being looked at.
     readonly property string spotifyError: typeof spotify !== "undefined"
                                            && (media.source === "spotify" || page.tab === "spotify") ? spotify.error : ""
+
+    function closeSearch() {
+        searchOpen = typing = false
+        query = ""
+        if (typeof spotifySearch !== "undefined") spotifySearch.clear()
+    }
+    function runSearch() {
+        typing = false
+        spotifySearch.search(query)
+    }
 
     function mmss(s) {
         var m = Math.floor(s / 60), r = s % 60
@@ -69,7 +88,7 @@ Item {
                     Layout.fillWidth: true
                     SourceBadge {}
                     Item { Layout.fillWidth: true }
-                    // The Pi's own music only: Spotify and the phone have no way to set these from here.
+                    // The Pi's own music and Spotify: the phone has no way to set these from here.
                     IconButton {
                         visible: media.hasModes
                         icon: "shuffle"
@@ -239,7 +258,7 @@ Item {
                           { label: "Albums", value: "albums" },
                           { label: "Spotify", value: "spotify" }]
                 current: page.tab
-                onPicked: (v) => { page.tab = v; page.openAlbum = -1; page.eqOpen = false }
+                onPicked: (v) => { page.tab = v; page.openAlbum = -1; page.eqOpen = false; page.closeSearch() }
             }
 
             Card {
@@ -252,7 +271,7 @@ Item {
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
                                                   : "All songs on this Pi")
                          : page.tab === "albums" ? (page.openAlbum >= 0 ? "" : "Albums on this Pi")
-                         : "Played here recently"
+                         : ""
 
                 // ---- Up next ------------------------------------------------
                 ListView {
@@ -403,15 +422,28 @@ Item {
                 }
 
                 // ---- Spotify: played here recently --------------------------
+                SegmentedControl {
+                    id: spotifyViews
+                    visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
+                    anchors { left: parent.left; right: searchKey.left; top: parent.top; margins: 12 }
+                    height: 56
+                    stretch: true
+                    options: [{ label: "Recent", value: "recent" }, { label: "Playlists", value: "playlists" },
+                              { label: "Albums", value: "albums" }, { label: "Liked", value: "liked" }]
+                    current: page.spotifyView
+                    onPicked: (v) => page.spotifyView = v
+                }
                 GridView {
                     id: spotifyGrid
-                    visible: page.tab === "spotify" && !page.eqOpen
-                    anchors { fill: parent; margins: 14; topMargin: 56 }
+                    visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
+                             && !page.needsLink && page.spotifyView !== "liked"
+                    anchors { fill: parent; margins: 14; topMargin: 80 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 3)
                     cellHeight: cellWidth + 74
-                    model: media.spotifyRecents
+                    model: page.spotifyView === "recent" || !page.hasAccount ? media.spotifyRecents
+                           : page.spotifyView === "playlists" ? spotifyAccount.playlists : spotifyAccount.albums
                     delegate: CoverTile {
                         width: spotifyGrid.cellWidth
                         height: spotifyGrid.cellHeight
@@ -419,19 +451,158 @@ Item {
                         placeholder: modelData.kind === "playlist" ? "queue" : "album"
                         title: modelData.title
                         subtitle: modelData.subtitle
-                        current: index === 0 && media.source === "spotify" && media.playing
+                        current: page.spotifyView === "recent" && index === 0 && media.source === "spotify" && media.playing
                         onHit: media.playSpotify(modelData.uri)
                     }
                     Label {
                         visible: spotifyGrid.count === 0
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        text: !page.hasSpotify ? "Spotify isn't running on the Pi right now."
+                        text: !page.hasSpotify || !spotify.linked ? spotify.statusText + "."
+                              : page.libraryView ? (spotifyAccount.loading ? "Reading your library..."
+                                                    : spotifyAccount.message || "Nothing here yet.")
                               : "Albums and playlists you play here through Spotify show up here. "
                                 + "In the Spotify app on your phone, pick " + (spotify.deviceName || "this Pi")
                                 + " as the speaker and play something."
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
+                    }
+                }
+
+                // ---- Spotify: Liked Songs -----------------------------------
+                ListView {
+                    id: likedList
+                    visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
+                             && !page.needsLink && page.spotifyView === "liked"
+                    anchors { fill: parent; margins: 12; topMargin: 80 }
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: page.hasAccount ? spotifyAccount.songs : []
+                    delegate: ResultRow {
+                        width: likedList.width
+                        art: modelData.art
+                        kind: modelData.kind
+                        title: modelData.title
+                        subtitle: modelData.subtitle
+                        // This song, then the ones after it.
+                        onHit: media.playSpotifyTracks(spotifyAccount.songs.slice(index, index + 20).map((s) => s.uri))
+                        onQueued: media.queueSpotify(modelData.uri)
+                    }
+                    Label {
+                        visible: likedList.count === 0
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: !page.hasAccount ? "" : spotifyAccount.loading ? "Reading your library..."
+                              : spotifyAccount.message || "No Liked Songs yet."
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                    }
+                }
+
+                // ---- Spotify: linking your library --------------------------
+                ColumnLayout {
+                    id: linkView
+                    visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen && page.needsLink
+                    anchors { fill: parent; margins: 20; topMargin: 84 }
+                    spacing: 14
+                    readonly property string url: page.hasAccount ? spotifyAccount.linkUrl : ""
+                    readonly property string ip: typeof network !== "undefined" ? network.ip : ""
+                    onVisibleChanged: if (!visible && page.hasAccount) Qt.callLater(spotifyAccount.cancelLink)
+                    Image {
+                        visible: linkView.url !== ""
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 300
+                        Layout.preferredHeight: 300
+                        source: linkView.visible && typeof phone !== "undefined" ? phone.qrFor(linkView.url) : ""
+                        smooth: false
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                        color: page.hasAccount && spotifyAccount.message !== "" ? Theme.warn : Theme.textDim
+                        font.pixelSize: Theme.fontBody
+                        text: !page.hasAccount ? ""
+                              : !spotifyAccount.available ? "This needs a Spotify app on this Pi: run deploy/spotify/set-spotify-search.sh."
+                              : spotifyAccount.message !== "" ? spotifyAccount.message
+                              : linkView.url !== "" ? "Scan this with your phone, on the same Wi-Fi or hotspot as the truck, and sign in. You only do this once."
+                              : "Link your Spotify account to see your playlists, albums and Liked Songs here. You only do this once."
+                    }
+                    TextButton {
+                        visible: page.hasAccount && spotifyAccount.available && linkView.url === ""
+                        Layout.alignment: Qt.AlignHCenter
+                        implicitWidth: 300
+                        text: linkView.ip !== "" ? "Link Spotify" : "Connect to Wi-Fi first"
+                        primary: true
+                        enabled: linkView.ip !== ""
+                        onClicked: spotifyAccount.startLink(linkView.ip, phone.port)
+                    }
+                    Item { Layout.fillHeight: true }
+                }
+
+                IconButton {
+                    id: searchKey
+                    visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
+                    anchors { right: parent.right; top: parent.top; margins: 12 }
+                    icon: "search"
+                    size: 56
+                    onClicked: { page.searchOpen = page.typing = true }
+                }
+
+                // ---- Spotify: search ----------------------------------------
+                Item {
+                    id: searchView
+                    visible: page.tab === "spotify" && !page.eqOpen && page.searchOpen
+                    anchors { fill: parent; margins: 12 }
+                    readonly property bool ready: typeof spotifySearch !== "undefined" && spotifySearch.available
+
+                    RowLayout {
+                        id: searchHead
+                        anchors { left: parent.left; right: parent.right; top: parent.top }
+                        spacing: 12
+                        IconButton { icon: "back"; size: 64; onClicked: page.closeSearch() }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 64
+                            radius: Theme.radius
+                            color: Theme.panelHi
+                            border.width: Theme.border
+                            border.color: page.typing ? Theme.accent : Theme.line
+                            Label {
+                                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 16; rightMargin: 16 }
+                                text: page.query !== "" ? page.query : "Search Spotify"
+                                color: page.query !== "" ? Theme.text : Theme.textDim
+                                font.pixelSize: Theme.fontBody
+                                elide: Text.ElideLeft
+                            }
+                            TapHandler { onTapped: page.typing = true }
+                        }
+                    }
+                    ListView {
+                        id: resultList
+                        anchors { left: parent.left; right: parent.right; top: searchHead.bottom; bottom: parent.bottom; topMargin: 10 }
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: searchView.ready ? spotifySearch.results : []
+                        delegate: ResultRow {
+                            width: resultList.width
+                            art: modelData.art
+                            kind: modelData.kind
+                            title: modelData.title
+                            subtitle: modelData.subtitle
+                            onHit: media.playSpotify(modelData.uri)
+                            onQueued: media.queueSpotify(modelData.uri)
+                        }
+                        Label {
+                            visible: resultList.count === 0
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            text: !searchView.ready ? "Search needs a Spotify app on this Pi: run deploy/spotify/set-spotify-search.sh."
+                                  : spotifySearch.searching ? "Searching..."
+                                  : spotifySearch.message
+                            color: Theme.textDim
+                            font.pixelSize: Theme.fontBody
+                        }
                     }
                 }
 
@@ -449,6 +620,18 @@ Item {
                 }
             }
         }
+    }
+
+    // Typing a Spotify search: the keyboard across the bottom, as on Maps.
+    Keyboard {
+        visible: page.typing
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 16 }
+        height: 340
+        doneLabel: "Search"
+        doneEnabled: page.query.trim() !== ""
+        onTyped: (ch) => page.query += ch
+        onBackspace: page.query = page.query.slice(0, -1)
+        onDone: page.runSearch()
     }
 
     // ---- small parts ------------------------------------------------------
@@ -517,6 +700,54 @@ Item {
             }
         }
         TapHandler { id: tileTap; onTapped: tile.hit() }
+    }
+
+    // A Spotify search result: tap to play; songs can also go in the queue.
+    component ResultRow: Rectangle {
+        id: result
+        property string art
+        property string kind
+        property string title
+        property string subtitle
+        signal hit()
+        signal queued()
+        height: 92
+        radius: Theme.radius
+        color: resultTap.pressed ? Theme.panelHi : "transparent"
+        TapHandler { id: resultTap; onTapped: result.hit() }
+        RowLayout {
+            anchors { fill: parent; leftMargin: 6; rightMargin: 6 }
+            spacing: 14
+            Cover {
+                Layout.preferredWidth: 72
+                Layout.preferredHeight: 72
+                art: result.art
+                placeholder: result.kind === "track" ? "music" : result.kind === "playlist" ? "queue" : "album"
+            }
+            Column {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 1            // take what's left, not the title's length
+                Label {
+                    width: parent.width
+                    text: result.title
+                    font.pixelSize: Theme.fontBody
+                    elide: Text.ElideRight
+                }
+                Label {
+                    width: parent.width
+                    text: result.subtitle
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
+                    elide: Text.ElideRight
+                }
+            }
+            IconButton {
+                visible: result.kind === "track"
+                icon: "add"
+                size: 60
+                onClicked: result.queued()
+            }
+        }
     }
 
     // A song in a list: its number (or a playing mark), title, and a second

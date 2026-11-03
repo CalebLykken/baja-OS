@@ -45,6 +45,8 @@ from backend.phone import PhoneSend
 from backend.datause import DataUse
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
+from backend.spotifyaccount import SpotifyAccount
+from backend.spotifysearch import SpotifySearch
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
 from backend.updater import Updater
@@ -154,7 +156,9 @@ def main():
     obd.codes.connect(vehicle.apply_codes)
     # Local music, the phone (Bluetooth) and Spotify behind one `media` object.
     bluetooth = BluetoothAudio(settings=settings)
-    spotify = SpotifyPlayer()
+    spotify = SpotifyPlayer(settings=settings)
+    spotify_search = SpotifySearch()
+    spotify_account = SpotifyAccount(settings)
     # Spotify albums and playlists played here, kept between runs.
     try:
         spotify.load_recents(json.loads(str(settings.get("spotifyRecents", "[]"))))
@@ -188,9 +192,12 @@ def main():
     # until the GPS has a position).
     display = Display(settings, location=lambda: (gps.lat, gps.lon) if gps.hasFix else (47.6062, -122.3321))
     network = Network()
+    network.changed.connect(lambda: spotify.set_network(network.online, network.ip))
+    network.changed.connect(lambda: spotify_account.set_online(network.online))
     maps = MapService(args.maps_dir, web_engine)
     eq = Equalizer(settings)
     phone = PhoneSend(args.maps_dir)
+    phone.spotify = spotify_account
     wifi = Wifi(settings)
     datause = DataUse(settings)
     system = SystemInfo()
@@ -215,6 +222,8 @@ def main():
     ctx.setContextProperty("media", media)
     ctx.setContextProperty("bluetooth", bluetooth)
     ctx.setContextProperty("spotify", spotify)
+    ctx.setContextProperty("spotifySearch", spotify_search)
+    ctx.setContextProperty("spotifyAccount", spotify_account)
     ctx.setContextProperty("display", display)
     ctx.setContextProperty("network", network)
     ctx.setContextProperty("maps", maps)
@@ -258,6 +267,7 @@ def main():
     display.start()
     phone.start()
     network.start()
+    spotify_account.start()
     knob.start()
     obd.start()
     key_off.start()
@@ -271,7 +281,7 @@ def main():
         scanner.stop()
     # Background threads (Spotify, Bluetooth, art) can still signal while
     # Python tears objects down; a signal into a deleted object would abort.
-    for obj in (vehicle, local, scanner or local, bluetooth, spotify, media, display, network, maps, eq, wifi, datause, system, updater, gps, routing, voice, phone, road, knob, obd, key_off):
+    for obj in (vehicle, local, scanner or local, bluetooth, spotify, spotify_search, spotify_account, media, display, network, maps, eq, wifi, datause, system, updater, gps, routing, voice, phone, road, knob, obd, key_off):
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine

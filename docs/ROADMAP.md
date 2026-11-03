@@ -142,12 +142,14 @@ phone locked; the dashboard controls work; it comes back after a reboot.
 
 - **Browse through the player where possible:** playlists, Liked Songs, albums
   and the current context. This avoids most of the Web API's 2026 limits.
-- **Spotify Web API only for search:**
+- **Spotify Web API only for search** (search itself is done, with an app token
+  and no sign-in; the sign-in below is for your own library):
   - Developer-mode limits: the app owner needs Premium; up to 5 users; 10
     search results per page; playlist track lists only for playlists you own or
     collaborate on. Followed playlists still play by their link.
   - Respect rate limits and back off when Spotify says so.
-- **Sign-in on the Pi** with a QR code (loopback redirect rules permitting).
+- **Sign-in with a QR code,** done on the phone through a small public https page
+  that hands the result to the Pi, since Spotify only redirects to https or loopback.
   Spotify sign-ins expire after 6 months; the dashboard warns ahead of time and
   re-links from the dashboard.
 

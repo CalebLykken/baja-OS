@@ -11,11 +11,22 @@ keeps retrying quietly, and the rest of the dashboard carries on.
 
 Soloist can't list your Spotify history or library, so `recents` is kept
 here: the albums and playlists that have played on the Pi (from the
-playback context it reports), newest first, for one-tap replay.
+playback context it reports), newest first, for one-tap replay. Searching
+is the Spotify Web API's job: backend/spotifysearch.py.
+
+Soloist restores its saved sign-in once, at startup, and doesn't try again,
+so if the connection drops or moves (a dead zone, home Wi-Fi to the hotspot)
+it can sit signed out while the phone hangs on "Connecting to Baja". `main.py`
+passes the network's state to `set_network`, and a slow check restarts Soloist
+when it's stuck like that, never over playing music, and only on a Pi that
+has paired before: a restart mid-pairing would lose it.
 """
 
 import json
+import subprocess
+import threading
 import time
+from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
@@ -27,6 +38,17 @@ except ImportError:          # python3-pyqt6.qtwebsockets not installed
 DEFAULT_URL = "ws://127.0.0.1:47240"
 RETRY_MS = 3000
 RECENTS_MAX = 12
+ACTIVATE_WAIT_MS = 2000      # play anyway if Soloist hasn't said it's the active device by then
+RESUME_WAIT_MS = 4000        # Spotify had nothing to carry on with: play the saved album instead
+CHECK_EVERY_MS = 5000
+SETTLE_S = 20                # a just-started Soloist gets this long to sign in
+REVIVE_MIN_S = 60            # between restarts, doubling up to the max while they don't help
+REVIVE_MAX_S = 600
+SERVICE = "baja-soloist.service"
+SOLOIST_BIN = Path("~/.local/opt/soloist/soloist").expanduser()    # deploy/spotify/
+SOLOIST_ENV = Path("~/.config/baja-os/soloist.env").expanduser()
+PAIRED_SETTING = "spotifyPaired"
+REPEAT_WORDS = {"off": "off", "context": "all", "track": "one"}    # Soloist's, the dashboard's
 KIND_WORDS = {"playlist": "Playlist", "artist": "Artist", "show": "Podcast",
               "collection": "Liked Songs", "station": "Radio"}
 NUMBER = (int, float)
@@ -77,10 +99,12 @@ class SpotifyPlayer(QObject):
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
+    modesChanged = pyqtSignal()
 
-    def __init__(self, url=DEFAULT_URL, parent=None):
+    def __init__(self, url=DEFAULT_URL, settings=None, parent=None):
         super().__init__(parent)
         self._url = url
+        self._settings = settings
         self._connected = False
         self._logged_in = False
         self._active = False
@@ -92,6 +116,19 @@ class SpotifyPlayer(QObject):
         self._volume = 0
         self._up_next = []
         self._recents = []          # [{uri, kind, title, subtitle, art}], newest first
+        self._context_uri = ""      # the album or playlist playing
+        self._shuffle = False
+        self._repeat = "off"        # Soloist's word for it: off, context or track
+        self._pending = None        # what to play once this Pi is the active device
+        self._fallback = ""         # what to play if resuming finds nothing to carry on with
+        self._then = []             # songs to queue once the next play has gone
+        self._online = None         # None until the network's first check
+        self._address = ""
+        self._moved_at = 0.0        # when the connection last came back or changed
+        self._connected_at = 0.0    # when the socket to Soloist last opened
+        self._paired = str(settings.get(PAIRED_SETTING, "false")) == "true" if settings else False
+        self._next_revive = 0.0
+        self._revive_gap = REVIVE_MIN_S
 
         self._ws = QWebSocket() if QWebSocket else None
         self._retry = QTimer(self)
@@ -100,6 +137,11 @@ class SpotifyPlayer(QObject):
         self._tick = QTimer(self)
         self._tick.setInterval(1000)
         self._tick.timeout.connect(lambda: self.playing and self.positionChanged.emit())
+        self._pending_timer = QTimer(self, singleShot=True, interval=ACTIVATE_WAIT_MS,
+                                     timeout=self._send_pending)
+        self._fallback_timer = QTimer(self, singleShot=True, interval=RESUME_WAIT_MS,
+                                      timeout=self._play_fallback)
+        self._check_timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check_session)
         if self._ws:
             self._ws.connected.connect(self._on_connected)
             self._ws.disconnected.connect(self._on_disconnected)
@@ -109,6 +151,7 @@ class SpotifyPlayer(QObject):
         if self._ws:
             self._open()
             self._tick.start()
+            self._check_timer.start()
 
     # ---- socket -----------------------------------------------------------
     def _open(self):
@@ -116,6 +159,7 @@ class SpotifyPlayer(QObject):
 
     def _on_connected(self):
         self._connected = True
+        self._connected_at = time.monotonic()
         self._send({"type": "command", "command": "get_auth_state"})
         self.changed.emit()
 
@@ -123,6 +167,9 @@ class SpotifyPlayer(QObject):
         was = self._connected
         self._connected = self._logged_in = self._active = False
         self._status = "idle"
+        self._error = ""
+        self._pending = None
+        self._pending_timer.stop()
         if was:
             self.changed.emit()
             self.playingChanged.emit()
@@ -150,10 +197,13 @@ class SpotifyPlayer(QObject):
     def _handle(self, ev, kind):
         if kind == "auth_state":
             self._logged_in = bool(ev.get("logged_in"))
-            self._active = bool(ev.get("is_active"))
             self._device = _get(ev, "device_name", want=str) or self._device
-            self.changed.emit()
             if self._logged_in:
+                self._signed_in()
+            self.changed.emit()
+            self._set_active(bool(ev.get("is_active")))
+            if self._logged_in:
+                self._command("get_state")       # Soloist only volunteers auth_state on connect
                 self._command("get_queue", limit=10)
         elif kind == "playback_state":
             self._note_context(ev.get("context"))
@@ -162,6 +212,7 @@ class SpotifyPlayer(QObject):
             self._set_position(_get(ev, "position"))
             self._set_volume(ev.get("volume"))
             self._set_active(ev.get("is_active"))
+            self._set_options(ev.get("options"))
         elif kind == "track_changed":
             self._set_item(ev.get("item"))
         elif kind == "context_changed":
@@ -172,6 +223,8 @@ class SpotifyPlayer(QObject):
             self._set_position(_get(ev, "position"))
         elif kind == "volume_changed":
             self._set_volume(ev.get("volume"))
+        elif kind == "options_changed":
+            self._set_options(ev.get("options"))
         elif kind == "device_changed":
             self._device = _get(ev, "device_name", want=str) or self._device
             self._set_active(ev.get("is_active"))
@@ -181,7 +234,8 @@ class SpotifyPlayer(QObject):
             self.queueChanged.emit()
         elif kind == "error":
             print(f"Spotify: {ev.get('message')}")
-            self._error = "Spotify isn't answering right now"
+            signing_in = "authentication" in _get(ev, "message", want=str).lower()
+            self._error = "Spotify is still connecting" if signing_in else "Spotify isn't answering right now"
             self.changed.emit()
 
     def _set_item(self, item):
@@ -198,6 +252,7 @@ class SpotifyPlayer(QObject):
     def _note_context(self, ctx):
         """Put what's playing (an album or playlist) first in `recents`."""
         uri, name = _get(ctx, "uri", want=str), _name(ctx)
+        self._context_uri = uri or self._context_uri
         if not uri or not name:
             return
         kind = _get(ctx, "entity_type", want=str) or (uri.split(":") + [""])[1]
@@ -265,6 +320,64 @@ class SpotifyPlayer(QObject):
         if active is not None and bool(active) != self._active:
             self._active = bool(active)
             self.changed.emit()
+            self.playingChanged.emit()     # `playing` needs this too, and "playing" can come first
+            self.modesChanged.emit()
+            if self._active:
+                self._send_pending()
+
+    def _set_options(self, options):
+        if not isinstance(options, dict):
+            return
+        shuffle, repeat = _get(options, "shuffle", want=bool), _get(options, "repeat", want=str)
+        new = (shuffle if "shuffle" in options else self._shuffle,
+               repeat if repeat in REPEAT_WORDS else self._repeat)
+        if new != (self._shuffle, self._repeat):
+            self._shuffle, self._repeat = new
+            self.modesChanged.emit()
+
+    def _signed_in(self):
+        self._clear_error()
+        self._revive_gap = REVIVE_MIN_S
+        if not self._paired:
+            self._paired = True
+            if self._settings:
+                self._settings.set(PAIRED_SETTING, "true")
+
+    # ---- staying signed in ------------------------------------------------
+    def set_network(self, online, address):
+        """Tell it about the connection (from backend/network.py)."""
+        came_back = online and self._online is False
+        moved = bool(self._address and address and address != self._address)
+        if came_back or moved:
+            self._moved_at = time.monotonic()
+        self._address = address or self._address
+        if online != self._online:
+            self._online = online
+            self.changed.emit()
+
+    def _check_session(self):
+        """Restart Soloist if it's signed out while online, or if the
+        connection has moved under it since it started."""
+        now = time.monotonic()
+        up = now - self._connected_at
+        moved = self._moved_at - self._connected_at > SETTLE_S
+        stuck = not self._logged_in and up > SETTLE_S
+        if (not (self._connected and self._online and self._paired) or not (moved or stuck)
+                or (self._status == "playing" and self._active) or now < self._next_revive):
+            return
+        self._moved_at = 0.0
+        self._next_revive = now + self._revive_gap
+        self._revive_gap = min(REVIVE_MAX_S, self._revive_gap * 2)
+        print("Spotify: restarting Soloist so it signs in on this connection", flush=True)
+        threading.Thread(target=self._restart_soloist, daemon=True).start()
+
+    @staticmethod
+    def _restart_soloist():
+        try:
+            subprocess.run(["systemctl", "--user", "--no-block", "restart", SERVICE],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"Spotify: couldn't restart Soloist ({e})", flush=True)
 
     # ---- properties -------------------------------------------------------
     @pyqtProperty(bool, notify=changed)
@@ -276,6 +389,22 @@ class SpotifyPlayer(QObject):
     def linked(self):
         """A Spotify account is paired with the player."""
         return self._logged_in
+
+    @pyqtProperty(str, notify=changed)
+    def statusText(self):
+        """Where Spotify is up to, in a few plain words."""
+        name = self._device or "Baja"
+        if not SOLOIST_BIN.exists():
+            return "Not set up on this Pi"
+        if not SOLOIST_ENV.exists():
+            return "Needs its key: run deploy/spotify/set-spotify-key.sh on the Pi"
+        if not self._connected:
+            return ("Waiting for internet: it starts once the phone's hotspot connects"
+                    if self._online is False else "Starting Spotify")
+        if not self._logged_in:
+            return ("Reconnecting to Spotify" if self._paired
+                    else f"Pick {name} in the Spotify app, with the phone on the same Wi-Fi as the Pi")
+        return f"Connected as {name}"
 
     @pyqtProperty(bool, notify=changed)
     def active(self):
@@ -326,6 +455,25 @@ class SpotifyPlayer(QObject):
     def volume(self):
         return self._volume
 
+    @property
+    def resumeUri(self):
+        """The album or playlist playing, or the song if it's in neither."""
+        return self._context_uri or _get(self._item, "uri", want=str)
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def hasModes(self):
+        """Shuffle and repeat can be set: this Pi is the active device."""
+        return self._connected and self._active
+
+    @pyqtProperty(bool, notify=modesChanged)
+    def shuffle(self):
+        return self._shuffle
+
+    @pyqtProperty(str, notify=modesChanged)
+    def repeat(self):
+        """'off', 'all' or 'one', as for the Pi's own music."""
+        return REPEAT_WORDS[self._repeat]
+
     @pyqtProperty("QVariantList", notify=queueChanged)
     def upNext(self):
         return self._up_next
@@ -374,10 +522,79 @@ class SpotifyPlayer(QObject):
         self._command("set_volume", volume=value)
         self.volumeChanged.emit()
 
+    @pyqtSlot()
+    def toggleShuffle(self):
+        self._shuffle = not self._shuffle
+        self._command("set_shuffle", enabled=self._shuffle)
+        self.modesChanged.emit()
+
+    @pyqtSlot()
+    def cycleRepeat(self):
+        self._repeat = {"off": "context", "context": "track", "track": "off"}[self._repeat]
+        # Soloist's order: the one being turned off first.
+        if self._repeat == "track":
+            self._command("set_repeat_context", enabled=False)
+            self._command("set_repeat_track", enabled=True)
+        else:
+            self._command("set_repeat_track", enabled=False)
+            self._command("set_repeat_context", enabled=self._repeat == "context")
+        self.modesChanged.emit()
+
+    @pyqtSlot("QVariantList")
+    def playTracks(self, uris):
+        """Play the first song and queue the rest: Liked Songs have no URI
+        that Soloist's `play` is documented to take."""
+        if uris:
+            self.playUri(uris[0], uris[1:])
+
     @pyqtSlot(str)
-    def playUri(self, uri):
+    def playUri(self, uri, then=()):
         """Start a track, album, playlist or episode by its spotify: URI
-        (making the Pi the playing device first if it isn't)."""
-        if not self._active:
+        (making the Pi the playing device first if it isn't), then queue the
+        songs in `then`."""
+        if not self._logged_in:
+            self._error = "Spotify is still connecting"
+            self.changed.emit()
+            return
+        self._fallback = ""
+        self._then = list(then)
+        self._start_here({"uri": uri})
+
+    def resume(self, uri=""):
+        """Bring Spotify's session to this Pi and carry on from it, or play
+        `uri` if that finds nothing to carry on with."""
+        self._fallback = uri
+        self._fallback_timer.start()
+        self._start_here({})
+
+    def _start_here(self, fields):
+        if self._active:
+            self._play(fields)
+        else:
+            # Soloist's reply only means it took the command, so wait for the
+            # device to change: a play sent before that can go nowhere.
+            self._pending = fields
+            self._pending_timer.start()
             self._command("activate")
-        self._command("play", uri=uri)
+
+    def _send_pending(self):
+        fields, self._pending = self._pending, None
+        self._pending_timer.stop()
+        if fields is not None:
+            self._play(fields)
+
+    def _play(self, fields):
+        self._command("play", **fields)
+        then, self._then = self._then, []
+        for uri in then:
+            self._command("add_to_queue", uri=uri)
+
+    def _play_fallback(self):
+        uri, self._fallback = self._fallback, ""
+        if uri and self._logged_in and not self.playing:
+            self._start_here({"uri": uri})
+
+    @pyqtSlot(str)
+    def addToQueue(self, uri):
+        """Play a track after this one (Soloist only queues tracks)."""
+        self._command("add_to_queue", uri=uri)

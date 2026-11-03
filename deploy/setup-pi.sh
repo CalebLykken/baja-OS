@@ -99,6 +99,11 @@ sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_ID" \
     systemctl --user restart wireplumber 2>/dev/null || true
 
 echo "== Wi-Fi"
+# Without a country the radio may stay off 5 GHz, where newer iPhones put
+# their hotspot unless Maximize Compatibility is on. WIFI_COUNTRY to change it.
+if command -v raspi-config >/dev/null; then
+    raspi-config nonint do_wifi_country "${WIFI_COUNTRY:-US}" || echo "   couldn't set the Wi-Fi country"
+fi
 # NetworkManager gives up after 4 failed tries by default; a brownout while
 # the USB adapter starts can burn through those. 0 = retry forever.
 nmcli -t -f NAME,TYPE con show | grep ':802-11-wireless$' | cut -d: -f1 |

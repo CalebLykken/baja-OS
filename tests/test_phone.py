@@ -217,6 +217,59 @@ class ServerTest(TempTokenFile):
         self.assertEqual(self.scan(self.svc.token)[0], 303)
 
 
+class FakeAccount:
+    def authorize_url(self, nonce):
+        return "https://accounts.spotify.com/authorize?x=1" if nonce == "good" else ""
+
+    def callback(self, code, state, error):
+        self.got = (code, state, error)
+        return (True, "Linked <ok>") if state == "right" else (False, "Expired")
+
+
+class SpotifyLinkTest(ServerTest):
+    def setUp(self):
+        super().setUp()
+        self.svc.spotify = self.account = FakeAccount()
+
+    def location(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        try:
+            conn.request("GET", path)
+            r = conn.getresponse()
+            r.read()
+            return r.status, r.getheader("Location")
+        finally:
+            conn.close()
+
+    def test_the_code_sends_the_phone_to_spotify(self):
+        self.assertEqual(self.location("/spotify/link?s=good"),
+                         (303, "https://accounts.spotify.com/authorize?x=1"))
+
+    def test_a_wrong_code_is_refused(self):
+        self.assertEqual(self.location("/spotify/link?s=bad"), (403, None))
+
+    def test_the_callback_reaches_the_account_and_escapes_its_answer(self):
+        status, _, body = self.request("GET", "/spotify/callback?code=c&state=right")
+        self.assertEqual(status, 200)
+        self.assertEqual(self.account.got, ("c", "right", ""))
+        self.assertIn("Linked &lt;ok&gt;", body)
+
+    def test_a_forged_callback_is_refused(self):
+        self.assertEqual(self.request("GET", "/spotify/callback?code=c&state=wrong")[0], 403)
+
+    def test_guessing_gets_the_phone_blocked(self):
+        for _ in range(10):
+            self.location("/spotify/link?s=bad")
+        self.assertEqual(self.location("/spotify/link?s=good"), (403, None))
+
+    def test_no_account_wired_up(self):
+        self.svc.spotify = None
+        self.assertEqual(self.location("/spotify/link?s=good"), (403, None))
+
+    def test_the_send_page_still_wants_its_token(self):
+        self.assertEqual(self.request("GET", "/send")[0], 403)
+
+
 class ParseMapUrlTest(unittest.TestCase):
     PIKE = (47.6097, -122.3422)
 

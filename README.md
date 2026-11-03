@@ -68,6 +68,7 @@ backend/library.py   albums and songs in --music-dir (default ~/Music)
 backend/gapless.py   gapless playback of those files, on its own audio thread
 backend/bluetooth.py phone audio over Bluetooth (BlueZ, AVRCP)
 backend/spotify.py   Spotify Connect through Soloist's local API
+backend/spotifysearch.py  searching Spotify through its Web API
 backend/knob.py      the volume knob (EC11 on the GPIO header, libgpiod)
 backend/maps.py      local web server for the offline map, and place search
 backend/places.py    builds and searches the offline place index
@@ -335,8 +336,33 @@ Spotify's official headless player (needs Premium):
 The first time, with your phone on the same Wi-Fi as the Pi, open Spotify,
 tap the devices button on Now Playing, and pick **Baja**. The Pi remembers
 the sign-in. It starts Spotify once it's online, so in the truck it connects
-when the phone's hotspot comes up. The Music page's Spotify tab lists what's
-been played on the Pi recently, for one-tap replay.
+when the phone's hotspot comes up, and it restarts the player by itself if the
+connection drops or moves and leaves it signed out. If Spotify was playing
+when the Pi stopped or lost signal, it carries on once it's back, unless
+something else is playing (Settings > Sound > Spotify turns that off). The
+Music page's Spotify tab lists what's been played on the Pi recently, for
+one-tap replay, and shuffle and repeat work from the dashboard.
+
+To search from the dashboard, make an app at
+[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+with "Web API" ticked (search needs no sign-in, so any redirect URI will do),
+then:
+
+```bash
+./deploy/spotify/set-spotify-search.sh   # paste its Client ID and secret
+```
+
+The search key on the Spotify tab finds songs, albums and playlists: tap to
+play, or + to queue a song.
+
+Your playlists, saved albums and Liked Songs need your account linked, once.
+Add `https://caleblykken.github.io/baja-spotify-link/` to the app's redirect
+URIs, then on the Spotify tab pick Playlists, tap Link Spotify and scan the code
+with your phone, on the same Wi-Fi or hotspot as the Pi. Spotify only returns a
+sign-in to https, so `deploy/spotify/callback/index.html` is published on its
+own to hand it to the Pi, and to change where it lives, change `REDIRECT_URI` in
+`backend/spotifyaccount.py`. The login is saved on the Pi and renews itself;
+the code only comes back if Spotify ends the sign-in. Settings > Sound unlinks it.
 
 ## Equalizer
 
@@ -352,9 +378,12 @@ alike. `setup-pi.sh` installs it; on its own:
 ## Wi-Fi and the phone's hotspot
 
 Settings > Wi-Fi lists nearby networks; tap one and type its password on the
-on-screen keyboard. For an iPhone hotspot, turn on Personal Hotspot and keep
-that screen open while you join. Networks joined this way retry forever, so
-the Pi picks the hotspot up by itself whenever the phone is in the truck. If
+on-screen keyboard. For an iPhone hotspot, turn on Personal Hotspot and
+Maximize Compatibility, and keep that screen open while you join. Networks
+joined this way retry forever, and the Pi scans every few seconds while it has
+no Wi-Fi, so it picks the hotspot up by itself whenever the phone is in the
+truck. `setup-pi.sh` sets the Wi-Fi country to the US, for 5 GHz; set
+`WIFI_COUNTRY` to change it. If
 there's no Wi-Fi for a minute, it uses the paired phone over Bluetooth instead
 (Settings > Wi-Fi > Phone as backup). Joining networks, rebooting and shutting
 down from the dashboard need the polkit rule that `setup-pi.sh` installs.

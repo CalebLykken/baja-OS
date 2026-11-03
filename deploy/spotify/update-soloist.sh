@@ -22,4 +22,6 @@ if [ -f "$DEST/soloist" ] && cmp -s "$NEW" "$DEST/soloist"; then
 fi
 install -m 755 "$NEW" "$DEST/soloist.new" && mv "$DEST/soloist.new" "$DEST/soloist"
 echo "Installed Soloist: $("$DEST/soloist" --version 2>&1 | head -1)"
-systemctl --user try-restart baja-soloist.service || true
+# No restart: the timer fires mid-drive and a restart would cut off whatever
+# is streaming. The running player keeps its old binary; the new one starts
+# with the next boot (or install-soloist.sh / set-spotify-key.sh).

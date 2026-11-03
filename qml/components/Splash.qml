@@ -1,11 +1,12 @@
 import QtQuick
 
 // Startup splash: the Baja's side profile sits in the dark, its headlight
-// comes on, then the name, then the whole thing fades into the dashboard.
-// Tap to skip. At boot the Plymouth theme in deploy/plymouth has already been
-// showing the same truck at the same spot on the same background, so this
-// picks up seamlessly; keep the two in sync if either moves. Only opacity
-// animates, which the Pi 2's GPU handles easily; the glow is painted once.
+// comes on, then the name, then a short greeting that suits the time of day,
+// then the whole thing fades into the dashboard. Tap to skip. At boot the
+// Plymouth theme in deploy/plymouth has already been showing the same truck
+// at the same spot on the same background, so this picks up seamlessly; keep
+// the two in sync if either moves. Only opacity animates, which the Pi 2's GPU
+// handles easily; the glow is painted once.
 Rectangle {
     id: splash
     color: "#050506"   // matches the Plymouth boot screen, whatever the style
@@ -21,6 +22,17 @@ Rectangle {
     function finish() {
         if (!fadeOut.running && visible) fadeOut.start()
     }
+
+    // Plain JS, no backend calls, so it cannot fail at start-up. Read once
+    // when the splash is created.
+    function greeting() {
+        var h = new Date().getHours()
+        if (h >= 5 && h <= 11) return "Good morning"
+        if (h >= 12 && h <= 16) return "Good afternoon"
+        if (h >= 17 && h <= 21) return "Good evening"
+        return "Late night run"
+    }
+    readonly property string greetingText: greeting()
 
     Item {
         id: stage
@@ -101,6 +113,15 @@ Rectangle {
             width: 120; height: 3; radius: 1.5
             color: Theme.accent
         }
+        // Caption under the name: sentence case, no tracking, dimmed.
+        Label {
+            id: greetingLabel
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: splash.greetingText
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            opacity: 0
+        }
     }
 
     SequentialAnimation {
@@ -111,7 +132,9 @@ Rectangle {
         NumberAnimation { target: glow; property: "opacity"; to: 0.15; duration: 110 }
         NumberAnimation { target: glow; property: "opacity"; to: 1; duration: 260; easing.type: Easing.OutQuad }
         NumberAnimation { target: title; property: "opacity"; to: 1; duration: 500 }
-        PauseAnimation { duration: 1100 }
+        NumberAnimation { target: greetingLabel; property: "opacity"; to: 1; duration: 400 }
+        // Shortened by the greeting's fade so the splash runs no longer overall.
+        PauseAnimation { duration: 700 }
         ScriptAction { script: splash.finish() }
     }
 

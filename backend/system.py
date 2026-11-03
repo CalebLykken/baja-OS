@@ -249,6 +249,16 @@ class SystemInfo(QObject):
 
     @pyqtSlot()
     def restartDashboard(self):
+        if self._held:
+            # A reboot or shut down was waiting on the update this restart
+            # follows: exiting now would forget it. Do it instead; the update
+            # is on disk and runs on the next boot.
+            action = self._held[0]
+            self._hold_timer.stop()
+            self._held = None
+            print(f"System: {action} instead of restarting the dashboard", flush=True)
+            self._run_power(action)
+            return
         # The service restarts the app whenever it exits.
         QCoreApplication.exit(0)
 

@@ -134,6 +134,22 @@ class HoldTest(unittest.TestCase):
         self.sys._hold_timer.stop()
 
 
+    def test_restart_after_the_update_does_the_waiting_power_action(self):
+        self.sys.powerOff()
+        with mock.patch.object(system_module, "QCoreApplication") as app:
+            self.sys.restartDashboard()
+        self.assertEqual(self.asked, ["poweroff"])
+        app.exit.assert_not_called()
+        self.assertIsNone(self.sys._held)
+        self.assertFalse(self.sys._hold_timer.isActive())
+
+    def test_restart_with_nothing_waiting_just_exits(self):
+        with mock.patch.object(system_module, "QCoreApplication") as app:
+            self.sys.restartDashboard()
+        self.assertEqual(self.asked, [])
+        app.exit.assert_called_once_with(0)
+
+
 class CanPowerTest(unittest.TestCase):
     def test_answers(self):
         for out, want in (('s "yes"\n', True), ('s "no"\n', False), ('s "challenge"\n', False)):

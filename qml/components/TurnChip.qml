@@ -11,15 +11,23 @@ Rectangle {
     property string seenIcon: ""              // the latest turn while routing, "" when not
 
     // A new route or turn is a moment, not a loop: one nudge when the chip appears.
+    // A route that restarts mid-swap must not leave the icon half-faded or offset.
     onActiveChanged: {
+        turnSwap.stop()
+        turnIcon.opacity = 1
+        shift.y = 0
         if (active) {
             seenIcon = routing.maneuverIcon || "straight"
             icon = seenIcon
-            pop.restart()
         } else {
             seenIcon = ""
         }
     }
+
+    // The nudge plays when the chip actually shows: on the first route, after a
+    // warning clears, or after leaving Maps. visible follows opacity, so this fires
+    // as the chip fades in and not while it is still hidden.
+    onVisibleChanged: if (visible) pop.restart()
 
     // routing.maneuverIcon notifies with progressChanged (every GPS update), so only a
     // different turn name starts the swap.

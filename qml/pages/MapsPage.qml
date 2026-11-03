@@ -161,6 +161,7 @@ Item {
         panel = "results"
     }
     function choose(p) {
+        goName = ""                     // an ordinary pick only previews
         place = p
         typing = false
         panel = "place"
@@ -179,14 +180,33 @@ Item {
     }
     property var pending: null
     property var offered: null          // a phone place waiting for an answer on its card
+    // "Go there" while guiding: the route to the new place starts by itself
+    // once it's worked out (goName is the place it waits for, "" for none).
+    property string goName: ""
+    // A new route can be asked for now. Without the map, the router or a fix
+    // the old route is the only one there is, so it isn't given up.
+    readonly property bool canSwitch: mapReady && hasRouting && routing.available && hasFix
+    function goThere(p) {
+        choose(p)                       // routeTo drops the old route and previews the new one
+        goName = p.name
+    }
+    Connections {
+        target: page.hasRouting ? routing : null
+        function onChanged() {
+            if (page.goName === "") return
+            if (routing.previewing && routing.destinationName === page.goName) {
+                page.goName = ""
+                page.go()
+            } else if (!routing.computing && !routing.previewing) {
+                page.goName = ""        // no route came back: the preview shows why
+            }
+        }
+    }
     function takeOffer() {
+        if (!canSwitch) return          // the offer stays on its card and the route carries on
         var p = offered
         offered = null
-        // Guidance ends here, not in routeTo: choose() doesn't ask for a
-        // route without the router or a fix, and the old one would carry on.
-        routing.stop()
-        if (mapReady) choose(p)
-        else pending = p
+        goThere(p)
     }
     function addOfferAsStop() {
         if (routing.addStop(offered.name, offered.lon, offered.lat)) offered = null
@@ -216,9 +236,9 @@ Item {
         if (routing.addStop(p.name, p.lon, p.lat)) alongOpen = false
     }
     function goAlong(p) {
+        if (!canSwitch) return
         alongOpen = false
-        routing.stop()
-        choose(p)
+        goThere(p)
     }
     Connections {
         target: page.hasMaps ? maps : null
@@ -260,6 +280,7 @@ Item {
         }
     }
     function cancelPlace() {
+        goName = ""
         if (hasRouting && !routing.active) routing.stop()
         place = null
         if (map) map.call("clearPlace()")

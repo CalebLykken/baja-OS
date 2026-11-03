@@ -106,12 +106,31 @@ Item {
         recents = [keep].concat(recents.filter(r => !samePlace(r, keep))).slice(0, 6)
         settings.set("recentPlaces", JSON.stringify(recents))
     }
+    // One tap on a place's Home/Work key saves it. If that replaced a different
+    // saved place, the old one is kept here so the next tap on the lit key puts
+    // it back (the "tap to undo") instead of deleting both.
+    property var replacedHome: null     // { was: the Home we replaced, by: the place that replaced it }
+    property var replacedWork: null
     function toggleHome(p) {
-        home = samePlace(home, p) ? null : plain(p)
+        if (samePlace(home, p)) {
+            var back = replacedHome && samePlace(replacedHome.by, p) ? replacedHome.was : null
+            replacedHome = null
+            home = back
+        } else {
+            replacedHome = home ? { was: home, by: plain(p) } : null
+            home = plain(p)
+        }
         settings.set("homePlace", JSON.stringify(home))
     }
     function toggleWork(p) {
-        work = samePlace(work, p) ? null : plain(p)
+        if (samePlace(work, p)) {
+            var back = replacedWork && samePlace(replacedWork.by, p) ? replacedWork.was : null
+            replacedWork = null
+            work = back
+        } else {
+            replacedWork = work ? { was: work, by: plain(p) } : null
+            work = plain(p)
+        }
         settings.set("workPlace", JSON.stringify(work))
     }
     function toggleFavourite(p) {

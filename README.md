@@ -489,7 +489,8 @@ Or on the Pi: `git pull && sudo systemctl restart baja-os`, or Settings > System
 so run that over SSH when a release changes `deploy/` or the packages). An update from Settings looks
 after itself: one that's cut off is put back on the next start, and one that keeps dying before it has run
 for a minute falls back to the commit before it after three tries (`deploy/update-guard.sh`), and says so
-on screen.
+on screen. If the truck sets off just before the update would go in, nothing is changed and the update waits for
+the next start, when `deploy/update-guard.sh` puts it in before the dashboard runs.
 
 ## Next steps
 

@@ -11,11 +11,16 @@ updated from the Mac instead.
 
 It won't update with tracked files changed here or commits made here
 (sort that out over SSH), nor while the truck is moving or directions are
-on. The restart waits for directions to end; if the truck moves after the
-update, there's no restart at all (a red light mustn't end in one, and a
-stop is never known to be long enough): the new version starts on the next
-boot. A truck that has never reported a speed isn't known to be stopped, so
-it won't update either: that takes the OBD adapter or the GPS answering.
+on. New files are only put in place when the restart can follow at once: the
+truck is checked again right before the merge, and the restart comes straight
+after it. If the truck has moved by then, the merge is skipped and the target
+recorded instead (phase "deferred" below): the next start merges it, before
+any Python. Otherwise the old process would go on running on the new tree for
+the rest of the drive (a reloaded map page or a respawned voice worker would
+load new files against old code), because a red light mustn't end in a
+restart and a stop is never known to be long enough. A truck that has never
+reported a speed isn't known to be stopped, so it won't update either: that
+takes the OBD adapter or the GPS answering.
 
 Git is never allowed to ask for anything: no terminal, no askpass, so a
 private repo without a key fails at once with a sentence saying so. A
@@ -29,6 +34,11 @@ back after a power cut, and falls back to the old commit if the new one
 keeps dying before it's up. They talk through MARKER, a small file next to
 the code:
 
+    deferred    the truck moved before the merge, so nothing was changed. The
+                next start merges target into the commit it's on (before) as
+                an update of its own: merging, then pending. Dropped, with
+                the code left alone, if HEAD has moved since or tracked
+                files are changed.
     merging     written before the merge. Still there on the next start:
                 the merge was cut off, so go back ("cut-off").
     pending     the merge is done. The guard counts the starts; the dashboard
@@ -68,7 +78,8 @@ STOP_WAIT_S = 5             # after SIGTERM, before SIGKILL
 MAX_LISTED = 8              # commit subjects shown; `count` says how many in all
 MOVING_MPH = 3.0            # as backend/ignition.py: walking pace counts as stopped
 MPH_TO_MS = 0.44704
-RESTART_DELAY_MS = 3000     # long enough to read "Updated"
+RESTART_DELAY_MS = 3000     # between looks at whether it's time to restart
+RESTART_SETTLE_MS = 300     # the restart follows the merge at once, just long enough to paint "Updated"
 MARKER = ".update-state"    # git-ignored; the phases are above
 CLEAN_MARK = ".update-state.clean"   # the last run ended on purpose; also ignored
 HEALTHY_AFTER_MS = 60000    # up this long on a new version: it works, keep it
@@ -327,16 +338,24 @@ def _undo(root, before, target, error):
     return f"{what}. The old version was put back."
 
 
-def update_to(root, target):
+def update_to(root, target, why_not=None):
     """Fast-forwards to target (from check_for_updates), after making sure
     again that nothing's in the way. Returns a dict with state "updated"
-    (restart now), "current" (already there) or "failed"."""
+    (restart now), "deferred" (why_not() gave a reason right before the
+    merge: no file was touched, and the next start merges it), "current"
+    (already there) or "failed". why_not is asked with the "merging" marker
+    already down, so the merge follows it as closely as it can."""
     try:
         blocker = _blocker(root)
         if blocker:
             return _result("failed", blocker[0].upper() + blocker[1:])
         before = git(root, "rev-parse", "HEAD").strip()
         write_marker(root, "merging", before, target)
+        reason = why_not() if why_not else ""
+        if reason:
+            write_marker(root, "deferred", before, target)
+            return _result("deferred", "The truck moved before the update went in, so nothing was "
+                                       "changed. It installs the next time the dashboard starts.")
         try:
             git(root, "merge", "--ff-only", target, timeout=None)
         except GitError as e:
@@ -388,7 +407,8 @@ class Updater(QObject):
     update is in (SystemInfo.restartDashboard). root is the checkout.
 
     state: "idle", "checking", "current", "available", "updating",
-    "updated" (restarting soon) or "failed"; message is a sentence for it;
+    "updated" (restarting soon), "deferred" (the truck moved first: the
+    next start installs it) or "failed"; message is a sentence for it;
     commits the new subjects and count how many in all; busy means the keys
     do nothing; canUpdate something new with nothing in git's way; updating
     that the merge is running; notice what the last start had to take back,
@@ -451,6 +471,17 @@ class Updater(QObject):
         except Exception as e:              # can't tell: don't risk it
             return f"Couldn't tell whether the truck is moving ({e})."
 
+    def _why_not_before_merge(self):
+        """_why_not_now for update_to, called on its worker thread right
+        before the merge: only reads, since the state it updates belongs to
+        the UI thread (which keeps it current from the speed signals)."""
+        try:
+            car = self._vehicle.speed if self._vehicle.live else None
+            gps = self._gps.speed if self._gps.realFix else None
+            return driving_reason(car, gps, self._routing.active, self._seen_moving, self._speed_known)
+        except Exception as e:
+            return f"Couldn't tell whether the truck is moving ({e})."
+
     def _run(self, v, job):
         """Shows v and runs job on a worker thread; its result comes back
         to _apply on the UI thread."""
@@ -470,7 +501,7 @@ class Updater(QObject):
         print(f"Update: {result['state']}: {result['message']}", flush=True)
         self.changed.emit()
         if result["state"] == "updated":
-            QTimer.singleShot(RESTART_DELAY_MS, self._restart_when_stopped)
+            QTimer.singleShot(RESTART_SETTLE_MS, self._restart_when_stopped)
 
     def _restart_when_stopped(self):
         why = self._why_not_now()
@@ -509,7 +540,7 @@ class Updater(QObject):
         print(f"Update: moving to {target[:7]}", flush=True)
         self._moved = False
         self._run(dict(self._v, state="updating", message="Updating", can_update=False),
-                  lambda: update_to(root, target))
+                  lambda: update_to(root, target, self._why_not_before_merge))
 
     @pyqtProperty(str, notify=changed)
     def state(self):

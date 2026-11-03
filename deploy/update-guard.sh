@@ -5,6 +5,9 @@
 #
 #   merging   the merge never finished (a power cut, say): back to the commit
 #             it started from.
+#   deferred  an update the dashboard didn't merge because the truck had
+#             moved. Merge it now, as the dashboard would have (merging, then
+#             pending), unless the code was changed by hand since.
 #   pending   the new version hasn't proved itself yet. Each start counts,
 #             except one that follows a run that ended on purpose (the
 #             .update-state.clean file: short key-on trips aren't failures);
@@ -14,6 +17,8 @@
 # Either way the file stays, with a new phase, for the dashboard to say what
 # happened. Going back fails: the file stays too, and the next start tries
 # again. It never stops the dashboard starting.
+#
+# A deferred update that can't be merged is dropped, with the code as it was.
 #
 # Exits 75 when it changed the code, so run.sh starts over on what's there now.
 
@@ -53,12 +58,42 @@ go_back() {
 }
 
 case "$phase" in
-    merging|pending) ;;
+    merging|pending|deferred) ;;
     *) exit 0 ;;                        # the dashboard's to report
 esac
 
 if ! git cat-file -e "$before^{commit}" 2>/dev/null; then
     echo "update-guard: no commit '$before' to go back to; leaving the code alone" >&2
+    rm -f "$MARKER"
+    exit 0
+fi
+
+if [ "$phase" = deferred ]; then
+    # Nothing was touched when this was written, so only merge if that's
+    # still so: HEAD where it was, no tracked file changed (a reset would
+    # lose it), and the target still here.
+    if [ "$(git rev-parse HEAD)" != "$before" ] \
+            || ! git cat-file -e "$target^{commit}" 2>/dev/null \
+            || [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "update-guard: not merging ${target}: the code was changed since; leaving it alone" >&2
+        rm -f "$MARKER"
+        exit 0
+    fi
+    echo "update-guard: merging the update to ${target} that waited for the truck to stop" >&2
+    save merging 0 || exit 0            # as the dashboard does: cut off, it is put back
+    if out=$(git merge -q --ff-only "$target" 2>&1); then
+        sync
+        save pending 0 || exit 0
+        exit 75
+    fi
+    echo "update-guard: couldn't merge: $out" >&2
+    case "$out" in
+        *"would be overwritten"*) ;;    # git looked first and touched nothing
+        *)
+            go_back || { echo "update-guard: couldn't go back" >&2; exit 0; }
+            git diff --name-only -z --no-renames --diff-filter=A "$before" "$target" 2>/dev/null | xargs -0 rm -f --
+            ;;
+    esac
     rm -f "$MARKER"
     exit 0
 fi

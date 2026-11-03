@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -294,6 +295,28 @@ class UpdateTest(Repos):
         self.assertEqual((m["phase"], m["before"], m["target"], m["starts"]),
                          ("pending", before, target, "0"))
 
+    def test_a_truck_that_moved_before_the_merge_leaves_the_files_alone(self):
+        before = self.head()
+        target = self.push("One")
+        check_for_updates(self.pi)
+        seen = []
+
+        def why_not():
+            seen.append(read_marker(self.pi)["phase"])
+            return "Not while driving: stop the truck first."
+        r = update_to(self.pi, target, why_not)
+        self.assertEqual(r["state"], "deferred")
+        self.assertFalse(r["can_update"])
+        self.assertEqual(seen, ["merging"])         # asked with the marker down, right before the merge
+        self.assertEqual(self.head(), before)
+        self.assertEqual((self.pi / "app.py").read_text(), "First\n")
+        m = read_marker(self.pi)
+        self.assertEqual((m["phase"], m["before"], m["target"]), ("deferred", before, target))
+        # Nothing in the way of trying again.
+        self.assertTrue(check_for_updates(self.pi)["can_update"])
+        self.assertEqual(update_to(self.pi, target, lambda: "")["state"], "updated")
+        self.assertEqual(read_marker(self.pi)["phase"], "pending")
+
     def test_nothing_to_do_leaves_no_marker(self):
         update_to(self.pi, self.head())
         self.assertEqual(read_marker(self.pi), {})
@@ -380,12 +403,81 @@ class UpdaterTest(Repos):
         u.update()
         self.assertIn("directions", u.message)
 
+    def test_moving_before_the_merge_defers_it_to_the_next_start(self):
+        # The truck sets off between Update being pressed and the merge:
+        # no new file may land under the running process.
+        u = self.make()
+        before = self.head()
+        target = self.push("One")
+        u.check()
+        wait_for(lambda: u.state == "available")
+        gate = threading.Event()
+        real = updater.update_to
+
+        def held(root, t, why_not):
+            gate.wait(10)
+            return real(root, t, why_not)
+        with mock.patch.object(updater, "RESTART_DELAY_MS", 10), \
+                mock.patch.object(updater, "RESTART_SETTLE_MS", 10), \
+                mock.patch.object(updater, "update_to", held):
+            u.update()
+            self.assertTrue(u.updating)
+            u._vehicle.speed = 40.0
+            u._vehicle.changed.emit()
+            gate.set()
+            wait_for(lambda: u.state == "deferred")
+            u._vehicle.speed = 0.0                  # a red light, after the fact
+            u._vehicle.changed.emit()
+            spin(100)
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(self.head(), before)
+        self.assertEqual((self.pi / "app.py").read_text(), "First\n")
+        self.assertIn("next time the dashboard starts", u.message)
+        self.assertEqual(read_marker(self.pi)["phase"], "deferred")
+        self.assertEqual(read_marker(self.pi)["target"], target)
+        self.assertFalse(u.busy)
+        self.assertFalse(u.updating)
+
+    def test_directions_starting_before_the_merge_defer_it_too(self):
+        u = self.make()
+        before = self.head()
+        self.push("One")
+        u.check()
+        wait_for(lambda: u.state == "available")
+        gate = threading.Event()
+        real = updater.update_to
+
+        def held(root, t, why_not):
+            gate.wait(10)
+            return real(root, t, why_not)
+        with mock.patch.object(updater, "update_to", held):
+            u.update()
+            u._routing.active = True
+            gate.set()
+            wait_for(lambda: u.state == "deferred")
+        self.assertEqual(self.head(), before)
+
+    def test_a_truck_that_stays_stopped_is_merged_and_restarted_at_once(self):
+        u = self.make()
+        target = self.push("One")
+        u.check()
+        wait_for(lambda: u.state == "available")
+        start = time.monotonic()
+        u.update()
+        wait_for(lambda: bool(self.restarts))
+        self.assertLess(time.monotonic() - start, updater.RESTART_DELAY_MS / 1000)
+        self.assertEqual(self.head(), target)
+
     def test_moving_after_the_update_waits_for_the_next_boot(self):
+        # Moving after the merge (it was in before this could be known) still
+        # never restarts; the merge itself is stubbed so the timing is fixed.
         u = self.make()
         self.push("One")
         u.check()
         wait_for(lambda: u.state == "available")
-        with mock.patch.object(updater, "RESTART_DELAY_MS", 10):
+        with mock.patch.object(updater, "RESTART_DELAY_MS", 10), \
+                mock.patch.object(updater, "RESTART_SETTLE_MS", 10), \
+                mock.patch.object(updater, "update_to", lambda r, t, w: updater._result("updated", "x")):
             u.update()
             u._vehicle.speed = 40.0         # sets off right after Update
             u._vehicle.changed.emit()
@@ -401,7 +493,9 @@ class UpdaterTest(Repos):
         self.push("One")
         u.check()
         wait_for(lambda: u.state == "available")
-        with mock.patch.object(updater, "RESTART_DELAY_MS", 10):
+        with mock.patch.object(updater, "RESTART_DELAY_MS", 10), \
+                mock.patch.object(updater, "RESTART_SETTLE_MS", 10), \
+                mock.patch.object(updater, "update_to", lambda r, t, w: updater._result("updated", "x")):
             u.update()
             u._routing.active = True
             wait_for(lambda: u.state == "updated")
@@ -454,7 +548,7 @@ class UpdaterTest(Repos):
         wait_for(lambda: u.state == "available")
         self.assertFalse(u.updating)
         with mock.patch.object(updater, "RESTART_DELAY_MS", 10), \
-                mock.patch.object(updater, "update_to", lambda r, t: updater._result("updated", "x")):
+                mock.patch.object(updater, "update_to", lambda r, t, w: updater._result("updated", "x")):
             u.update()
             self.assertTrue(u.updating)
             wait_for(lambda: u.state == "updated")
@@ -642,6 +736,104 @@ class GuardTest(Repos):
         self.git(self.pi, "merge", "-q", "--ff-only", target)
         self.assertEqual(self.guard(), 75)
         self.assertEqual(self.head(), before)
+
+    def deferred(self):
+        """An update the truck's moving kept from being merged. Returns (old, new)."""
+        before = self.head()
+        target = self.push("One")
+        check_for_updates(self.pi)
+        self.assertEqual(update_to(self.pi, target, lambda: "Not while driving.")["state"], "deferred")
+        return before, target
+
+    def test_a_deferred_update_is_merged_at_the_next_start(self):
+        before, target = self.deferred()
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.guard(), 75)          # run.sh starts over on the new code
+        self.assertEqual(self.head(), target)
+        self.assertEqual((self.pi / "app.py").read_text(), "One\n")
+        m = read_marker(self.pi)
+        self.assertEqual((m["phase"], m["before"], m["target"], m["starts"]),
+                         ("pending", before, target, "0"))
+        self.assertEqual(self.guard(), 0)           # then it's an ordinary new version
+        self.assertEqual(read_marker(self.pi)["starts"], "1")
+        self.assertTrue(confirm_healthy(self.pi))
+        self.assertEqual(self.guard(), 0)
+
+    def test_a_deferred_update_that_never_comes_up_falls_back(self):
+        before, target = self.deferred()
+        self.assertEqual(self.guard(), 75)
+        codes = [self.guard() for _ in range(3)]
+        self.assertEqual(codes, [0, 0, 0])
+        self.assertEqual(self.guard(), 75)
+        self.assertEqual(self.head(), before)
+        self.assertEqual(read_marker(self.pi)["phase"], "fell-back")
+
+    def test_a_deferred_update_is_not_confirmed_by_the_dashboard(self):
+        self.deferred()
+        self.assertFalse(confirm_healthy(self.pi))
+        self.assertEqual(marker_notice(self.pi), "")
+        self.assertEqual(read_marker(self.pi)["phase"], "deferred")
+
+    def test_a_deferred_update_is_dropped_if_the_code_was_changed_since(self):
+        _, target = self.deferred()
+        self.commit(self.pi, "Fixed over SSH", name="fix.py")
+        fixed = self.head()
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(self.head(), fixed)
+        self.assertFalse((self.pi / MARKER).exists())
+
+    def test_a_deferred_update_is_dropped_if_tracked_files_are_changed(self):
+        before, _ = self.deferred()
+        (self.pi / "app.py").write_text("mine\n")
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(self.head(), before)
+        self.assertEqual((self.pi / "app.py").read_text(), "mine\n")
+        self.assertFalse((self.pi / MARKER).exists())
+
+    def test_a_deferred_update_whose_commit_is_gone_is_dropped(self):
+        before = self.head()
+        write_marker(self.pi, "deferred", before, "c" * 40)
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(self.head(), before)
+        self.assertFalse((self.pi / MARKER).exists())
+
+    def test_a_file_in_the_way_of_a_deferred_update_is_left_alone(self):
+        before = self.head()
+        (self.mac / "new.py").write_text("theirs\n")
+        self.git(self.mac, "add", "new.py")
+        target = self.push("One")
+        check_for_updates(self.pi)
+        self.assertEqual(update_to(self.pi, target, lambda: "Not while driving.")["state"], "deferred")
+        (self.pi / "new.py").write_text("mine\n")          # untracked, so not a "change"
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(self.head(), before)
+        self.assertEqual((self.pi / "new.py").read_text(), "mine\n")
+        self.assertFalse((self.pi / MARKER).exists())
+
+    def test_a_deferred_update_is_merged_through_run_sh(self):
+        for src, name in ((HERE / "run.sh", "run.sh"), (GUARD, "deploy/update-guard.sh")):
+            (self.mac / name).parent.mkdir(exist_ok=True)
+            shutil.copy(src, self.mac / name)
+        (self.mac / "main.py").write_text("print('old')\n")
+        (self.mac / ".gitignore").write_text(".update-state*\n")
+        self.git(self.mac, "add", ".")
+        self.git(self.mac, "commit", "-q", "-m", "Good")
+        self.git(self.mac, "push", "-q")
+        self.git(self.pi, "pull", "-q")
+        (self.mac / "main.py").write_text("print('new')\n")
+        self.git(self.mac, "add", ".")
+        self.git(self.mac, "commit", "-q", "-m", "Newer")
+        self.git(self.mac, "push", "-q")
+        target = self.git(self.mac, "rev-parse", "HEAD")
+        check_for_updates(self.pi)
+        self.assertEqual(update_to(self.pi, target, lambda: "Not while driving.")["state"], "deferred")
+        self.assertEqual((self.pi / "main.py").read_text(), "print('old')\n")
+
+        first = self.run_sh()                       # merged before any Python, same start
+        self.assertEqual((first.returncode, first.stdout.strip()), (0, "new"))
+        self.assertEqual(self.head(), target)
+        self.assertEqual(read_marker(self.pi)["phase"], "pending")
+        self.assertEqual(read_marker(self.pi)["starts"], "1")
 
     def test_a_marker_with_no_commit_is_dropped(self):
         write_marker(self.pi, "merging", "nonsense", "x")

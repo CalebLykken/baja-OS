@@ -249,5 +249,58 @@ class UpdateTest(unittest.TestCase):
         proc.kill.assert_not_called()
 
 
+class StaleBuildTest(unittest.TestCase):
+    """A power cut mid-update leaves install-map.sh's half-built map in .new;
+    the dashboard clears it at startup (on a worker thread)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        (self.dir / ".new" / "fonts").mkdir(parents=True)
+        (self.dir / ".new" / "basemap.pmtiles").write_text("half")
+        (self.dir / "basemap.pmtiles").write_text("live tiles")
+        self.maps = MapService(self.dir)
+        self.addCleanup(mock.patch.stopall)
+
+    def test_start_clears_it_off_the_calling_thread(self):
+        started = []
+
+        class Recorder:
+            def __init__(self, target=None, name=None, daemon=None):
+                self.target, self.name = target, name
+
+            def start(self):
+                started.append(self)
+
+        with mock.patch.object(maps_module, "make_server"), \
+                mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=Recorder)):
+            self.maps.start()
+        self.assertTrue((self.dir / ".new").exists())     # nothing ran on this thread
+        cleanup = [t for t in started if t.name == "map-cleanup"]
+        self.assertEqual(len(cleanup), 1)
+        with mock.patch("backend.maps._install_script_running", return_value=False):
+            cleanup[0].target()
+        self.assertFalse((self.dir / ".new").exists())
+        self.assertEqual((self.dir / "basemap.pmtiles").read_text(), "live tiles")
+
+    def test_a_running_install_keeps_its_build(self):
+        with mock.patch("backend.maps._install_script_running", return_value=True):
+            self.maps._remove_stale_build()
+        self.assertTrue((self.dir / ".new" / "basemap.pmtiles").exists())
+
+    def test_nothing_to_clear_is_fine(self):
+        (self.dir / ".new" / "basemap.pmtiles").unlink()
+        (self.dir / ".new" / "fonts").rmdir()
+        (self.dir / ".new").rmdir()
+        with mock.patch("backend.maps._install_script_running", return_value=False):
+            self.maps._remove_stale_build()
+
+    def test_a_failing_check_does_not_escape(self):
+        with mock.patch("backend.maps._install_script_running", side_effect=RuntimeError), \
+                mock.patch("builtins.print"):
+            self.maps._remove_stale_build()
+
+
 if __name__ == "__main__":
     unittest.main()

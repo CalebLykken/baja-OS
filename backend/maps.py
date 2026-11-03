@@ -240,18 +240,27 @@ class MapService(QObject):
                      "Indexing places": "Indexing places for search",
                      "Indexing street": "Indexing street addresses",
                      "Finding traffic": "Finding traffic lights and signs"}
+            ok = False
+            proc = None
             try:
                 proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        text=True, env=env)
+                                        text=True, errors="replace", env=env)
                 for line in proc.stdout:
                     for prefix, message in steps.items():
                         if line.startswith(prefix):
                             safe_emit(self, "_progress", message, True)
                 ok = proc.wait() == 0
-            except OSError:
-                ok = False
-            safe_emit(self, "_progress", "Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
+            except Exception as e:
+                # Always reach the final message below, or _updating would stay set
+                print(f"Map update failed ({type(e).__name__})", flush=True)
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+            finally:
+                safe_emit(self, "_progress", "Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
         threading.Thread(target=work, name="map-update", daemon=True).start()
 
     def _on_progress(self, message, running):

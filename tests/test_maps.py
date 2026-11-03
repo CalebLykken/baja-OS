@@ -11,8 +11,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 try:
+    from backend import maps as maps_module
     from backend.maps import MapService, make_server
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
@@ -145,6 +148,56 @@ class SearchAlongTest(unittest.TestCase):
             for shape in ([], [[1]], [["a", "b"]], [None], None, 5, [[1.0, 2.0], [3.0, 4.0]]):
                 maps.searchAlong("gas", shape, 0, 0.0)
             self.assertEqual(maps._query, "along:gas")
+
+
+class UpdateTest(unittest.TestCase):
+    """The map update's busy flag must always clear, however the script's
+    output goes. The worker runs inline and install-map.sh is faked."""
+
+    class InlineThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    class BrokenOutput:
+        def __iter__(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.maps = MapService(tmp.name)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread)).start()
+        mock.patch("builtins.print").start()
+
+    def popen(self, stdout, code=0):
+        proc = mock.MagicMock()
+        proc.stdout = stdout
+        proc.wait.return_value = code
+        return proc
+
+    def test_a_bad_byte_in_the_output_still_ends_the_update(self):
+        proc = self.popen(self.BrokenOutput())
+        with mock.patch("backend.maps.subprocess.Popen", return_value=proc) as popen:
+            self.maps.update()
+            self.assertFalse(self.maps._updating)
+            self.assertEqual(self.maps._update_message, "Couldn't update the map; is the Pi online?")
+            proc.kill.assert_called_once_with()
+            self.maps.update()                   # not stuck: it starts again
+            self.assertEqual(popen.call_count, 2)
+            self.assertFalse(self.maps._updating)
+        self.assertEqual(popen.call_args.kwargs["errors"], "replace")
+
+    def test_a_good_run_says_the_map_is_updated(self):
+        proc = self.popen(["Cutting the map\n", "Getting fonts\n"])
+        with mock.patch("backend.maps.subprocess.Popen", return_value=proc):
+            self.maps.update()
+        self.assertFalse(self.maps._updating)
+        self.assertEqual(self.maps._update_message, "Map updated")
+        proc.kill.assert_not_called()
 
 
 if __name__ == "__main__":

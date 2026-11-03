@@ -428,6 +428,9 @@ class GaplessEngine(QObject):
         if song.end:                             # gave us sound: the run of bad songs is over
             with self._lock:
                 self._bad.clear()
+        else:                                    # no sound and no error: as bad as one that failed
+            print(f"Music: {self._path_of(song.index)} decoded to nothing")
+            self._bad.add(song.index)            # before done: what follows it can't be itself
         song.held = False
         song.done = True
         self._drop_decoder(dec)

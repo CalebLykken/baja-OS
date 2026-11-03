@@ -293,6 +293,15 @@ def mark_clean_exit(root=ROOT):
         pass
 
 
+def clear_clean_exit(root=ROOT):
+    """Takes the mark back: the shut down didn't happen, so this run isn't
+    ending on purpose after all. Never raises."""
+    try:
+        (Path(root) / CLEAN_MARK).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def confirm_healthy(root):
     """Keeps a new version for good: True if this was its first good run.
     A marker with no starts is an update still waiting for its restart: the

@@ -18,11 +18,16 @@ import sys
 import threading
 from pathlib import Path
 
+# Times the startup phases for the journal (see report_startup). Made before
+# the PyQt imports so the first phase covers them.
+from backend.startup import StartupClock
+clock = StartupClock()
+
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
 # set before Qt loads, so it lives above the PyQt imports.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QTimer, QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -132,7 +137,39 @@ def init_web_engine():
     return True
 
 
+def report_startup(window):
+    """Print the startup summary once: after the first frame is on screen, or
+    after 15 s if none comes. Logging only; it can never stop the dashboard."""
+    try:
+        done = [False]
+        timer = QTimer(window)
+        timer.setSingleShot(True)
+
+        def finish(frame):
+            if done[0]:
+                return
+            done[0] = True
+            try:
+                window.frameSwapped.disconnect(on_frame)
+            except Exception:
+                pass
+            if frame:
+                clock.mark("first frame")
+            timer.stop()
+            print(clock.summary(), flush=True)
+
+        def on_frame():
+            finish(True)
+
+        timer.timeout.connect(lambda: finish(False))
+        window.frameSwapped.connect(on_frame)
+        timer.start(15000)
+    except Exception:
+        pass
+
+
 def main():
+    clock.mark("imports")
     args = parse_args()
     sys.excepthook = log_exception
     threading.excepthook = log_thread_exception
@@ -220,6 +257,7 @@ def main():
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff)
     system.powerFailed.connect(key_off.power_failed)
 
+    clock.mark("backends")
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
     ctx.setContextProperty("vehicle", vehicle)
@@ -252,8 +290,10 @@ def main():
     if not engine.rootObjects():
         print("Failed to load the QML interface; see errors above.", file=sys.stderr)
         return 1
+    clock.mark("qml")
 
     window = engine.rootObjects()[0]
+    report_startup(window)
     if args.fullscreen:
         window.showFullScreen()
 
@@ -281,6 +321,7 @@ def main():
     watchdog = Watchdog()
     watchdog.start()
     updater.start()
+    clock.mark("started")
     code = app.exec()
     errorlog.log.flush()          # repeats still being counted go to the journal now
     if scanner:

@@ -16,7 +16,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
+from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
                           WATCH_EVERY_MS, Wifi, scan, split_terse, valid_ssid)
 from tests.test_dbus import FakeBus, on_bus
 
@@ -130,7 +130,7 @@ class WorkerFailureTest(unittest.TestCase):
                 self.wifi._ensure_hotspot_address()      # must not raise
         self.assertEqual(len(logged(self.printed)), 1)
         reply = [(0, f"IP4.GATEWAY:{IPHONE_GATEWAY}\nGENERAL.CONNECTION:Phone\n", ""),
-                 (0, HOTSPOT_ADDRESS, "")]
+                 (0, "", ""), (0, HOTSPOT_ADDRESS, "")]
         with mock.patch("backend.wifi.nmcli", side_effect=reply):
             self.wifi._ensure_hotspot_address()
         self.assertIn("working again", logged(self.printed)[-1])
@@ -255,10 +255,33 @@ class SignalsTest(unittest.TestCase):
         self.wifi._watch()
         self.assertEqual(self.interval(), WATCH_EVERY_MS)
 
-    def test_no_wifi_and_no_phone_is_nothing_to_wait_for(self):
+    def test_with_no_wifi_it_keeps_looking_for_the_hotspot(self):
         self.nm.wifi_up = False
         self.started(FakeBus())
-        self.assertEqual(self.interval(), SAFETY_WATCH_MS)
+        self.assertEqual(self.interval(), WATCH_EVERY_MS)
+        for _ in range(3):
+            self.wait()
+        self.assertEqual(len(self.nm.ran("device", "wifi", "rescan")), 3)
+
+    def test_a_signal_storm_with_no_wifi_doesnt_scan_any_faster(self):
+        self.nm.wifi_up = False
+        self.started(FakeBus())
+        self.clock += LOST_SCAN_S
+        for _ in range(5):
+            self.wifi._watch()
+        self.assertEqual(len(self.nm.ran("device", "wifi", "rescan")), 1)
+
+    def test_on_wifi_the_watchdog_never_scans(self):
+        self.started(FakeBus())
+        for _ in range(3):
+            self.wait()
+        self.assertEqual(self.nm.ran("device", "wifi", "rescan"), [])
+
+    def test_tethered_with_no_wifi_it_leaves_the_radio_alone(self):
+        self.nm.tether, self.nm.tether_up, self.nm.wifi_up = True, True, False
+        self.started(FakeBus())
+        self.wait()
+        self.assertEqual(self.nm.ran("device", "wifi", "rescan"), [])
 
     def test_the_phone_comes_up_on_time_with_no_signal_to_prompt_it(self):
         self.nm.tether, self.nm.wifi_up = True, False
@@ -373,8 +396,17 @@ class RadioTest(unittest.TestCase):
         self.wifi.start()
         for _ in range(3):
             self.tick()
-        self.assertEqual(len(self.nm.ran("connection", "modify")), 1)
+        self.assertEqual(len(self.nm.ran("connection", "modify", "+ipv4.addresses")), 1)
         self.assertEqual(len(self.nm.ran("IP4.GATEWAY,GENERAL.CONNECTION")), 1)
+
+    def test_any_network_it_lands_on_is_set_to_retry_forever(self):
+        self.wifi.start()                            # not joined here, and not a hotspot
+        self.assertEqual(self.nm.ran("connection", "modify", "Phone")[0][-4:],
+                         ("connection.autoconnect-retries", "0", "802-11-wireless.powersave", "2"))
+
+    def test_a_saved_network_out_of_range_asks_if_the_hotspot_is_on(self):
+        why = Wifi._why("Error: Connection activation failed: The Wi-Fi network could not be found", "Phone")
+        self.assertEqual(why, "Can't see Phone; is the hotspot on?")
 
     # ---- the phone as a backup ------------------------------------------------
     def test_a_hotspot_still_being_retried_is_not_wifi(self):

@@ -45,16 +45,34 @@ class FakeSource(QObject):
     changed = pyqtSignal()
     queueChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
+    modesChanged = pyqtSignal()
     deviceName = art = title = artist = ""
     duration = position = 0
     volume = 50
-    hasVolume = hasPlayer = available = active = canSeek = True
+    hasVolume = hasPlayer = available = active = canSeek = linked = hasModes = True
     sought = None
     recents = upNext = []
+    resumeUri = "spotify:album:now"
+    shuffle = False
+    repeat = "off"
 
     def __init__(self):
         super().__init__()
         self.playing = False
+        self.resumed = []
+        self.shuffled = self.repeats = self.queued = 0
+
+    def resume(self, uri):
+        self.resumed.append(uri)
+
+    def toggleShuffle(self):
+        self.shuffled += 1
+
+    def cycleRepeat(self):
+        self.repeats += 1
+
+    def addToQueue(self, uri):
+        self.queued += 1
 
     def start(self):
         pass
@@ -77,6 +95,115 @@ class FakeSource(QObject):
 def saved(source, playing, index=3, position=50):
     return json.dumps({"source": source, "playing": playing,
                        "local": {"album": None, "path": "", "index": index, "position": position}})
+
+
+class SpotifyResumeTest(unittest.TestCase):
+    """Spotify carrying on by itself, and its shuffle and repeat."""
+
+    URI = "spotify:album:saved"
+
+    def make(self, **values):
+        self.settings = FakeSettings(music=saved("spotify", False), **values)   # local music waits
+        self.local, self.phone, self.spotify = MediaPlayer(), FakeSource(), FakeSource()
+        with mock.patch("backend.hub.shutil.which", return_value=None):
+            self.hub = MediaHub(self.local, self.phone, self.spotify, settings=self.settings)
+        self.hub.start()
+        self.addCleanup(self.local._timer.stop)
+        return self.hub
+
+    def signs_in(self):
+        self.spotify.available = self.spotify.linked = True
+        self.spotify.changed.emit()
+
+    def drops_out(self):
+        self.spotify.available = self.spotify.linked = self.spotify.active = False
+        self.spotify.playing = False
+        self.spotify.changed.emit()
+        self.spotify.playingChanged.emit()
+
+    def saved(self):
+        return self.settings.values.get("spotifyResumeUri", "")
+
+    def test_it_carries_on_once_signed_in(self):
+        self.make(spotifyResumeUri=self.URI)
+        self.signs_in()
+        self.assertEqual(self.spotify.resumed, [self.URI])
+
+    def test_only_once(self):
+        self.make(spotifyResumeUri=self.URI)
+        self.signs_in()
+        self.signs_in()
+        self.assertEqual(len(self.spotify.resumed), 1)
+
+    def test_nothing_saved_means_nothing_starts(self):
+        self.make()
+        self.signs_in()
+        self.assertEqual(self.spotify.resumed, [])
+
+    def test_the_settings_switch_stops_it_and_is_saved(self):
+        self.make(spotifyResumeUri=self.URI).setSpotifyResume(False)
+        self.assertEqual(self.settings.values["spotifyResume"], "false")
+        self.signs_in()
+        self.assertEqual(self.spotify.resumed, [])
+
+    def test_it_doesnt_cut_in_on_the_phone(self):
+        self.make(spotifyResumeUri=self.URI)
+        self.phone.play()
+        self.signs_in()
+        self.assertEqual(self.spotify.resumed, [])
+
+    def test_playing_is_remembered(self):
+        self.make()
+        self.spotify.play()
+        self.assertEqual(self.saved(), self.spotify.resumeUri)
+
+    def test_a_lost_connection_keeps_it_and_carries_on_after(self):
+        self.make()
+        self.spotify.play()
+        self.signs_in()
+        self.drops_out()
+        self.assertEqual(self.hub.source, "local")
+        self.assertEqual(self.saved(), self.spotify.resumeUri)
+        self.spotify.active = True
+        self.signs_in()
+        self.assertEqual(self.spotify.resumed, [self.spotify.resumeUri])
+
+    def test_pausing_forgets_it(self):
+        self.make()
+        self.spotify.play()
+        self.spotify.pause()
+        self.assertEqual(self.saved(), "")
+
+    def test_moving_to_another_device_forgets_it(self):
+        self.make()
+        self.spotify.play()
+        self.spotify.active = False
+        self.spotify.changed.emit()
+        self.assertEqual((self.hub.source, self.saved()), ("local", ""))
+
+    def test_playing_something_else_forgets_it(self):
+        hub = self.make()
+        self.spotify.play()
+        self.phone.play()
+        self.assertEqual((hub.source, self.saved()), ("phone", ""))
+
+    def test_shuffle_and_repeat_go_to_spotify_while_it_plays(self):
+        hub = self.make()
+        self.spotify.play()
+        self.spotify.shuffle, self.spotify.repeat = True, "one"
+        self.assertEqual((hub.hasModes, hub.shuffle, hub.repeat), (True, True, "one"))
+        hub.toggleShuffle()
+        hub.cycleRepeat()
+        self.assertEqual((self.spotify.shuffled, self.spotify.repeats), (1, 1))
+
+    def test_the_phone_has_no_modes(self):
+        hub = self.make()
+        self.phone.play()
+        self.assertFalse(hub.hasModes)
+
+    def test_adding_to_the_queue_reaches_spotify(self):
+        self.make().queueSpotify("spotify:track:t")
+        self.assertEqual(self.spotify.queued, 1)
 
 
 class HubTest(unittest.TestCase):
@@ -300,7 +427,7 @@ class ModesTest(unittest.TestCase):
     def test_not_on_other_sources(self):
         hub = self.make()
         self.assertTrue(hub.hasModes)
-        hub._set_source("spotify")
+        hub._set_source("phone")
         self.assertFalse(hub.hasModes)
         hub.toggleShuffle()
         hub.cycleRepeat()

@@ -365,6 +365,13 @@ document.getElementById("send").onclick = async () => {
 """
 
 
+LINKED_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Baja OS</title>
+<style>:root { color-scheme: light dark; } body { font: 18px/1.5 system-ui, sans-serif; padding: 32px 16px; text-align: center; }</style>
+</head><body><p>{{message}}</p></body></html>
+"""
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "BajaOS/1"
 
@@ -409,6 +416,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._allowed_client():
             return self._send(403, "forbidden", "text/plain")
         parts = urllib.parse.urlsplit(self.path)
+        if parts.path.startswith("/spotify/"):
+            return self._spotify(parts)
         if parts.path != "/send":
             return self._send(404, "not found", "text/plain")
         key = urllib.parse.parse_qs(parts.query).get("k", [""])[0]
@@ -428,6 +437,29 @@ class _Handler(BaseHTTPRequestHandler):
         page = (PAGE.replace("{{api}}", html.escape(f"http://{host}/api/v1/destination"))
                     .replace("{{token}}", html.escape(token)))
         self._send(200, page, "text/html; charset=utf-8")
+
+    def _spotify(self, parts):
+        """Linking Spotify from the phone: backend/spotifyaccount.py. These
+        carry their own one-time secrets rather than the send token."""
+        svc, ip = self.server.service, self.client_address[0]
+        account = svc.spotify
+        if not account or svc.blocked(ip):
+            return self._send(403, "forbidden", "text/plain")
+        asked = urllib.parse.parse_qs(parts.query)
+        if parts.path == "/spotify/link":
+            url = account.authorize_url(asked.get("s", [""])[0])
+            if url:
+                return self._send(303, "", "text/plain", [("Location", url)])
+            svc.failed(ip)
+            return self._send(403, "That code has expired; show it on the dashboard again.", "text/plain")
+        if parts.path == "/spotify/callback":
+            accepted, message = account.callback(asked.get("code", [""])[0], asked.get("state", [""])[0],
+                                                 asked.get("error", [""])[0])
+            if not accepted:
+                svc.failed(ip)
+            body = LINKED_PAGE.replace("{{message}}", html.escape(message))
+            return self._send(200 if accepted else 403, body, "text/html; charset=utf-8")
+        return self._send(404, "not found", "text/plain")
 
     def do_POST(self):
         if not self._allowed_client():
@@ -470,6 +502,7 @@ class PhoneSend(QObject):
         self._old_tokens = ()         # replaced by Reset link, this run
         self._failures = {}           # ip -> [count, first failure time]
         self._server = None
+        self.spotify = None           # backend/spotifyaccount.py, for linking Spotify from the phone
         self._qr_dir = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
         self._qr_for = ""
         self._qr_path = None
@@ -560,7 +593,11 @@ class PhoneSend(QObject):
         """A file URL of the QR code for pageUrl(ip), drawn once per address
         and token. `revision` goes unused here: QML passes phone.revision so
         that its binding asks again after a reset."""
-        url = self.pageUrl(ip)
+        return self.qrFor(self.pageUrl(ip))
+
+    @pyqtSlot(str, result=str)
+    def qrFor(self, url):
+        """A file URL of a QR code for `url`, or '' with no url."""
         if not url:
             return ""
         if url != self._qr_for:

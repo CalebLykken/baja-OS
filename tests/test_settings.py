@@ -29,6 +29,7 @@ class FakeStore:
         self.syncs = 0
         self.sync_gate = None           # a threading.Event a sync waits on
         self.fail_syncs = 0             # this many syncs raise
+        self.failed = 0                 # how many did
         self.lock = threading.Lock()
 
     def open(self):
@@ -55,6 +56,7 @@ class FakeStore:
         with self.lock:
             if self.fail_syncs:
                 self.fail_syncs -= 1
+                self.failed += 1
                 raise OSError("disk full")
             self.syncs += 1
 
@@ -233,25 +235,71 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(self.store.values, {"volume": 3, "style": "trail"})
         self.assertEqual(self.store.syncs, 1)
 
-    def test_a_failed_write_is_tried_again_with_the_next(self):
+    def test_a_failed_write_is_tried_again_by_the_writer_on_its_own(self):
+        self.store.fail_syncs = 1
+        with mock.patch("backend.settings.RETRY_FIRST_S", 0.05), mock.patch("builtins.print"):
+            s = self.make()
+            s.set("volume", 3)
+            s.flush()                           # nothing else ever changes
+            self.assertTrue(pump_until(lambda: self.store.syncs == 1))
+        self.assertEqual(self.store.values, {"volume": 3})
+
+    def test_flush_and_wait_says_no_while_a_write_keeps_failing(self):
+        self.store.fail_syncs = 1000
+        self.s.set("route", "{...}")
+        with mock.patch("builtins.print"):
+            self.assertFalse(self.s.flush(wait=True, timeout=0.3))
+        self.assertEqual(self.store.syncs, 0)
+        self.assertGreater(self.store.failed, 1)   # it kept trying
+
+    def test_flush_and_wait_retries_a_failed_write_and_then_says_yes(self):
+        self.store.fail_syncs = 1
+        self.s.set("volume", 3)
+        self.s.flush()
+        self.assertTrue(pump_until(lambda: not self.store.fail_syncs))
+        with mock.patch("builtins.print"):
+            self.assertTrue(self.s.flush(wait=True))    # the way out, nothing new set
+        self.assertEqual(self.store.values, {"volume": 3})
+        self.assertEqual(self.store.syncs, 1)
+
+    def test_a_write_that_fails_several_times_is_retried_until_it_lands(self):
+        self.store.fail_syncs = 3
+        with mock.patch("backend.settings.RETRY_FIRST_S", 0.05), \
+                mock.patch("backend.settings.RETRY_MAX_S", 0.1), mock.patch("builtins.print"):
+            s = self.make()
+            s.set("volume", 3)
+            s.flush()
+            self.assertTrue(pump_until(lambda: self.store.syncs == 1))
+        self.assertEqual(self.store.values["volume"], 3)
+
+    def test_a_failed_write_is_also_carried_by_the_next_change(self):
         self.store.fail_syncs = 1
         self.s.set("volume", 3)
         with mock.patch("builtins.print"):
-            self.s.flush(wait=True)
-        self.assertEqual(self.store.syncs, 0)
-        self.s.set("style", "trail")
-        self.s.flush(wait=True)
-        self.assertEqual(self.store.syncs, 1)
+            self.s.flush()
+            self.assertTrue(pump_until(lambda: not self.store.fail_syncs))
+            self.s.set("style", "trail")
+            self.assertTrue(self.s.flush(wait=True))
         self.assertEqual(self.store.values, {"volume": 3, "style": "trail"})
 
     def test_a_failed_write_doesnt_undo_a_newer_value(self):
         self.store.fail_syncs = 1
         self.s.set("volume", 3)
         with mock.patch("builtins.print"):
+            self.s.flush()
+            self.assertTrue(pump_until(lambda: not self.store.fail_syncs))
+            self.s.set("volume", 4)
             self.s.flush(wait=True)
-        self.s.set("volume", 4)
-        self.s.flush(wait=True)
         self.assertEqual(self.store.values["volume"], 4)
+
+    def test_close_gives_up_on_a_failing_write_instead_of_hanging(self):
+        self.store.fail_syncs = 1000
+        self.s.set("volume", 3)
+        started = time.monotonic()
+        with mock.patch("builtins.print"):
+            self.s.flush()
+            self.s._writer.close(1)
+        self.assertLess(time.monotonic() - started, 1)
 
     def test_get_int_falls_back_on_junk(self):
         self.s.set("volume", "loud")

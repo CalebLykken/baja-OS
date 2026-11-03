@@ -22,6 +22,9 @@ save in bursts. So the UI thread never touches the file after start-up:
 - flush(wait=True) hands over what's waiting and blocks until it is on disk:
   the app calls it on the way out, on SIGTERM and before it powers the Pi off
   or reboots it.
+- A write that fails (SD card full) stays queued; the writer retries it by
+  itself with a growing pause, and flush(wait=True) reports False while any
+  key is still unwritten.
 """
 
 import threading
@@ -32,6 +35,9 @@ from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QSettings, QTimer, p
 FLUSH_AFTER_MS = 1500       # quiet this long after a change, then write
 MAX_WAIT_MS = 10000         # but never sit on a change longer than this
 FLUSH_TIMEOUT_S = 3.0       # how long a waiting flush blocks (systemd allows 5 s)
+RETRY_FIRST_S = 2.0         # a failed write is tried again after this,
+RETRY_MAX_S = 30.0          # doubling up to this
+RETRY_WAITING_S = 0.25      # ...or this often while a flush is waiting on it
 # The route is what the truck picks up again after a power cut mid-drive.
 IMMEDIATE = frozenset({"route"})
 
@@ -43,43 +49,45 @@ def _open_conf():
 class _Writer:
     """Writes batches of changes to the file on a thread of its own. hand()
     and wait() are called from the UI thread; the store is only ever touched
-    on the writer thread."""
+    on the writer thread. A batch that fails to write stays in the outbox and
+    the writer tries it again itself, with a growing pause, until it is on
+    disk; wait() only says True once nothing is left unwritten."""
 
     def __init__(self, open_store):
         self._open_store = open_store
         self._cond = threading.Condition()
-        self._outbox = {}       # handed over, not written yet
-        self._retry = {}        # a write that failed: tried again with the next one
-        self._handed = 0        # batches handed over so far
-        self._done = 0          # of those, how many have been tried
+        self._outbox = {}       # handed over, not on disk yet (failed ones too)
+        self._writing = False   # a batch is being written right now
+        self._retry_at = 0.0    # time.monotonic() before which no retry is made
+        self._backoff = RETRY_FIRST_S
+        self._waiters = 0       # wait() callers: retry quickly for them
         self._closing = False
         self._thread = None
 
     def hand(self, changes):
-        """Queue changes for writing; returns a ticket for wait()."""
+        """Queue changes for writing."""
         with self._cond:
-            if self._retry:
-                changes = {**self._retry, **changes}
-                self._retry = {}
             self._outbox.update(changes)
-            self._handed += 1
-            ticket = self._handed
             if self._thread is None or not self._thread.is_alive():
                 self._closing = False
                 self._thread = threading.Thread(target=self._run, name="settings-writer",
                                                 daemon=True)
                 self._thread.start()
             self._cond.notify_all()
-        return ticket
 
-    def last_ticket(self):
+    def wait(self, timeout):
+        """True once everything handed over has been written. False if the
+        timeout ran out first, or if a write is failing and keys are still
+        unwritten."""
         with self._cond:
-            return self._handed
-
-    def wait(self, ticket, timeout):
-        """True once everything handed over up to ticket has been written."""
-        with self._cond:
-            return self._cond.wait_for(lambda: self._done >= ticket, timeout)
+            self._waiters += 1
+            self._retry_at = 0.0            # someone is waiting: try now
+            self._cond.notify_all()
+            try:
+                return self._cond.wait_for(lambda: not self._outbox and not self._writing,
+                                           timeout)
+            finally:
+                self._waiters -= 1
 
     def close(self, timeout):
         with self._cond:
@@ -93,11 +101,18 @@ class _Writer:
         store = None
         while True:
             with self._cond:
-                self._cond.wait_for(lambda: self._outbox or self._closing)
-                if not self._outbox:
-                    return                  # closing, with nothing left
+                while True:
+                    if not self._outbox:
+                        if self._closing:
+                            return                  # closing, with nothing left
+                        self._cond.wait()
+                        continue
+                    left = self._retry_at - time.monotonic()
+                    if left <= 0 or self._closing:
+                        break
+                    self._cond.wait(left)           # a failed write, pausing
                 batch, self._outbox = self._outbox, {}
-                upto = self._handed
+                self._writing = True
             try:
                 if store is None:
                     store = self._open_store()
@@ -118,11 +133,18 @@ class _Writer:
                 failed = batch
                 store = None        # its error status sticks: start afresh next time
             with self._cond:
+                self._writing = False
                 if failed:
                     for key, value in failed.items():
-                        if key not in self._outbox:     # a newer value wins
-                            self._retry.setdefault(key, value)
-                self._done = max(self._done, upto)
+                        self._outbox.setdefault(key, value)     # a newer value wins
+                    pause = RETRY_WAITING_S if self._waiters else self._backoff
+                    self._backoff = min(self._backoff * 2, RETRY_MAX_S)
+                    self._retry_at = time.monotonic() + pause
+                    if self._closing:
+                        return                      # shutting down: one try was all we get
+                else:
+                    self._backoff = RETRY_FIRST_S
+                    self._retry_at = 0.0
                 self._cond.notify_all()
 
 
@@ -169,23 +191,22 @@ class Settings(QObject):
 
     def flush(self, wait=False, timeout=FLUSH_TIMEOUT_S):
         """Hand what's waiting to the writer. With wait, block until it's on
-        disk (or timeout runs out); returns False if it ran out."""
+        disk (or timeout runs out); returns False if it ran out or if a write is
+        failing, so something is still unwritten."""
         self._flush_timer.stop()
         self._first_pending = None
         if self._pending:
             pending, self._pending = self._pending, {}
-            ticket = self._writer.hand(pending)
-        else:
-            ticket = self._writer.last_ticket()   # anything still being written
+            self._writer.hand(pending)
         if not wait:
             return True
-        return self._writer.wait(ticket, timeout)
+        return self._writer.wait(timeout)       # also what failed earlier
 
     @pyqtSlot()
     def flush_and_wait(self):
         """For the way out: everything on disk before this returns."""
         if not self.flush(wait=True):
-            print("Settings: the last write didn't finish in time", flush=True)
+            print("Settings: the last write didn't finish (not saved)", flush=True)
 
     def close(self, timeout=FLUSH_TIMEOUT_S):
         """Write everything and stop the writer thread."""

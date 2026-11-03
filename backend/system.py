@@ -145,6 +145,7 @@ class SystemInfo(QObject):
         self._power_error = ""
         self._hold = lambda: False  # True while reboot and shut down should wait
         self._held = None           # (action, give up then) while one's waiting
+        self._before_power = lambda: None   # called just before systemctl is asked
         self._hold_timer = QTimer(self, interval=500, timeout=self._held_tick)
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
@@ -293,7 +294,16 @@ class SystemInfo(QObject):
             return
         self._run_power(action)
 
+    def before_power(self, fn):
+        """fn() runs just before a reboot or shut down is asked for (settings
+        waiting to be written go to disk then)."""
+        self._before_power = fn
+
     def _run_power(self, action):
+        try:
+            self._before_power()
+        except Exception as e:
+            print(f"System: couldn't prepare for {action}: {type(e).__name__}: {e}", flush=True)
         # On a worker thread: logind can take a moment to say no.
         threading.Thread(target=lambda: safe_emit(self, "_power_done", power(action)),
                          daemon=True).start()

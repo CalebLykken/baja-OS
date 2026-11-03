@@ -285,6 +285,8 @@ class MediaHub(QObject):
     def _pause_others(self, keep):
         if keep != "spotify":
             self._remember_spotify("")
+            if hasattr(self._sources["spotify"], "cancel_resume"):
+                self._sources["spotify"].cancel_resume()
         if keep != self._source:
             self._hush_for_switch()
         for name, src in self._sources.items():

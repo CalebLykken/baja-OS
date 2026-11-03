@@ -240,6 +240,53 @@ class PlayingFromTheDashboardTest(Connected):
         self.sp._fallback_timer.timeout.emit()
         self.assertEqual(self.sent, [])
 
+    def test_no_fallback_after_pausing(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.sp.pause()
+        self.sent.clear()
+        self.sp._fallback_timer.timeout.emit()
+        self.assertEqual(self.sent, [])
+        self.assertFalse(self.sp._fallback_timer.isActive())
+
+    def test_no_fallback_after_the_knob_toggles(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.sp.togglePlay()
+        self.sent.clear()
+        self.sp._fallback_timer.timeout.emit()
+        self.assertEqual(self.sent, [])
+
+    def test_no_fallback_after_picking_something_else(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.sp.playUri("spotify:album:b")
+        self.sent.clear()
+        self.sp._fallback_timer.timeout.emit()
+        self.assertEqual(self.sent, [])
+
+    def test_no_fallback_after_cancelling_the_resume(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.sp.cancel_resume()
+        self.sent.clear()
+        self.sp._fallback_timer.timeout.emit()
+        self.assertEqual(self.sent, [])
+
+    def test_a_cancelled_resume_sends_no_play_once_active(self):
+        self.signed_in()
+        self.sp.resume("spotify:album:a")
+        self.sp.cancel_resume()
+        self.send(type="device_changed", is_active=True)
+        self.assertNotIn("play", self.commands())
+
+    def test_no_fallback_after_disconnecting(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.sp._on_disconnected()
+        self.assertFalse(self.sp._fallback_timer.isActive())
+        self.assertEqual(self.sp._fallback, "")
+
     def test_the_resume_uri_is_the_context_then_the_song(self):
         self.send(type="track_changed", item=track())
         self.assertEqual(self.sp.resumeUri, "spotify:track:t")

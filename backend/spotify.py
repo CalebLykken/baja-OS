@@ -172,6 +172,7 @@ class SpotifyPlayer(QObject):
         self._error = ""
         self._pending = None
         self._pending_timer.stop()
+        self.cancel_resume()
         if was:
             self.changed.emit()
             self.playingChanged.emit()
@@ -302,6 +303,8 @@ class SpotifyPlayer(QObject):
     def _set_status(self, status):
         if status and status != self._status:
             self._status = status
+            if status in ("playing", "buffering") and self._active:
+                self.cancel_resume()     # it carried on by itself; no fallback needed
             self._clear_error()
             self.playingChanged.emit()
 
@@ -493,10 +496,12 @@ class SpotifyPlayer(QObject):
 
     @pyqtSlot()
     def pause(self):
+        self.cancel_resume()
         self._command("pause")
 
     @pyqtSlot()
     def togglePlay(self):
+        self.cancel_resume()
         self._command("pause" if self.playing else "play")
 
     @pyqtSlot()
@@ -560,7 +565,7 @@ class SpotifyPlayer(QObject):
             self._error = "Spotify is still connecting"
             self.changed.emit()
             return
-        self._fallback = ""
+        self.cancel_resume()
         self._then = list(then)
         self._start_here({"uri": uri})
 
@@ -570,6 +575,14 @@ class SpotifyPlayer(QObject):
         self._fallback = uri
         self._fallback_timer.start()
         self._start_here({})
+
+    def cancel_resume(self):
+        """Drop a resume still waiting on its fallback: the user has moved on."""
+        self._fallback = ""
+        self._fallback_timer.stop()
+        if self._pending == {}:      # the resume's own play, not a song someone picked
+            self._pending = None
+            self._pending_timer.stop()
 
     def _start_here(self, fields):
         if self._active:

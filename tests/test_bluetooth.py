@@ -186,13 +186,27 @@ class PollFailureTest(unittest.TestCase):
 
     def test_no_bluez_is_the_usual_quiet_blank_state(self):
         self.poll(phone("Pixel"))
-        for error in (FileNotFoundError("busctl"), subprocess.TimeoutExpired("busctl", 3)):
-            with mock.patch("backend.bluetooth._busctl", side_effect=error):
+        gone = subprocess.CompletedProcess(
+            ["busctl"], 1, "", "Call failed: The name org.bluez was not provided by any .service files\n")
+        for result in ({"side_effect": FileNotFoundError("busctl")}, {"return_value": gone}):
+            with mock.patch("backend.bluetooth._busctl", **result):
                 self.bt._tick()
             self.assertFalse(self.bt._busy)
             self.assertFalse(self.bt.adapterPresent)
             self.assertEqual(self.bt.deviceName, "")
         self.assertEqual(logged(self.printed), [])
+
+    def test_a_slow_or_failing_busctl_keeps_the_last_state(self):
+        self.poll(phone("Pixel"))
+        failed = subprocess.CompletedProcess(["busctl"], 1, "", "Call failed: Connection timed out\n")
+        for result in ({"side_effect": subprocess.TimeoutExpired("busctl", 3)}, {"return_value": failed}):
+            with mock.patch("backend.bluetooth._busctl", **result):
+                self.bt._tick()
+            self.assertFalse(self.bt._busy)
+            self.assertTrue(self.bt.adapterPresent)
+            self.assertEqual(self.bt.deviceName, "Pixel")
+        self.poll(phone("Pixel 9"))
+        self.assertEqual(self.bt.deviceName, "Pixel 9")
 
 
 class ParseObjectsTest(unittest.TestCase):

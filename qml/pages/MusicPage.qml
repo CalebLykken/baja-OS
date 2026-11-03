@@ -45,6 +45,10 @@ Item {
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
+    // Read once per queueChanged, so bindings that only need one song don't
+    // rebuild the whole queue (every song on the Pi) on each song change.
+    readonly property var queueSongs: media.queue
+    readonly property var spotifyNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
     // Only while Spotify is what's playing or being looked at.
@@ -56,9 +60,9 @@ Item {
     // The song after this one, or null when that isn't known: the phone doesn't
     // say, and a shuffle's order is the player's own.
     readonly property var nextSong: {
-        if (media.source === "spotify") return media.upNext.length > 0 ? media.upNext[0] : null
+        if (media.source === "spotify") return page.spotifyNext.length > 0 ? page.spotifyNext[0] : null
         if (media.source !== "local" || media.shuffle || media.repeat === "one") return null
-        var songs = media.queue, after = media.index + 1
+        var songs = page.queueSongs, after = media.index + 1
         return after < songs.length ? songs[after] : media.repeat === "all" && songs.length > 1 ? songs[0] : null
     }
 
@@ -372,7 +376,7 @@ Item {
                     readonly property bool spotifyQueue: media.source === "spotify"
                     anchors { fill: parent; margins: 10; topMargin: 52 }
                     clip: true
-                    model: spotifyQueue ? media.upNext : media.queue
+                    model: spotifyQueue ? page.spotifyNext : page.queueSongs
                     boundsBehavior: Flickable.StopAtBounds
                     // Open on the playing song, and follow it as it changes.
                     function showPlaying() {

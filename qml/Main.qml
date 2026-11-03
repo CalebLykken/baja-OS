@@ -113,6 +113,7 @@ Window {
         function onReady(ms) { root.mapReady = true; root.mapProblem = ""; console.log("Map: drawn in " + ms + " ms") }
         function onFailed(message) { root.mapProblem = message }
         function onCrashed() { root.mapReady = false }      // until it draws again
+        function onLoading() { root.mapReady = false }      // a (re)load: not ready until the new page says so
         function onBenchDone(result) { console.log("Map bench: " + JSON.stringify(result)) }
     }
 

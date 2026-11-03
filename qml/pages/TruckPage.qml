@@ -9,10 +9,12 @@ import "../assets/truck"
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
 // triangles) converted to Qt's own mesh files, which load at once, with
 // its materials put right (tools/convert_truck.py): glossy gold paint,
-// grey cladding, tinted glass, and BAJA plates.
+// grey cladding, tinted glass, and BAJA plates. Under it, this trip so
+// far (the live readouts are on Home and Gauges).
 Item {
     id: page
     signal navigate(int index)
+    property Trip trip: null
 
     property real spin: -35            // degrees, around the vertical axis
     property bool dragging: false
@@ -126,7 +128,7 @@ Item {
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
 
-    // The truck's name, plus a few live readouts in the same strip as Home.
+    // The truck's name, plus this trip in the same strip as Home's readouts.
     Column {
         anchors { left: parent.left; top: parent.top; leftMargin: 8; topMargin: 4 }
         spacing: 2
@@ -147,21 +149,34 @@ Item {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: 128
 
+        readonly property real minutes: page.trip ? Math.floor(page.trip.movingSeconds / 60) : 0
+
         RowLayout {
             anchors { fill: parent; margins: 20 }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Speed"; value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"; unit: Units.speedUnit }
-            Readout { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "Gear"; value: vehicle.engineKnown ? vehicle.gear || "N" : "—"; unit: "" }
             Readout {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                label: "Boost"; value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"; unit: Units.boostUnit
-                warning: vehicle.warnings.indexOf("boost") >= 0
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: page.trip ? "Trip since " + Units.timeText(page.trip.started) : "Trip"
+                value: page.trip ? (page.trip.metres / (Units.metric ? 1000 : 1609.34)).toFixed(1) : "—"
+                unit: Units.metric ? "km" : "mi"
             }
             Readout {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                label: "Coolant"; value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"; unit: Units.tempUnit
-                warning: vehicle.warnings.indexOf("coolant") >= 0
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Driving"
+                value: readouts.minutes < 60 ? readouts.minutes
+                       : Math.floor(readouts.minutes / 60) + ":" + (readouts.minutes % 60 < 10 ? "0" : "") + readouts.minutes % 60
+                unit: readouts.minutes < 60 ? "min" : "h"
+            }
+            Readout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Average"
+                value: page.trip && page.trip.movingSeconds > 0 ? Math.round(Units.speed(page.trip.averageMph)) : "—"
+                unit: Units.speedUnit
+            }
+            Readout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Peak boost"
+                value: page.trip && page.trip.boostKnown ? Units.boost(page.trip.peakBoost).toFixed(Units.boostDecimals) : "—"
+                unit: Units.boostUnit
             }
         }
     }

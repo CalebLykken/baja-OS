@@ -4,13 +4,15 @@ import QtQuick.Window
 import "components"
 import "pages"
 
-// Root window: nav rail on the left, status bar + pages on the right.
+// Root window: nav rail on the left, pages on the right. The rail carries
+// the clock and anything that needs seeing on every page (demo data, the
+// next turn, an engine warning), so pages have the full height.
 // Sized for the 8" 1280x800 panel; main.py goes full screen on the Pi.
 //
-// Maps and Music are the exceptions: they fill everything right of the
-// rail (no status bar; the clock moves into the rail), like CarPlay. There
-// is one map engine for the whole dashboard: it sits full size on Maps and
-// small in the Home page's map tile, moved to whichever is showing.
+// Maps and Music fill everything right of the rail, edge to edge, like
+// CarPlay. There is one map engine for the whole dashboard: it sits full
+// size on Maps and small in the Home page's map tile, moved to whichever
+// is showing.
 Window {
     id: root
     width: 1280
@@ -31,15 +33,10 @@ Window {
     readonly property bool onMaps: page === 2
     readonly property bool fullPage: page === 1 || page === 2     // Music and Maps
 
-    // Overpass (after US highway-sign lettering) for the map and its
-    // controls; bundled, so nothing needs installing on the Pi.
-    FontLoader { source: "assets/fonts/Overpass-Regular.ttf" }
-    FontLoader { source: "assets/fonts/Overpass-SemiBold.ttf" }
-    FontLoader { source: "assets/fonts/Overpass-Bold.ttf" }
-
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
     function setStyle(name) { Theme.style = name }
+    function setAppearance(mode) { Units.appearance = mode }
 
     // Style: --style for this run if given, else the one saved last time.
     // Any change (e.g. from Settings) is saved for the next start.
@@ -87,6 +84,9 @@ Window {
         }
     }
 
+    // This trip's distance, driving time and peaks, counted from start-up.
+    Trip { id: trip }
+
     // ---- the one map engine ------------------------------------------------------
     property bool mapWanted: false
     property bool mapReady: false
@@ -124,23 +124,43 @@ Window {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
 
-        // On Maps and Music the status bar gives way; the time sits here.
-        Label {
-            visible: root.fullPage
+        Column {
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
-            property date now: new Date()
-            text: Units.timeText(now)
-            numeric: true
-            font.pixelSize: Theme.fontBody
-            font.weight: Font.DemiBold
-            Timer { interval: 5000; running: true; repeat: true; onTriggered: parent.now = new Date() }
+            spacing: 4
+            Label {
+                id: clock
+                anchors.horizontalCenter: parent.horizontalCenter
+                property date now: new Date()
+                text: Units.timeText(now)
+                numeric: true
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+                Timer { interval: 5000; running: true; repeat: true; onTriggered: clock.now = new Date() }
+            }
+            // Made-up engine data (a Mac, a bench Pi, --demo): never let it
+            // pass for the truck's.
+            Legend {
+                visible: typeof vehicle !== "undefined" && vehicle.simulated
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "Demo"
+                color: Theme.accent
+            }
         }
 
         // An engine reading from the car out of range: here, so it shows
         // on every page, Maps and Music included. Tap for the gauges.
         EngineWarning {
+            id: engineWarning
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
             onTapped: root.page = 3
+        }
+        // While driving a route, the next turn in the same place on Gauges,
+        // Truck and Settings (Home, Music and Maps show it themselves); a
+        // warning comes first. Tap for Maps.
+        TurnChip {
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
+            opacity: active && !engineWarning.visible && root.page >= 3 ? 1 : 0
+            onTapped: root.page = 2
         }
 
         Column {
@@ -163,43 +183,30 @@ Window {
         }
     }
 
-    ColumnLayout {
+    // Pages crossfade and slide as you move between them (PageHost).
+    Item {
         anchors {
             left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom
-            leftMargin: 24; rightMargin: 24; bottomMargin: 20
+            margins: 20
         }
-        spacing: 8
         opacity: root.fullPage ? 0 : 1
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
 
-        StatusBar {
-            Layout.fillWidth: true
-            title: root.pages[root.page].label
-            showTurn: !root.fullPage && root.page !== 0    // Home's map tile shows it
-            onTurnTapped: root.page = 2
-        }
-
-        // Pages crossfade and slide as you move between them (PageHost).
-        Item {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-
-            PageHost { anchors.fill: parent; index: 0; current: root.page
-                HomePage {
-                    id: homePage
-                    anchors.fill: parent
-                    mapReady: root.mapReady
-                    onNavigate: (i) => root.page = i
-                }
+        PageHost { anchors.fill: parent; index: 0; current: root.page
+            HomePage {
+                id: homePage
+                anchors.fill: parent
+                mapReady: root.mapReady
+                onNavigate: (i) => root.page = i
             }
-            PageHost { anchors.fill: parent; index: 3; current: root.page
-                GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
-            PageHost { anchors.fill: parent; index: 4; current: root.page
-                TruckPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
-            PageHost { anchors.fill: parent; index: 5; current: root.page
-                SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
         }
+        PageHost { anchors.fill: parent; index: 3; current: root.page
+            GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+        PageHost { anchors.fill: parent; index: 4; current: root.page
+            TruckPage { anchors.fill: parent; trip: trip; onNavigate: (i) => root.page = i } }
+        PageHost { anchors.fill: parent; index: 5; current: root.page
+            SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
     }
 
     // Music: everything right of the rail.

@@ -218,7 +218,7 @@ phone locked; the dashboard controls work; it comes back after a reboot.
     detection and rerouting. Done: banner with the turn arrow and countdown,
     arrival time with time and distance left, the driven part of the line
     trimmed away, a new route after three fixes more than 60 m off it, the
-    next turn in the status bar on every other page (tap it for the map) and
+    next turn at the foot of the nav rail on the other pages (tap it for the map) and
     on the Home map tile. In demo mode the simulated truck drives the route.
   - One route and turn model, so a different routing provider can be swapped in
     later.

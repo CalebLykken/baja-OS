@@ -91,11 +91,14 @@ Item {
                         onClicked: page.eqOpen = !page.eqOpen
                     }
                 }
+                // The cover takes what height is left (up to 320), so the
+                // keys and volume below always fit on the card.
                 AlbumArt {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.topMargin: 4
-                    Layout.preferredWidth: Math.min(nowCard.width - 60, 320)
-                    Layout.preferredHeight: Layout.preferredWidth
+                    Layout.fillHeight: true
+                    Layout.maximumHeight: 320
+                    Layout.preferredWidth: height
                     source: media.artCard
                     placeholder: media.source === "phone" ? "phone" : "music"
                 }
@@ -115,7 +118,6 @@ Item {
                     font.pixelSize: Theme.fontBody
                     elide: Text.ElideRight
                 }
-                Item { Layout.fillHeight: true }
 
                 // Tap or drag to seek. The touch area is much taller than the bar;
                 // the song only jumps on release, so a drag doesn't re-decode.

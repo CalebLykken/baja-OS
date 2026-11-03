@@ -5,7 +5,6 @@ IconButton 1.0 IconButton.qml
 Gauge 1.0 Gauge.qml
 Readout 1.0 Readout.qml
 ProgressBar 1.0 ProgressBar.qml
-StatusBar 1.0 StatusBar.qml
 NowPlaying 1.0 NowPlaying.qml
 Label 1.0 Label.qml
 Backdrop 1.0 Backdrop.qml
@@ -25,3 +24,5 @@ EqSlider 1.0 EqSlider.qml
 EqualizerPanel 1.0 EqualizerPanel.qml
 Keyboard 1.0 Keyboard.qml
 EngineWarning 1.0 EngineWarning.qml
+TurnChip 1.0 TurnChip.qml
+Trip 1.0 Trip.qml

@@ -9,7 +9,7 @@ Item {
     signal clicked()
 
     width: parent ? parent.width : 112
-    height: 104
+    height: 96
 
     Rectangle {
         anchors { fill: parent; margins: 8 }

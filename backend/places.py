@@ -436,7 +436,7 @@ def search(db, text, near=None, limit=12):
         dist = None
         if near:
             dist = distance_m(lon, lat, near[0], near[1])
-        starts =name.lower().startswith(t)
+        starts = name.lower().startswith(t)
         exact = name.lower() == t
         key = (name, area_)
         if key in seen:

@@ -811,6 +811,7 @@ function addRoute() {
 function clearRoute() {
     guiding = false;
     routeCoords = null;
+    approach = Infinity;  // else the turn-approach zoom bump sticks after arriving
     refreshControls(true);
     for (const id of ["route-line", "route-casing"]) if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource("route")) map.removeSource("route");
@@ -899,6 +900,7 @@ window.baja = {
     // The whole route, framed beside the place card, before Go.
     previewRoute(coords) {
         guiding = false;
+        approach = Infinity;
         routeCoords = coords;
         trimFrom = 0;
         trimmedAt = 0;
@@ -911,6 +913,7 @@ window.baja = {
     // Driving it: draw it; QML starts following.
     showRoute(coords) {
         guiding = true;
+        approach = Infinity;
         routeCoords = coords;
         trimFrom = 0;
         trimmedAt = 0;

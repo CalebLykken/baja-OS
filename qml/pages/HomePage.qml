@@ -71,7 +71,7 @@ Item {
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
                 Rectangle {
-                    visible: page.mapReady && typeof routing !== "undefined" && routing.active
+                    visible: typeof routing !== "undefined" && routing.active
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
                     height: miniTurn.implicitHeight + 28
                     radius: Theme.radius
@@ -110,7 +110,7 @@ Item {
                     }
                 }
                 Rectangle {
-                    visible: page.mapReady && typeof routing !== "undefined" && routing.active
+                    visible: typeof routing !== "undefined" && routing.active
                     anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
                     width: arriveText.implicitWidth + 32
                     height: 64

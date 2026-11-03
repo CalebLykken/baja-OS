@@ -272,7 +272,7 @@ Item {
         offered = null                  // ended on purpose: not a cue to preview the offer
         routing.stop()
         place = null
-        map.call("clearPlace()")
+        if (map) map.call("clearPlace()")
     }
 
     // Zoom keys appear for a while after the map is touched.
@@ -740,7 +740,7 @@ Item {
         // looks: the biggest, clearest thing on screen.
         Sheet {
             id: turnCard
-            readonly property bool shown: page.mapReady && page.navigating
+            readonly property bool shown: page.navigating
             x: shown ? 16 : -width - 40
             opacity: shown ? 1 : 0
             visible: opacity > 0
@@ -833,7 +833,7 @@ Item {
         // ... and the trip, bottom-left: arrival, time left, distance left.
         Sheet {
             id: tripCard
-            readonly property bool shown: page.mapReady && page.navigating
+            readonly property bool shown: page.navigating
             x: shown ? 16 : -width - 40
             opacity: shown ? 1 : 0
             visible: opacity > 0
@@ -1000,7 +1000,12 @@ Item {
         // Map keys, bottom-right: one strip.
         Sheet {
             id: keys
-            visible: page.mapReady && !page.typing
+            // While navigating, the keys that don't need the map (the voice mute,
+            // search along the route) stay up even if the map engine is down.
+            // (Not the keys' own `visible`: a hidden strip hides every key in it.)
+            readonly property bool canSearchAlong: page.hasRouting && page.hasMaps && maps.canSearch
+            readonly property bool canMute: typeof voice !== "undefined" && voice.available
+            visible: !page.typing && (page.mapReady || (page.navigating && (canSearchAlong || canMute)))
             anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
             width: 104
             height: keyColumn.height
@@ -1008,13 +1013,13 @@ Item {
             // in this order: zoom, overview, search, voice. The recenter key stays.
             readonly property int slots: Math.max(1, Math.floor(
                 (parent.height - 16 - (speedCol.visible ? speedCol.y + speedCol.height + 12 : 16)) / 100))
-            readonly property bool voiceOn: page.navigating && typeof voice !== "undefined" && voice.available
+            readonly property bool voiceOn: page.navigating && canMute
                                             && slots - 1 >= 1
-            readonly property bool searchOn: page.navigating && page.hasRouting && page.hasMaps && maps.canSearch
+            readonly property bool searchOn: page.navigating && canSearchAlong
                                              && slots - 1 - (voiceOn ? 1 : 0) >= 1
-            readonly property bool overviewOn: page.navigating
+            readonly property bool overviewOn: page.mapReady && page.navigating
                                                && slots - 1 - (voiceOn ? 1 : 0) - (searchOn ? 1 : 0) >= 1
-            readonly property bool zoomOn: page.showZoom
+            readonly property bool zoomOn: page.mapReady && page.showZoom
                                            && slots - 1 - (voiceOn ? 1 : 0) - (searchOn ? 1 : 0) - (overviewOn ? 1 : 0) >= 2
             Column {
                 id: keyColumn
@@ -1030,11 +1035,13 @@ Item {
                 }
                 PillKey {
                     visible: keys.voiceOn
+                    divider: page.mapReady
                     icon: typeof voice !== "undefined" && voice.enabled ? "volume" : "volume_off"
                     lit: typeof voice !== "undefined" && voice.enabled
                     onHit: voice.setEnabled(!voice.enabled)
                 }
                 PillKey {
+                    visible: page.mapReady
                     icon: "navigation"
                     lit: page.following
                     divider: false

@@ -130,13 +130,15 @@ class SystemInfo(QObject):
     powerFailed = pyqtSignal(str)       # a reboot or shut down didn't happen, and why
     _read_done = pyqtSignal(dict)
     _power_done = pyqtSignal(str)
+    _version_done = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._v = {"temp": None, "fan": None, "power": "", "memUsed": 0, "memTotal": 0,
                    "diskFree": 0.0, "diskTotal": 0.0, "uptime": "", "canPower": False,
                    "errors": 0}
-        self._version = version_text()
+        self._version = ""         # read in the first check: it can run git
+        self._version_read = False
         self._busy = False
         self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
         self._read_error = ""      # the error the last reading died of, while it keeps happening
@@ -146,6 +148,7 @@ class SystemInfo(QObject):
         self._hold_timer = QTimer(self, interval=500, timeout=self._held_tick)
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
+        self._version_done.connect(self._got_version)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
@@ -158,6 +161,13 @@ class SystemInfo(QObject):
         self._busy = True
 
         def work():
+            if not self._version_read:
+                self._version_read = True
+                try:
+                    version = version_text()
+                except Exception:
+                    version = ""
+                safe_emit(self, "_version_done", version)
             v = {}       # stays empty if a reading crashes, and _apply keeps the old values
             try:
                 used, total = memory_mb()
@@ -188,6 +198,11 @@ class SystemInfo(QObject):
         elif not err and self._read_error:
             print("System: status check working again", flush=True)
         self._read_error = err
+
+    def _got_version(self, version):
+        if version != self._version:
+            self._version = version
+            self.changed.emit()
 
     def _apply(self, v):
         self._busy = False
@@ -234,7 +249,7 @@ class SystemInfo(QObject):
         """Uncaught errors since start (main.log_exception), as of the last check."""
         return self._v["errors"]
 
-    @pyqtProperty(str, constant=True)
+    @pyqtProperty(str, notify=changed)
     def version(self):
         return self._version
 

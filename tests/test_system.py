@@ -121,8 +121,8 @@ class CanPowerTest(unittest.TestCase):
 
 class StatusCheckTest(unittest.TestCase):
     def setUp(self):
-        with mock.patch("backend.system.version_text", return_value=""):
-            self.system = SystemInfo()
+        self.version = mock.patch("backend.system.version_text", return_value="v1 (abc)").start()
+        self.system = SystemInfo()
         mock.patch("backend.system.threading", SimpleNamespace(Thread=InlineThread)).start()
         self.printed = mock.patch("builtins.print").start()
         self.addCleanup(mock.patch.stopall)
@@ -146,6 +146,23 @@ class StatusCheckTest(unittest.TestCase):
             for _ in range(3):
                 self.system._check()
         return ask.call_count
+
+    def test_version_is_read_by_the_first_check_not_the_constructor(self):
+        self.version.assert_not_called()
+        self.assertEqual(self.system.version, "")
+        seen = []
+        self.system.changed.connect(lambda: seen.append(self.system.version))
+        self.check()
+        self.check()
+        self.assertEqual(self.system.version, "v1 (abc)")
+        self.assertEqual(self.version.call_count, 1)
+        self.assertEqual(seen[0], "v1 (abc)")
+
+    def test_a_crashing_version_read_leaves_it_blank_and_checks_go_on(self):
+        self.version.side_effect = RuntimeError("git")
+        self.check()
+        self.assertEqual(self.system.version, "")
+        self.assertEqual(self.system.memUsed, 1000)
 
     def test_logind_is_asked_once(self):
         self.assertEqual(self.asked([True]), 1)

@@ -94,5 +94,91 @@ class BrightnessWithoutDdcTests(unittest.TestCase):
         self.assertEqual(d.brightness, 60)
 
 
+class FakeDdc:
+    def __init__(self, path, current=30, maximum=100, fail=False):
+        if fail:
+            raise OSError("no reply")
+        self.cur, self.max, self.sets = current, maximum, []
+
+    def get(self):
+        return self.cur, self.max
+
+    def set(self, value):
+        self.sets.append(value)
+
+
+def run_probe(d, bus="/dev/i2c-9", ddc=FakeDdc):
+    """Run the probe synchronously, as start() would on the writer thread."""
+    d._probing = True
+    with mock.patch.object(display_mod, "find_ddc_bus", return_value=bus), \
+            mock.patch.object(display_mod, "DdcBrightness", ddc):
+        d._probe()
+
+
+class ProbeTests(unittest.TestCase):
+    def test_constructor_does_no_hardware_io(self):
+        with mock.patch.object(display_mod, "find_ddc_bus") as find:
+            d = display_mod.Display()
+        find.assert_not_called()
+        self.assertFalse(d.hardware)
+        self.assertEqual(d.brightness, 100)
+
+    def test_overlay_stays_clear_while_probing(self):
+        d = display_mod.Display()
+        d._probing = True
+        d.setBrightness(40)
+        self.assertEqual(d.brightness, 100)
+        self.assertFalse(d.hardware)
+
+    def test_success_adopts_panel_level(self):
+        seen = []
+        d = display_mod.Display()
+        d.hardwareChanged.connect(lambda: seen.append(d.hardware))
+        run_probe(d)
+        self.assertTrue(d.hardware)
+        self.assertEqual(seen, [True])
+        self.assertEqual(d.brightness, 30)
+        self.assertEqual(d._levels[False], 30)  # day level follows the panel
+
+    def test_saved_day_level_wins_over_panel(self):
+        s = FakeSettings()
+        s.data["brightnessDay"] = 70
+        d = display_mod.Display(s)
+        run_probe(d)
+        self.assertEqual(d.brightness, 70)
+        self.assertEqual(d._pending, 70)  # queued for the writer thread
+
+    def test_oserror_falls_back_to_software_dim(self):
+        d = display_mod.Display()
+        run_probe(d, ddc=lambda path: FakeDdc(path, fail=True))
+        self.assertFalse(d.hardware)
+        self.assertIsNone(d._ddc)
+        self.assertEqual(d.brightness, 100)
+        d.setBrightness(50)
+        self.assertEqual(d.brightness, 50)
+
+    def test_no_bus_is_software_dim(self):
+        d = display_mod.Display()
+        run_probe(d, bus=None)
+        self.assertFalse(d.hardware)
+        self.assertEqual(d.brightness, 100)
+
+    def test_change_before_probe_is_applied_after(self):
+        d = display_mod.Display()
+        d._probing = True
+        d.setBrightness(55)
+        self.assertEqual(d.brightness, 100)
+        run_probe(d)
+        self.assertEqual(d.brightness, 55)
+        self.assertEqual(d._pending, 55)  # queued for the DDC write
+
+    def test_change_before_failed_probe_is_kept(self):
+        d = display_mod.Display()
+        d._probing = True
+        d.setBrightness(55)
+        run_probe(d, bus=None)
+        self.assertEqual(d.brightness, 55)
+
+
 if __name__ == "__main__":
     unittest.main()

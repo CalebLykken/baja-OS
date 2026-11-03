@@ -20,7 +20,7 @@ from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSign
 from backend import updater
 from backend.updater import (CLEAN_MARK, MARKER, NO_SPEED, NOT_A_CHECKOUT, Updater, check_for_updates,
                              confirm_healthy, driving_reason, explain, marker_notice,
-                             mark_clean_exit, read_marker, update_to, write_marker)
+                             clear_clean_exit, mark_clean_exit, read_marker, update_to, write_marker)
 
 app = QCoreApplication.instance() or QCoreApplication([])
 HERE = Path(__file__).resolve().parent.parent
@@ -576,6 +576,13 @@ class GuardTest(Repos):
         self.updated()
         mark_clean_exit(self.pi)
         self.assertTrue((self.pi / CLEAN_MARK).exists())
+
+    def test_the_mark_can_be_taken_back(self):
+        self.updated()
+        mark_clean_exit(self.pi)
+        clear_clean_exit(self.pi)
+        self.assertFalse((self.pi / CLEAN_MARK).exists())
+        clear_clean_exit(self.pi)                   # nothing there: fine
 
     def test_the_mark_is_used_up_by_one_start(self):
         self.updated()

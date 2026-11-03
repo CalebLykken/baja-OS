@@ -266,6 +266,21 @@ class LibraryTest(AccountCase):
         a.refresh()
         self.assertEqual((a.playlists, len(a.songs)), ([], 1))
 
+    def test_a_list_that_is_not_a_list_is_an_empty_one(self):
+        self.assertEqual(spotifyaccount._read_section({"items": 5}, "playlist", None), [])
+        self.assertEqual(spotifyaccount._read_section({"items": "many"}, "album", "album"), [])
+        self.assertEqual(spotifyaccount._read_section(["items"], "track", "track"), [])
+
+    def test_an_odd_library_answer_says_so_and_keeps_the_last_copy(self):
+        a = self.linked_account()
+        self.answers["playlists"] = TypeError("odd shape")
+        a.refresh()
+        self.assertFalse(a.loading)
+        self.assertEqual(a.message, "Can't reach Spotify right now")
+        self.assertEqual((len(a.playlists), len(a.albums), len(a.songs)), (1, 1, 1))
+        self.assertTrue(a.linked)
+        self.assertTrue(self.login.exists())
+
     def test_an_expired_token_is_replaced_once(self):
         a = self.linked_account()
         self.answers["playlists"] = [http_error(401), PLAYLISTS]

@@ -58,14 +58,21 @@ LATLON_RE = re.compile(r"(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})")
 
 
 def load_token():
-    """The shared secret, made on first use (readable by this user only)."""
+    """The shared secret, made on first use (readable by this user only).
+    This runs while the app starts, so it never raises: a damaged file
+    (UnicodeDecodeError is a ValueError) counts as no token, and if a new one
+    can't be saved a throwaway one lasts until the next restart."""
     try:
         token = TOKEN_FILE.read_text().strip()
         if len(token) >= 32:
             return token
-    except OSError:
+    except (OSError, ValueError):
         pass
-    return new_token()
+    try:
+        return new_token()
+    except OSError as e:
+        print(f"Send to Baja: couldn't save a token ({e}); using one for this run only")
+        return secrets.token_urlsafe(32)
 
 
 def new_token():

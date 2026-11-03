@@ -744,5 +744,35 @@ class ReadingCodesTest(unittest.TestCase):
         self.assertEqual(got, [{"mil": False, "count": 0, "stored": [], "pending": []}])
 
 
+class ReaderSurvivesTest(unittest.TestCase):
+    def test_an_unexpected_error_in_a_session_does_not_end_the_thread(self):
+        reader = ObdReader()
+        lost = []
+        reader.lost.connect(lambda: lost.append(1))
+        naps = []
+
+        def nap(seconds):
+            naps.append(seconds)
+            raise Stop()                  # ends the loop after the first pass
+
+        with mock.patch.object(obd, "find_port", return_value="/dev/ttyUSB0"), \
+                mock.patch.object(ObdReader, "_session", side_effect=RuntimeError("bad reply")), \
+                mock.patch.object(reader, "_nap", nap), \
+                mock.patch.object(obd.errorlog.log, "report") as report:
+            with self.assertRaises(Stop):
+                reader._run()
+        report.assert_called_once()
+        self.assertEqual(lost, [1])
+        self.assertEqual(len(naps), 1)
+
+    def test_the_port_is_closed_when_it_will_not_set_up(self):
+        with mock.patch.object(obd.os, "open", return_value=77), \
+                mock.patch.object(obd.os, "close") as close, \
+                mock.patch.object(obd.termios, "tcgetattr", side_effect=obd.termios.error("no")):
+            with self.assertRaises(obd.termios.error):
+                Elm("/dev/ttyUSB9")
+        close.assert_called_once_with(77)
+
+
 if __name__ == "__main__":
     unittest.main()

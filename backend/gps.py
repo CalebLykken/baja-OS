@@ -26,7 +26,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 GPSD = ("127.0.0.1", 2947)
 # Only devices that say they're GPS receivers: other USB serial devices
@@ -389,6 +389,8 @@ class Gps(QObject):
                 used = self._read_gpsd()
             except (OSError, ValueError, termios.error) as e:
                 print(f"GPS: gpsd read failed ({e}); retrying", flush=True)
+            except Exception as e:            # anything else must not end the thread
+                errorlog.log.report(type(e), e, e.__traceback__, label="GPS: reader error, retrying:")
             if not used:
                 path = find_receiver()
                 if path:
@@ -396,6 +398,8 @@ class Gps(QObject):
                         self._read_receiver(path)
                     except (OSError, termios.error) as e:   # unplugged: look again
                         print(f"GPS: lost the receiver ({e}); retrying", flush=True)
+                    except Exception as e:
+                        errorlog.log.report(type(e), e, e.__traceback__, label="GPS: reader error, retrying:")
             safe_emit(self, "_report", {"gpsd": False})
             time.sleep(5)
 
@@ -417,6 +421,8 @@ class Gps(QObject):
                     msg = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(msg, dict):
+                    continue                      # null, a number, a list: not a report
                 kind = msg.get("class")
                 if not talking and (kind == "TPV" or kind == "DEVICES" and msg.get("devices")):
                     talking = True                # a receiver, not just gpsd on its own
@@ -449,7 +455,9 @@ class Gps(QObject):
                     continue
                 if kind != "TPV":
                     continue
-                if msg.get("mode", 0) >= 2 and "lat" in msg and "lon" in msg:
+                mode, lat, lon = msg.get("mode"), msg.get("lat"), msg.get("lon")
+                if (isinstance(mode, (int, float)) and mode >= 2
+                        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lon))):
                     safe_emit(self, "_report", {
                         "lat": msg["lat"], "lon": msg["lon"],
                         "speed": msg.get("speed", 0.0),

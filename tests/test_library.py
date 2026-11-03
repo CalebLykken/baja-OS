@@ -164,6 +164,34 @@ class ScanCacheTest(ScanBase):
         self.assertEqual(self.reads(), 4)
         self.assertEqual(len(self.tracks), 4)
 
+    def test_a_cover_that_cant_be_saved_costs_the_cover_not_the_song(self):
+        (self.top / "album 000" / "cover.jpg").write_bytes(b"jpeg")
+        audio = SimpleNamespace(tags={}, pictures=[SimpleNamespace(data=b"img")],
+                                info=SimpleNamespace(length=1.0))
+        with mock.patch.object(library.mutagen, "File", return_value=audio), \
+                mock.patch.object(library.artcache, "store_pinned", side_effect=OSError("disk full")), \
+                mock.patch("builtins.print"):
+            tracks = scan(self.top)
+        self.assertEqual(len(tracks), 4)
+        self.assertTrue(tracks[0]["art"].endswith("/album 000/cover.jpg"))   # the folder's picture
+        self.assertEqual(tracks[3]["art"], "")
+
+    def test_an_art_folder_that_cant_be_made_on_a_rescan_keeps_the_songs(self):
+        audio = SimpleNamespace(tags={}, pictures=[SimpleNamespace(data=b"img")],
+                                info=SimpleNamespace(length=1.0))
+        with mock.patch.object(library.mutagen, "File", return_value=audio):
+            self.assertEqual(len(scan(self.top)), 4)          # covers cached in the art folder
+            with mock.patch.object(library.artcache, "pinned_dir",
+                                   side_effect=OSError("read-only")), \
+                    mock.patch("builtins.print"):
+                tracks = scan(self.top)
+        self.assertEqual(len(tracks), 4)
+
+    def test_an_unreadable_folder_has_no_folder_art(self):
+        with mock.patch.object(Path, "iterdir", side_effect=PermissionError("denied")):
+            self.assertEqual(library._folder_art(self.top), "")
+        self.assertEqual(len(scan(self.top)), 4)
+
     def test_an_unreadable_file_is_read_again_each_scan(self):
         self.reads()
         self.file.write_bytes(b"this is no song")

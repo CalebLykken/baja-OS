@@ -150,6 +150,55 @@ class SearchAlongTest(unittest.TestCase):
             self.assertEqual(maps._query, "along:gas")
 
 
+class RobustnessTest(unittest.TestCase):
+    """A damaged region.json or a failing place search must not break the UI."""
+
+    class InlineThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.addCleanup(mock.patch.stopall)
+
+    def test_a_region_file_of_the_wrong_shape_gives_no_region(self):
+        (self.dir / "basemap.pmtiles").write_bytes(b"x")
+        (self.dir / "region.json").write_text('["x"]')
+        maps = MapService(self.dir)
+        maps.refresh()
+        self.assertEqual((maps.region, maps.build), ("", ""))
+        self.assertFalse(maps.ready)
+
+    def test_getters_survive_odd_values(self):
+        maps = MapService(self.dir)
+        maps._info = {"region": 5, "build": None}
+        self.assertEqual((maps.region, maps.build), ("", ""))
+
+    def test_a_failing_search_still_clears_the_results(self):
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread)).start()
+        mock.patch("builtins.print").start()
+        (self.dir / "places.sqlite").write_bytes(b"")
+        maps = MapService(self.dir)
+        maps._results = [{"name": "old"}]
+        with mock.patch("backend.maps.places.search", side_effect=TypeError("odd row")):
+            maps.search("gas", 0.0, 0.0)
+        self.assertEqual(maps.results, [])
+
+    def test_a_failing_nearby_search_still_answers(self):
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread)).start()
+        mock.patch("builtins.print").start()
+        maps = MapService(self.dir)
+        maps._results = [{"name": "old"}]
+        with mock.patch("backend.maps.places.nearby", side_effect=KeyError("x")):
+            maps.searchNearby("gas", 0.0, 0.0)
+        self.assertEqual(maps.results, [])
+
+
 class UpdateTest(unittest.TestCase):
     """The map update's busy flag must always clear, however the script's
     output goes. The worker runs inline and install-map.sh is faked."""

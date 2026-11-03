@@ -67,6 +67,23 @@ class ReadingAnswersTest(unittest.TestCase):
         out = parse_results({"tracks": {"items": [{"uri": "u", "name": "n", "album": None, "artists": None}]}})
         self.assertEqual((out[0]["art"], out[0]["subtitle"]), ("", ""))
 
+    def test_a_section_that_is_not_a_list_of_items_is_skipped(self):
+        self.assertEqual(parse_results({"tracks": [1, 2], "albums": "x",
+                                        "playlists": {"items": [None, {"uri": 5, "name": "n"}]}}), [])
+
+    def test_a_cover_width_given_as_text_counts_as_zero(self):
+        images = [{"url": "a", "width": "300"}, {"url": "b", "width": "64"}]
+        out = parse_results({"tracks": {"items": [{"uri": "u", "name": "n", "album": {"images": images}}]}})
+        self.assertEqual(out[0]["art"], "b")
+
+    def test_odd_shapes_inside_an_item_do_not_raise(self):
+        item = {"uri": "u", "name": "n", "artists": [{"name": 3}, "x", {"name": "A"}],
+                "album": ["not", "a", "dict"], "owner": ["x"], "images": 7}
+        out = parse_results({"tracks": {"items": [item]}, "albums": {"items": [dict(item, images="abc")]},
+                             "playlists": {"items": [dict(item, uri=["u"])]}})
+        self.assertEqual([r["subtitle"] for r in out], ["A", "Album, A"])
+        self.assertEqual([r["art"] for r in out], ["", ""])
+
 
 class CredentialsTest(unittest.TestCase):
     def setUp(self):
@@ -140,6 +157,20 @@ class SearchTest(unittest.TestCase):
         self.search.search("a")
         self.assertEqual(self.token_calls(), 2)
         self.assertEqual(len(self.search.results), 3)
+
+    def test_a_token_answer_with_no_token_is_a_failure_to_reach(self):
+        self.answers["token"] = [[]]
+        self.search.search("a")
+        self.assertIn("hotspot", self.search.message)
+        self.assertFalse(self.search.searching)
+
+    def test_an_unexpected_error_says_so_and_stops_searching(self):
+        report = mock.patch.object(spotifysearch.errorlog.log, "report").start()
+        with mock.patch.object(spotifysearch, "parse_results", side_effect=RuntimeError("boom")):
+            self.search.search("a")
+        self.assertFalse(self.search.searching)
+        self.assertEqual(self.search.message, "Spotify search went wrong; try again")
+        self.assertEqual(report.call_args.kwargs["label"], "Spotify search failed:")
 
     def test_nothing_found(self):
         self.answers["search"] = {}

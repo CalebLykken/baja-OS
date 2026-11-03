@@ -193,7 +193,9 @@ def main():
 
     def on_sigterm(*_):
         settings.flush_and_wait()
-        QCoreApplication.quit()
+        # Posted, not called: quit() before app.exec() is running does nothing,
+        # and a stop during start-up must still end the dashboard.
+        QTimer.singleShot(0, QCoreApplication.quit)
     signal.signal(signal.SIGTERM, on_sigterm)
     sigterm_poll = QTimer(interval=250, timeout=lambda: None)
     sigterm_poll.start()

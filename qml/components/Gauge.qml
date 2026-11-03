@@ -27,6 +27,14 @@ Card {
     property real shown: known ? value : minValue
     Behavior on shown { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     readonly property real frac: clamp((shown - minValue) / (maxValue - minValue))
+    // Key-on self-test: while testFrac >= 0 the dial draws it instead of the
+    // reading. The numerals and the warning colour still follow the real value.
+    property real testFrac: -1
+    // On the way back, testFrac is a blend weight toward the live reading, so
+    // a value change mid-sweep is followed instead of snapping at the end.
+    property bool sweepFalling: false
+    readonly property real drawFrac: testFrac < 0 ? frac
+                                     : (sweepFalling ? frac + (1 - frac) * testFrac : testFrac)
     readonly property real warnFrac: isFinite(warnAbove)
                                      ? clamp((warnAbove - minValue) / (maxValue - minValue)) : 1
     readonly property real warnLowFrac: isFinite(warnBelow)
@@ -40,6 +48,24 @@ Card {
 
     function clamp(x) { return Math.max(0, Math.min(1, x)) }
 
+    // Sweep to full scale and back to the live reading, like a cluster's
+    // key-on test. Ignored while one is running or before the dial has a size.
+    function selfTest() {
+        if (dial.r <= 0 || sweepAnim.running)
+            return
+        sweepAnim.start()
+    }
+
+    SequentialAnimation {
+        id: sweepAnim
+        ScriptAction { script: g.testFrac = 0 }
+        NumberAnimation { target: g; property: "testFrac"; to: 1; duration: 550; easing.type: Easing.InOutCubic }
+        PauseAnimation { duration: 120 }
+        ScriptAction { script: g.sweepFalling = true }
+        NumberAnimation { target: g; property: "testFrac"; from: 1; to: 0; duration: 550; easing.type: Easing.InOutCubic }
+        ScriptAction { script: { g.testFrac = -1; g.sweepFalling = false } }
+    }
+
     // A tick step of 1, 2, 2.5 or 5 x 10^n giving 4-8 major ticks.
     function majorStep() {
         var range = maxValue - minValue
@@ -50,7 +76,7 @@ Card {
     }
 
     // Round to ~0.5% steps so tiny jitter doesn't trigger repaints.
-    readonly property real paintFrac: Math.round(frac * 200) / 200
+    readonly property real paintFrac: Math.round(drawFrac * 200) / 200
     onPaintFracChanged: if (look !== "needle") dynamic.requestPaint()
     onWarningChanged: dynamic.requestPaint()
     onStyleNameChanged: { face.requestPaint(); dynamic.requestPaint() }
@@ -223,7 +249,7 @@ Card {
         Item {
             visible: g.look === "needle"
             anchors.fill: parent
-            rotation: (g.startAngle + g.sweep * g.frac) * 180 / Math.PI
+            rotation: (g.startAngle + g.sweep * g.drawFrac) * 180 / Math.PI
 
             Rectangle {
                 x: dial.cx - 14

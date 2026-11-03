@@ -12,7 +12,22 @@ Rectangle {
     property int turn: 0
     readonly property string current: warnings.length ? warnings[turn % warnings.length] : ""
     property string shown: ""                 // kept while it fades out
-    onCurrentChanged: if (current !== "") shown = current
+    property bool wasShowing: false           // was a warning on screen before this change?
+    onCurrentChanged: {
+        if (current === "") {
+            wasShowing = false
+            return
+        }
+        if (wasShowing) {
+            swapShown.restart()               // another warning while on screen: crossfade, don't pop
+        } else {
+            swapShown.stop()
+            column.opacity = 1
+            shown = current
+            arrive.restart()                  // the chip appears: one nudge
+        }
+        wasShowing = true
+    }
 
     width: 96
     height: column.implicitHeight + 14
@@ -21,6 +36,20 @@ Rectangle {
     opacity: current !== "" ? 1 : 0
     visible: opacity > 0
     Behavior on opacity { NumberAnimation { duration: 200 } }
+
+    SequentialAnimation {
+        id: arrive
+        NumberAnimation { target: chip; property: "scale"; from: 0.85; to: 1.08; duration: 160; easing.type: Easing.OutCubic }
+        NumberAnimation { target: chip; property: "scale"; to: 1.0; duration: 140; easing.type: Easing.InOutQuad }
+    }
+
+    // The icon and value dip out and back in, swapping at the bottom of the dip.
+    SequentialAnimation {
+        id: swapShown
+        NumberAnimation { target: column; property: "opacity"; to: 0.3; duration: 120 }
+        ScriptAction { script: { if (chip.current !== "") chip.shown = chip.current } }
+        NumberAnimation { target: column; property: "opacity"; to: 1; duration: 120 }
+    }
 
     Timer {
         interval: 2500; repeat: true

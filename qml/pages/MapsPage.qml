@@ -166,7 +166,23 @@ Item {
         panel = "place"
         if (!isSaved(p)) remember(p)
         map.call("showPlace(" + p.lon + "," + p.lat + ")")
-        if (hasRouting && routing.available && hasFix) routing.routeTo(p.name, p.lon, p.lat)
+        routeAsked = false
+        askRoute()
+    }
+    // The route for the place on the card is asked for once the router is up
+    // and there is a fix, so a place picked before either (a phone send during
+    // the cold-start search, a recent) still gets its Go button.
+    property bool routeAsked: false
+    function askRoute() {
+        if (panel !== "place" || !place || routeAsked) return
+        if (!hasRouting || !routing.available || !hasFix) return
+        routeAsked = true
+        routing.routeTo(place.name, place.lon, place.lat)
+    }
+    onHasFixChanged: askRoute()
+    Connections {
+        target: page.hasRouting ? routing : null
+        function onChanged() { page.askRoute() }
     }
     // A destination sent from the phone (Settings > Map > Send from phone).
     // While guiding it's offered, not taken: choose() would end the route.
@@ -252,6 +268,7 @@ Item {
             page.place = [page.home, page.work].concat(page.favourites, page.recents).find(r => page.samePlace(r, p)) || p
             page.typing = false
             page.panel = "place"
+            page.routeAsked = true      // the router already has it
             if (page.mapReady) page.map.call("showPlace(" + lon + "," + lat + ")")
         }
         function onStopsFailed(text) {

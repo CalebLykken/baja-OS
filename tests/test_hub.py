@@ -152,6 +152,29 @@ class SpotifyResumeTest(unittest.TestCase):
         self.signs_in()
         self.assertEqual(self.spotify.resumed, [])
 
+    def connects(self, *names):
+        self.phone.deviceName = names[0]
+        self.phone.paired = [{"path": f"/dev/{n}", "address": n, "name": n, "connected": True}
+                             for n in names]
+        self.phone.changed.emit()
+
+    def test_a_second_phone_auto_resuming_doesnt_take_the_speakers(self):
+        self.make()
+        self.connects("A")
+        self.spotify.play()
+        with mock.patch("backend.hub.time.monotonic", return_value=time.monotonic() + 3600):
+            self.connects("A", "B")       # A's grace is long over; the name shown stays A's
+            self.phone.play()             # B's auto-resume
+        self.assertEqual(self.hub.source, "spotify")
+
+    def test_a_phone_playing_long_after_connecting_still_takes_over(self):
+        self.make()
+        self.connects("A", "B")
+        self.spotify.play()
+        with mock.patch("backend.hub.time.monotonic", return_value=time.monotonic() + 3600):
+            self.phone.play()
+        self.assertEqual(self.hub.source, "phone")
+
     def test_playing_is_remembered(self):
         self.make()
         self.spotify.play()

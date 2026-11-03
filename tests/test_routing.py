@@ -722,6 +722,13 @@ class AvoidTest(unittest.TestCase):
         self.assertEqual(self.sent, [])
         self.assertTrue(self.router._arrived)       # the auto-stop still comes
 
+    def test_directions_are_in_miles_unless_metric(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.assertEqual(self.sent[0]["directions_options"]["units"], "miles")
+        self.settings.set("metric", "true")
+        self.run_with_router(lambda: self.router._request(*self.router._dest, reroute=True))
+        self.assertEqual(self.sent[1]["directions_options"]["units"], "kilometers")
+
     def test_a_reroute_carries_them(self):
         self.router.setAvoid("avoidHighways", True)
         self.run_with_router(lambda: self.router.routeTo("Shop", *END))
@@ -962,6 +969,14 @@ class FerryTest(unittest.TestCase):
         r = self.route({"type": 28, "instruction": "Take the Fauntleroy - Vashon ferry.",
                         "time": 600, "length": 8.0})
         self.assertEqual(r.ferries, [{"name": "Fauntleroy - Vashon", "time": 600.0, "length": 8000.0}])
+
+    def test_lengths_follow_the_units_the_router_used(self):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["units"] = "miles"
+        data["trip"]["legs"][0]["maneuvers"].insert(1, {"type": 28, "ferry": True, "time": 600, "length": 5.0,
+                                                       "instruction": "Take the A - B ferry."})
+        r = Route(data, "Shop")
+        self.assertAlmostEqual(r.ferries[0]["length"], 5.0 * 1609.344)
 
     def test_detected_from_travel_mode_and_merged(self):
         r = self.route({"type": 28, "travel_mode": "drive", "ferry": True, "instruction": "Take the A - B ferry.",

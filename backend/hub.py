@@ -49,6 +49,7 @@ from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtProperty, pyqtSignal, py
 from PyQt6.QtGui import QImage, QPainter, QPainterPath
 
 from backend import artcache, retry, safe_emit
+from backend.prefs import as_bool
 
 PHONE_RECONNECT_GRACE_S = 10
 # Soft pause and play, like a car stereo: music cut off mid-wave clicks.
@@ -172,7 +173,7 @@ class MediaHub(QObject):
                 local.set_modes(modes.get("shuffle") is True, modes.get("repeat"))
             local.restore(saved.get("local"), play=self._was_playing)
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
-        self._resume_on = str(settings.get(RESUME_SETTING, "true")) == "true" if settings else False
+        self._resume_on = as_bool(settings.get(RESUME_SETTING), True) if settings else False
         self._resume_uri = str(settings.get(RESUME_URI_SETTING, "")) if settings else ""
         self._resume_tried = False
         self._spotify_was_playing = False

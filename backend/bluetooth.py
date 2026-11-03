@@ -26,6 +26,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 from backend import safe_emit
 from backend.btagent import PairingAgent
 from backend.dbus import PROPERTIES, BusWatch
+from backend.prefs import as_json
 
 POLL_MS = 1000
 SAFETY_TICKS = 60       # seconds between polls while BlueZ's signals are coming through
@@ -313,11 +314,7 @@ class BluetoothAudio(QObject):
     def _load_dates(self):
         if self._settings is None:
             return {}
-        try:
-            dates = json.loads(str(self._settings.get(DATES_KEY, "{}")))
-        except ValueError:
-            return {}
-        return dates if isinstance(dates, dict) else {}
+        return as_json(self._settings.get(DATES_KEY), dict, {})
 
     def _update_dates(self, state):
         """Note the day each device was accepted, and forget the ones that are

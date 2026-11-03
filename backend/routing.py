@@ -31,6 +31,7 @@ import urllib.request
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit
+from backend.prefs import as_bool
 
 ROUTER = "http://127.0.0.1:8002"
 OFF_ROUTE_M = 60          # this far from the line ...
@@ -80,7 +81,7 @@ def costing_options(settings):
     """The costing_options for a route request from what's avoided in settings."""
     if not settings:
         return {}
-    auto = {opt: 0 for key, opt in AVOID.items() if str(settings.get(key, "false")) == "true"}
+    auto = {opt: 0 for key, opt in AVOID.items() if as_bool(settings.get(key))}
     return {"auto": auto} if auto else {}
 
 SHORT_MAX = 60                        # characters of on-screen instruction
@@ -269,7 +270,7 @@ def saved_route(text, now):
         if stops:
             out["stops"] = stops
         return out
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, OverflowError):
         return None
 
 
@@ -753,7 +754,7 @@ class Router(QObject):
             return                                  # arrival is announced on its own
         dist = max(0.0, r.cum[m["begin_shape_index"]] - r.along)
         speed = self._gps.speed
-        metric = bool(self._settings) and str(self._settings.get("metric", "false")) == "true"
+        metric = bool(self._settings) and as_bool(self._settings.get("metric"))
         warn_m, warn_words = ALERTS[metric]["far" if speed > FAST_MS else "near"]
         turn_m = max(60.0, speed * 6)               # about six seconds before the turn
         alert = (m.get("verbal_transition_alert_instruction") or m.get("instruction") or "").rstrip(".")
@@ -770,7 +771,7 @@ class Router(QObject):
 
     # ---- route options ----------------------------------------------------------------
     def _avoids(self, key):
-        return bool(self._settings) and str(self._settings.get(key, "false")) == "true"
+        return bool(self._settings) and as_bool(self._settings.get(key))
 
     @pyqtProperty(bool, notify=optionsChanged)
     def avoidFerries(self):

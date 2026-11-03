@@ -23,6 +23,7 @@ import time
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit, sun
+from backend.prefs import as_bool
 
 I2C_SLAVE = 0x0703
 DDC_ADDR = 0x37
@@ -92,7 +93,7 @@ class Display(QObject):
         self._night = False
         self._screen_off = False  # never saved: the screen is on after a restart
         self._sun_down = False
-        self._auto = settings is None or str(settings.get("autoNight", "true")) == "true"
+        self._auto = settings is None or as_bool(settings.get("autoNight"), True)
         self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
         self._brightness = 100  # software dimming starts undimmed (overlay clear)
         self._ddc = None

@@ -28,6 +28,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 from backend.demo import allowed
 from backend.gps import MPH_TO_MS
 from backend.obd import describe
+from backend.prefs import as_bool
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
@@ -90,7 +91,7 @@ class VehicleData(QObject):
         super().__init__(parent)
         self._settings = settings
         self._demo = demo
-        self._answered = settings is not None and str(settings.get("carAnswered", "false")) == "true"
+        self._answered = settings is not None and as_bool(settings.get("carAnswered"))
         self._t = 0.0
         self._rpm = 800.0
         self._speed = 0.0

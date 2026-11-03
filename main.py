@@ -48,6 +48,7 @@ from backend.media import MediaPlayer
 from backend.network import Network
 from backend.phone import PhoneSend
 from backend.powerlog import PowerLog
+from backend.prefs import as_bool, as_json
 from backend.datause import DataUse
 from backend.settings import Settings
 from backend.spotify import SpotifyPlayer
@@ -199,7 +200,7 @@ def main():
     spotify_account = SpotifyAccount(settings)
     # Spotify albums and playlists played here, kept between runs.
     try:
-        spotify.load_recents(json.loads(str(settings.get("spotifyRecents", "[]"))))
+        spotify.load_recents(as_json(settings.get("spotifyRecents"), list, []))
     except ValueError:
         pass
     spotify.recentsChanged.connect(lambda: settings.set("spotifyRecents", json.dumps(spotify.recents)))
@@ -284,7 +285,7 @@ def main():
     ctx.setContextProperty("settings", settings)
     ctx.setContextProperty("startStyle", args.style or "")
     ctx.setContextProperty("showSplash", not args.no_splash
-                           and str(settings.get("splash", "true")) == "true")
+                           and as_bool(settings.get("splash"), True))
 
     engine.load(QUrl.fromLocalFile(str(ROOT / "qml" / "Main.qml")))
     if not engine.rootObjects():

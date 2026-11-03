@@ -299,7 +299,7 @@ class SpotifyPlayer(QObject):
     def _set_status(self, status):
         if status and status != self._status:
             self._status = status
-            if status in ("playing", "buffering") and self._active:
+            if status == "playing" and self._active:
                 self.cancel_resume()     # it carried on by itself; no fallback needed
             self._clear_error()
             self.playingChanged.emit()

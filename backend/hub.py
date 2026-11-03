@@ -296,7 +296,11 @@ class MediaHub(QObject):
                     src.togglePlay()
 
     def _source_playing_changed(self, name):
-        if not self._sources[name].playing or name == self._source:
+        if not self._sources[name].playing:
+            return
+        if name != "spotify" and hasattr(self._sources["spotify"], "cancel_resume"):
+            self._sources["spotify"].cancel_resume()    # even when it's already the active source
+        if name == self._source:
             return
         if (name == "phone" and self._source == "spotify"
                 and time.monotonic() - self._phone_connected_at < PHONE_RECONNECT_GRACE_S):

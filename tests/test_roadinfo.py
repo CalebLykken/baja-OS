@@ -63,7 +63,7 @@ class TraceTest(unittest.TestCase):
         self.fix(0)
         for report in ({"gpsd": True}, {"receiver": True}, {"sats": 6, "view": 12},
                        {"sats": 7, "view": 12}, {"gpsd": False}):
-            self.now += 0.9
+            self.now += 0.5                       # 2.5 s in all: well inside the gap, so the trace stays
             self.gps._apply(report)
         self.assertEqual(self.trace(), [0])
         self.fix(1)

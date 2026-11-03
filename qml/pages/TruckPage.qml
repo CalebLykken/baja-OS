@@ -151,6 +151,7 @@ Item {
         target: null
         property real startSpin: 0
         property real lastVx: 0        // px/s, in case it reads 0 at release
+        property real lastVxAt: 0      // when lastVx was recorded (ms)
         onActiveChanged: {
             page.dragging = active
             if (active) {
@@ -158,9 +159,10 @@ Item {
                 flick.stop()
                 startSpin = page.spin
                 lastVx = 0
+                lastVxAt = 0
             } else {
                 var v = centroid.velocity.x
-                if (v === 0) v = lastVx
+                if (v === 0 && Date.now() - lastVxAt < 100) v = lastVx
                 var dps = v * 0.35     // degrees/s, same factor as the drag
                 if (Math.abs(dps) > 40) {
                     flick.from = page.spin
@@ -171,7 +173,7 @@ Item {
                 }
             }
         }
-        onCentroidChanged: if (active) lastVx = centroid.velocity.x
+        onCentroidChanged: if (active) { lastVx = centroid.velocity.x; lastVxAt = Date.now() }
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
 

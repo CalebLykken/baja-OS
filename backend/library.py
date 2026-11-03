@@ -97,7 +97,7 @@ def _extract_art(path, audio):
         data = audio.pictures[0].data
     if not data:
         return ""
-    out = artcache.store(artcache.digest(data) + ".img", data)    # the album's tracks share one
+    out = artcache.store_pinned(artcache.digest(data) + ".img", data)    # the album's tracks share one
     return QUrl.fromLocalFile(str(out)).toString()
 
 
@@ -231,9 +231,10 @@ def _reuse(entry, stamp, path, folder_art):
         if not _valid_track(track):
             return None
         track = dict(track)
-        if entry["embedded"]:               # its picture is in the art cache: still there?
-            if not os.path.isfile(QUrl(track["art"]).toLocalFile()):
-                return None
+        if entry["embedded"]:               # its picture is in the library's art folder: still there?
+            art = QUrl(track["art"]).toLocalFile()
+            if os.path.dirname(art) != str(artcache.pinned_dir()) or not os.path.isfile(art):
+                return None                 # (or in the old LRU cache, which may drop it)
         else:                               # a cover.jpg beside it may have come or gone
             track["art"] = folder_art(path.parent)
         return {**entry, "track": track}
@@ -264,6 +265,12 @@ def scan(folder):
     # An empty result over a cache that had songs (a card that's gone) isn't saved over it.
     if files != old and (files or not old):
         _save_cache(root, files)
+    if files:                               # covers no track points at any more can go
+        try:
+            artcache.prune_pinned(QUrl(ent["track"]["art"]).toLocalFile()
+                                  for ent in files.values() if ent["embedded"])
+        except OSError as e:
+            print(f"Music: couldn't tidy the cover folder ({e!r})")
     return tracks
 
 

@@ -116,9 +116,37 @@ class ArtCacheTest(unittest.TestCase):
         b = library._extract_art(Path("/m/Album/02 Two.mp3"), audio)
         self.assertEqual(a, b)
         self.assertTrue(a.startswith("file://"))
-        self.assertEqual(len(self.names()), 1)
+        self.assertEqual(self.names(), [])                  # not in the LRU folder
+        self.assertEqual(len(list(artcache.pinned_dir().iterdir())), 1)
         self.assertEqual(Path(QUrl(a).toLocalFile()).read_bytes(), b"cover bytes")
         self.assertEqual(library._extract_art(Path("/m/x.mp3"), SimpleNamespace(tags={})), "")
+
+    def test_the_lru_never_deletes_a_library_cover(self):
+        audio = SimpleNamespace(tags={"APIC:": SimpleNamespace(data=b"c" * 100)})
+        art = library._extract_art(Path("/m/A/01.mp3"), audio)
+        os.utime(QUrl(art).toLocalFile(), (1000, 1000))     # the oldest file around
+        with mock.patch.object(artcache, "MAX_BYTES", 150):
+            for i in range(3):
+                artcache.store(f"{i}.img", b"x" * 100)
+        self.assertTrue(os.path.isfile(QUrl(art).toLocalFile()))
+
+    def test_a_scan_drops_only_covers_no_track_uses(self):
+        used = artcache.store_pinned("used.img", b"u")
+        gone = artcache.store_pinned("gone.img", b"g")
+        artcache.prune_pinned([used])
+        self.assertTrue(used.is_file())
+        self.assertFalse(gone.is_file())
+
+    def test_a_cached_cover_in_the_old_lru_folder_is_read_again(self):
+        old = artcache.store("abc.img", b"cover")
+        stamp = [1, 2]
+        track = {"path": "/m/a.mp3", "title": "t", "artist": "a", "art": QUrl.fromLocalFile(str(old)).toString(),
+                 "album": "x", "albumArtist": "", "duration": 1, "disc": 0, "track": 1}
+        entry = {"stamp": stamp, "embedded": True, "track": track}
+        self.assertIsNone(library._reuse(entry, stamp, Path("/m/a.mp3"), lambda d: ""))
+        new = artcache.store_pinned("abc.img", b"cover")
+        track["art"] = QUrl.fromLocalFile(str(new)).toString()
+        self.assertIsNotNone(library._reuse(entry, stamp, Path("/m/a.mp3"), lambda d: ""))
 
     def test_a_download_is_cached_and_used_again_offline(self):
         url = "https://i.scdn.co/image/abc123"

@@ -940,6 +940,7 @@ Item {
         // ================================================================================
         // The speed limit and the truck's speed, on the right.
         Column {
+            id: speedCol
             visible: page.mapReady && page.hasFix && !page.typing
             anchors { right: parent.right; top: parent.top; margins: 16 }
             spacing: 12
@@ -1003,20 +1004,32 @@ Item {
             anchors { right: parent.right; bottom: parent.bottom; margins: 16 }
             width: 104
             height: keyColumn.height
+            // Only as many keys as fit under the speed column; the optional ones drop
+            // in this order: zoom, overview, search, voice. The recenter key stays.
+            readonly property int slots: Math.max(1, Math.floor(
+                (parent.height - 16 - (speedCol.visible ? speedCol.y + speedCol.height + 12 : 16)) / 100))
+            readonly property bool voiceOn: page.navigating && typeof voice !== "undefined" && voice.available
+                                            && slots - 1 >= 1
+            readonly property bool searchOn: page.navigating && page.hasRouting && page.hasMaps && maps.canSearch
+                                             && slots - 1 - (voiceOn ? 1 : 0) >= 1
+            readonly property bool overviewOn: page.navigating
+                                               && slots - 1 - (voiceOn ? 1 : 0) - (searchOn ? 1 : 0) >= 1
+            readonly property bool zoomOn: page.showZoom
+                                           && slots - 1 - (voiceOn ? 1 : 0) - (searchOn ? 1 : 0) - (overviewOn ? 1 : 0) >= 2
             Column {
                 id: keyColumn
                 width: parent.width
-                PillKey { visible: page.showZoom; icon: "add"; onHit: { page.map.call("zoomIn()"); zoomHide.restart() } }
-                PillKey { visible: page.showZoom; icon: "remove"; onHit: { page.map.call("zoomOut()"); zoomHide.restart() } }
-                PillKey { visible: page.navigating; icon: "overview"; onHit: page.map.call("overview()") }
+                PillKey { visible: keys.zoomOn; icon: "add"; onHit: { page.map.call("zoomIn()"); zoomHide.restart() } }
+                PillKey { visible: keys.zoomOn; icon: "remove"; onHit: { page.map.call("zoomOut()"); zoomHide.restart() } }
+                PillKey { visible: keys.overviewOn; icon: "overview"; onHit: page.map.call("overview()") }
                 PillKey {
-                    visible: page.navigating && page.hasRouting && page.hasMaps && maps.canSearch
+                    visible: keys.searchOn
                     icon: "search"
                     lit: page.alongOpen
                     onHit: page.toggleAlong()
                 }
                 PillKey {
-                    visible: page.navigating && typeof voice !== "undefined" && voice.available
+                    visible: keys.voiceOn
                     icon: typeof voice !== "undefined" && voice.enabled ? "volume" : "volume_off"
                     lit: typeof voice !== "undefined" && voice.enabled
                     onHit: voice.setEnabled(!voice.enabled)

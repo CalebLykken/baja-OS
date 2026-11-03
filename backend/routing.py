@@ -192,7 +192,12 @@ def ferry_name(m):
     return found.group(1).strip() if found and found.group(1).strip() else "Ferry"
 
 
-def ferry_legs(maneuvers):
+def unit_metres(units):
+    """Metres in one of the units we ask Valhalla to use ("kilometers" or "miles")."""
+    return 1609.344 if str(units).lower().startswith("mile") else 1000.0
+
+
+def ferry_legs(maneuvers, unit_m=1000.0):
     """The ferry parts of a route: [{"name", "time" (s), "length" (m)}].
 
     Valhalla flags them with "ferry": true (and type 28 boards one).
@@ -209,9 +214,9 @@ def ferry_legs(maneuvers):
         leg = out[-1]
         if leg["name"] == "Ferry":
             leg["name"] = ferry_name(m)
-        for key, scale in (("time", 1), ("length", 1000)):
+        for key, scale in (("time", 1), ("length", unit_m)):
             try:
-                v = float(m.get(key) or 0) * scale   # length is in km in our request
+                v = float(m.get(key) or 0) * scale   # length is in the units we asked for
             except (TypeError, ValueError, OverflowError):
                 continue
             if math.isfinite(v):
@@ -347,7 +352,9 @@ class Route:
                                 if (bx, by) != (ax, ay) else None)
         self.length = self.cum[-1]
         self.time = float(data["trip"]["summary"]["time"])
-        self.ferries = ferry_legs(self.maneuvers) if isinstance(self.maneuvers, list) else []
+        # The router says what units its lengths and spoken text are in.
+        unit_m = unit_metres(data["trip"].get("units"))
+        self.ferries = ferry_legs(self.maneuvers, unit_m) if isinstance(self.maneuvers, list) else []
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
         self.off = 0.0                # metres from the line
@@ -621,7 +628,9 @@ class Router(QObject):
         request = {
             "locations": [start] + [{"lon": x, "lat": y, "type": "break"} for x, y in places],
             "costing": "auto",
-            "directions_options": {"units": "kilometers", "language": "en-US"},
+            # Spoken directions say the same units as the rest of the screen.
+            "directions_options": {"units": "kilometers" if self._metric() else "miles",
+                                   "language": "en-US"},
         }
         options = costing_options(self._settings)
         if options:
@@ -754,7 +763,7 @@ class Router(QObject):
             return                                  # arrival is announced on its own
         dist = max(0.0, r.cum[m["begin_shape_index"]] - r.along)
         speed = self._gps.speed
-        metric = bool(self._settings) and as_bool(self._settings.get("metric"))
+        metric = self._metric()
         warn_m, warn_words = ALERTS[metric]["far" if speed > FAST_MS else "near"]
         turn_m = max(60.0, speed * 6)               # about six seconds before the turn
         alert = (m.get("verbal_transition_alert_instruction") or m.get("instruction") or "").rstrip(".")
@@ -770,6 +779,9 @@ class Router(QObject):
             self._say(m.get("verbal_pre_transition_instruction") or m.get("instruction") or "")
 
     # ---- route options ----------------------------------------------------------------
+    def _metric(self):
+        return self._avoids("metric")
+
     def _avoids(self, key):
         return bool(self._settings) and as_bool(self._settings.get(key))
 

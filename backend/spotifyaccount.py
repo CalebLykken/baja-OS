@@ -35,7 +35,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import retry, safe_emit
 from backend.spotifysearch import CREDENTIALS, TOKEN_MARGIN_S, TOKEN_URL, entry, read_credentials
@@ -49,6 +49,8 @@ LIBRARY_SETTING = "spotifyLibrary"
 LINK_LASTS_S = 600
 PAGE_SIZE = 50                 # Spotify's most at a time; the first page of each is plenty to scroll
 REFRESH_EVERY_S = 900
+RETRY_FIRST_S = 30             # after a failed read: try again this soon, doubling each time...
+RETRY_MAX_S = 600              # ...up to this, so a steady hotspot doesn't leave the library empty
 
 
 class SignedOut(Exception):
@@ -94,6 +96,8 @@ class SpotifyAccount(QObject):
         self._message = ""
         self._loading = False
         self._loaded_at = None
+        self._retry = QTimer(self, singleShot=True, timeout=self.refresh)
+        self._retry_s = RETRY_FIRST_S
         self._library = {"playlists": [], "albums": [], "songs": []}
         self._load_saved_library()
         self._linked.connect(self._on_linked)
@@ -174,6 +178,7 @@ class SpotifyAccount(QObject):
     def signOut(self):
         self._drop_login()
         self._library = {"playlists": [], "albums": [], "songs": []}
+        self._stop_retrying()
         if self._settings:
             self._settings.set(LIBRARY_SETTING, "{}")
         self.changed.emit()
@@ -296,6 +301,7 @@ class SpotifyAccount(QObject):
     def refresh(self):
         if self._loading or not self.linked:
             return
+        self._retry.stop()                        # this read replaces any retry waiting
         self._loading, self._message = True, ""
         self.changed.emit()
         old = self._library
@@ -325,6 +331,10 @@ class SpotifyAccount(QObject):
         self._message = message
         if signed_out:
             self._drop_login()
+        if library is None and not signed_out:
+            self._retry_later()
+        else:
+            self._stop_retrying()
         if library is not None:
             self._loaded_at = time.monotonic()
             if library != self._library:
@@ -333,6 +343,16 @@ class SpotifyAccount(QObject):
                     self._settings.set(LIBRARY_SETTING, json.dumps(library))
                 self.libraryChanged.emit()
         self.changed.emit()
+
+    def _retry_later(self):
+        """A failed read isn't retried by the network alone (it only calls
+        set_online when it changes), so ask again, backing off."""
+        self._retry.start(int(self._retry_s * 1000))
+        self._retry_s = min(self._retry_s * 2, RETRY_MAX_S)
+
+    def _stop_retrying(self):
+        self._retry.stop()
+        self._retry_s = RETRY_FIRST_S
 
     def set_online(self, online):
         """Catch up when the connection comes (from backend/network.py)."""

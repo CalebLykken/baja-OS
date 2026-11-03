@@ -83,21 +83,6 @@ class HoldTest(unittest.TestCase):
         self.sys.powerOff()
         self.assertEqual(self.asked, ["poweroff"])
 
-    def test_a_failed_power_off_takes_the_clean_mark_back(self):
-        self.busy = False
-        with mock.patch("backend.system.power", return_value="Access denied"), \
-                mock.patch("backend.system.mark_clean_exit") as marked, \
-                mock.patch("backend.system.clear_clean_exit") as cleared:
-            self.sys.powerOff()
-        marked.assert_called_once_with()
-        cleared.assert_called_once_with()
-
-    def test_a_power_off_that_goes_ahead_keeps_the_clean_mark(self):
-        self.busy = False
-        with mock.patch("backend.system.clear_clean_exit") as cleared:
-            self.sys.powerOff()
-        cleared.assert_not_called()
-
     def test_waits_for_the_merge(self):
         self.sys.reboot()
         self.tick()
@@ -219,6 +204,27 @@ class StatusCheckTest(unittest.TestCase):
             self.system._check()
         self.assertFalse(self.system._busy)
         self.assertEqual(len(logged(self.printed)), 1)
+
+
+class CleanMarkTest(unittest.TestCase):
+    """A failed reboot or shut down takes the clean-exit mark back."""
+
+    setUp = HoldTest.setUp
+
+    def test_a_failed_power_off_takes_the_clean_mark_back(self):
+        self.busy = False
+        with mock.patch("backend.system.power", return_value="Access denied"), \
+                mock.patch("backend.system.mark_clean_exit") as marked, \
+                mock.patch("backend.system.clear_clean_exit") as cleared:
+            self.sys.powerOff()
+        marked.assert_called_once_with()
+        cleared.assert_called_once_with()
+
+    def test_a_power_off_that_goes_ahead_keeps_the_clean_mark(self):
+        self.busy = False
+        with mock.patch("backend.system.clear_clean_exit") as cleared:
+            self.sys.powerOff()
+        cleared.assert_not_called()
 
 
 if __name__ == "__main__":

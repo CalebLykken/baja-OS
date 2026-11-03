@@ -649,6 +649,48 @@ class AgentReportTest(unittest.TestCase):
         changes.assert_called_once()
 
 
+class CommandErrorTest(unittest.TestCase):
+    """The buttons' worker threads must not die on a busctl that is missing or hangs."""
+
+    def setUp(self):
+        self.bt = BluetoothAudio()
+        INLINE.start()
+        self.printed = mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_connect_timing_out_logs_one_line_and_leaves_state(self):
+        before = dict(self.bt._state)
+        with mock.patch("backend.bluetooth.subprocess.run",
+                        side_effect=subprocess.TimeoutExpired("busctl", 25)):
+            self.bt.connectDevice(AA)
+        self.assertEqual(len(logged(self.printed)), 1)
+        self.assertIn("Connect failed", logged(self.printed)[0])
+        self.assertEqual(self.bt._state, before)
+
+    def test_a_missing_busctl_doesnt_raise_from_a_command(self):
+        self.bt._player = {"path": AA + "/player0"}
+        with mock.patch("backend.bluetooth.subprocess.run", side_effect=FileNotFoundError("busctl")):
+            self.bt._command("Next")
+        self.assertEqual(len(logged(self.printed)), 1)
+
+    def test_a_refused_call_says_what_bluez_said(self):
+        refused = subprocess.CompletedProcess(["busctl"], 1, "", "Failed to call: no good\nmore")
+        with mock.patch("backend.bluetooth.subprocess.run", return_value=refused):
+            self.bt.connectDevice(AA)
+        self.assertIn("no good", logged(self.printed)[0])
+        self.assertNotIn("more", logged(self.printed)[0])
+
+    def test_failed_pairing_calls_switch_the_countdown_off(self):
+        self.bt._state["adapter"] = "/org/bluez/hci0"
+        ok = subprocess.CompletedProcess(["busctl"], 0, "", "")
+        results = iter([ok, ok, subprocess.CompletedProcess(["busctl"], 1, "", "nope")])
+        with mock.patch("backend.bluetooth.subprocess.run", side_effect=lambda *a, **k: next(results)):
+            self.bt.setPairing(True)
+        QCoreApplication.processEvents()
+        self.assertFalse(self.bt.pairing)
+        self.assertEqual(self.bt.pairingSecondsLeft, 0)
+
+
 class PhoneSeekTest(unittest.TestCase):
     def test_the_real_phone_source_cant_seek(self):
         phone = BluetoothAudio()

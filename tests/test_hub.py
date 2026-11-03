@@ -292,7 +292,11 @@ class SwitchTest(unittest.TestCase):
                 mock.patch("subprocess.run"):
             self.local = MediaPlayer()
             self.spotify = FakeSource()
-            self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
+            # The hub's real volume-writer thread drains _pending_level as
+            # soon as it is woken, racing any test that reads it. Start it as
+            # a no-op so _pending_level holds what _apply_volume set.
+            with mock.patch.object(MediaHub, "_level_writer", lambda self: None):
+                self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
         self.levels = []
         real_apply = self.hub._apply_volume
 

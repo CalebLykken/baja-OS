@@ -17,6 +17,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -180,6 +181,16 @@ def _describe(kind, area):
     return f"{words} in {area}" if area else words
 
 
+def _install_script_running():
+    """Is an install-map.sh running, e.g. started over ssh? Without pgrep,
+    assume not."""
+    try:
+        return subprocess.run(["pgrep", "-f", r"install-map\.sh"], capture_output=True,
+                              timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 class MapService(QObject):
     """What QML needs for the Maps page: the page URL and whether a map is
     installed. `webEngine` says whether Qt WebEngine could be loaded at all.
@@ -197,6 +208,8 @@ class MapService(QObject):
         self._server = None
         self._info = {}
         self._updating = False
+        # Held while install-map.sh runs and while a left-over build is cleared
+        self._install_lock = threading.Lock()
         self._update_message = ""
         self._query = ""
         self._results = []
@@ -208,7 +221,21 @@ class MapService(QObject):
         self._server = make_server(self._data_dir)
         threading.Thread(target=self._server.serve_forever, name="map-server",
                          daemon=True).start()
+        threading.Thread(target=self._remove_stale_build, name="map-cleanup",
+                         daemon=True).start()
         self.changed.emit()
+
+    def _remove_stale_build(self):
+        """A power cut during a map update skips install-map.sh's cleanup and
+        leaves its half-built map (up to a gigabyte) in .new. Nothing is
+        installing at startup, so clear it. Runs on a worker thread."""
+        work = self._data_dir / ".new"
+        try:
+            with self._install_lock:
+                if work.exists() and not _install_script_running():
+                    shutil.rmtree(work, ignore_errors=True)
+        except Exception as e:
+            print(f"Couldn't clear the old map build ({type(e).__name__})", flush=True)
 
     @pyqtSlot()
     def refresh(self):
@@ -246,6 +273,7 @@ class MapService(QObject):
                      "Finding traffic": "Finding traffic lights and signs"}
             ok = False
             proc = None
+            self._install_lock.acquire()
             try:
                 proc = subprocess.Popen(["sh", str(ROOT / "deploy" / "maps" / "install-map.sh")],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -264,6 +292,7 @@ class MapService(QObject):
                     except OSError:
                         pass
             finally:
+                self._install_lock.release()
                 safe_emit(self, "_progress", "Map updated" if ok else "Couldn't update the map; is the Pi online?", False)
         threading.Thread(target=work, name="map-update", daemon=True).start()
 

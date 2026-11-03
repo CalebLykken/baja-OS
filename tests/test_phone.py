@@ -11,6 +11,7 @@ import http.client
 import io
 import json
 import os
+import socket
 import stat
 import tempfile
 import threading
@@ -127,6 +128,52 @@ class ResetTest(TempTokenFile):
         last = self.svc.lastSent
         self.assertEqual((last["name"], last["ip"]), ("Pike Place Market", "192.168.1.20"))
         self.assertGreater(last["at"], 0)
+
+
+class QuietConnectionTest(TempTokenFile):
+    """A peer that goes quiet must not hold a server thread and socket forever."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(phone._Handler, "timeout", 0.3)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.svc = self.service()
+        self.server = phone._Server(("127.0.0.1", 0), phone._Handler)
+        self.server.service = self.svc
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.thread.join, 5)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def connect(self):
+        s = socket.create_connection(("127.0.0.1", self.server.server_address[1]), timeout=5)
+        self.addCleanup(s.close)
+        return s
+
+    def test_the_real_timeout_is_set(self):
+        self.assertEqual(phone.REQUEST_TIMEOUT, 15)
+
+    def test_a_silent_connection_is_closed(self):
+        s = self.connect()
+        self.assertEqual(s.recv(1), b"")        # the server hung up on us; no reply, no hang
+
+    def test_a_stalled_body_is_closed(self):
+        s = self.connect()
+        s.sendall((f"POST /api/v1/destination HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {self.svc.token}\r\n"
+                   "Content-Length: 100\r\n\r\n{").encode())
+        self.assertEqual(s.recv(1), b"")
+
+    def test_strangers_get_no_thread(self):
+        with mock.patch.object(phone, "ALLOWED_NETS", []):
+            s = self.connect()
+            s.sendall(b"GET /send HTTP/1.1\r\nHost: x\r\n\r\n")
+            try:
+                data = s.recv(1)
+            except ConnectionResetError:        # unread request data at close: also a drop
+                data = b""
+            self.assertEqual(data, b"")         # dropped before any request was read
 
 
 class ServerTest(TempTokenFile):

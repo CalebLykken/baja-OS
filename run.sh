@@ -88,6 +88,7 @@ app=$!
 while kill -0 $app 2>/dev/null; do
     if connected_card >/dev/null; then
         echo "a screen was connected; restarting on the GPU" >&2
+        : > .update-state.clean         # on purpose: update-guard.sh won't count it
         kill $app
         wait $app
         exit 1

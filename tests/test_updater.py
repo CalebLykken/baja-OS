@@ -18,9 +18,9 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, pyqtSignal
 
 from backend import updater
-from backend.updater import (MARKER, NO_SPEED, NOT_A_CHECKOUT, Updater, check_for_updates,
+from backend.updater import (CLEAN_MARK, MARKER, NO_SPEED, NOT_A_CHECKOUT, Updater, check_for_updates,
                              confirm_healthy, driving_reason, explain, marker_notice,
-                             read_marker, update_to, write_marker)
+                             mark_clean_exit, read_marker, update_to, write_marker)
 
 app = QCoreApplication.instance() or QCoreApplication([])
 HERE = Path(__file__).resolve().parent.parent
@@ -543,6 +543,48 @@ class GuardTest(Repos):
         for _ in range(5):
             self.assertEqual(self.guard(), 0)
         self.assertEqual(self.head(), target)
+
+    def test_short_clean_trips_never_add_up_to_a_fall_back(self):
+        _, target = self.updated()
+        for _ in range(10):                         # key on, 25 s, key off
+            self.assertEqual(self.guard(), 0)
+            mark_clean_exit(self.pi)
+        self.assertEqual(self.head(), target)
+        self.assertEqual(read_marker(self.pi)["phase"], "pending")
+        self.assertEqual(read_marker(self.pi)["starts"], "1")
+
+    def test_the_first_start_of_a_new_version_always_counts(self):
+        self.updated()
+        (self.pi / CLEAN_MARK).write_text("")       # left by the old version's last run
+        self.assertEqual(self.guard(), 0)
+        self.assertEqual(read_marker(self.pi)["starts"], "1")
+
+    def test_crashes_still_fall_back_among_clean_trips(self):
+        before, target = self.updated()
+        self.guard()                                # 1, crashes
+        self.guard()                                # 2, crashes
+        self.guard()                                # 3, ends cleanly
+        mark_clean_exit(self.pi)
+        self.assertEqual(self.guard(), 0)           # not counted: still 3
+        self.assertEqual(read_marker(self.pi)["starts"], "3")
+        self.assertEqual(self.guard(), 75)          # that run crashed
+        self.assertEqual(self.head(), before)
+
+    def test_a_clean_end_is_only_marked_for_a_version_on_trial(self):
+        mark_clean_exit(self.pi)
+        self.assertFalse((self.pi / CLEAN_MARK).exists())
+        self.updated()
+        mark_clean_exit(self.pi)
+        self.assertTrue((self.pi / CLEAN_MARK).exists())
+
+    def test_the_mark_is_used_up_by_one_start(self):
+        self.updated()
+        self.guard()
+        mark_clean_exit(self.pi)
+        self.guard()
+        self.assertFalse((self.pi / CLEAN_MARK).exists())
+        self.guard()
+        self.assertEqual(read_marker(self.pi)["starts"], "2")
 
     def test_head_moved_by_hand_is_left_alone(self):
         _, target = self.updated()

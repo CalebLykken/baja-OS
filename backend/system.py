@@ -17,6 +17,7 @@ from pathlib import Path
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import FailureLog, errorlog, safe_emit
+from backend.updater import mark_clean_exit
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
@@ -283,8 +284,10 @@ class SystemInfo(QObject):
 
     def _run_power(self, action):
         # On a worker thread: logind can take a moment to say no.
-        threading.Thread(target=lambda: safe_emit(self, "_power_done", power(action)),
-                         daemon=True).start()
+        def work():
+            mark_clean_exit()       # the update guard must not count this end as a failed start
+            safe_emit(self, "_power_done", power(action))
+        threading.Thread(target=work, daemon=True).start()
 
     def _powered(self, why):
         if why:

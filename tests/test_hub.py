@@ -586,3 +586,31 @@ class NoMusicTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneBadgeTest(unittest.TestCase):
+    """The source badge names whichever phone is playing."""
+
+    def make(self):
+        self.local, self.phone, self.spotify = MediaPlayer(), FakeSource(), FakeSource()
+        self.phone.deviceName = "Pixel"
+        with mock.patch("backend.hub.shutil.which", return_value=None):
+            self.hub = MediaHub(self.local, self.phone, self.spotify)
+        self.addCleanup(self.local._timer.stop)
+        self.phone.play()
+        self.assertEqual(self.hub.source, "phone")
+        self.names = []
+        self.hub.sourceChanged.connect(lambda: self.names.append(self.hub.sourceName))
+
+    def test_the_badge_follows_a_second_phone_taking_over(self):
+        self.make()
+        self.assertEqual(self.hub.sourceName, "Pixel")
+        self.phone.deviceName = "iPhone"
+        self.phone.changed.emit()
+        self.assertEqual(self.hub.source, "phone")
+        self.assertEqual(self.names, ["iPhone"])
+
+    def test_no_badge_change_when_the_phone_is_the_same(self):
+        self.make()
+        self.phone.changed.emit()
+        self.assertEqual(self.names, [])

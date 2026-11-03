@@ -15,6 +15,9 @@ Item {
         anchors { fill: parent; margins: 8 }
         radius: Theme.radius
         color: btn.active ? Theme.panelHi : (tap.pressed ? Theme.panel : "transparent")
+        Behavior on color { ColorAnimation { duration: 150 } }
+        scale: tap.pressed ? 0.97 : 1
+        Behavior on scale { NumberAnimation { duration: 70 } }
 
         Rectangle {
             visible: btn.active
@@ -33,12 +36,14 @@ Item {
                 name: btn.icon
                 size: 34
                 color: btn.active ? Theme.accent : Theme.textDim
+                Behavior on color { ColorAnimation { duration: 150 } }
             }
             Legend {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: btn.label
                 font.letterSpacing: 1        // tighter so SETTINGS fits the rail
                 color: btn.active ? Theme.text : Theme.textDim
+                Behavior on color { ColorAnimation { duration: 150 } }
             }
         }
     }

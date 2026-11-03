@@ -177,4 +177,5 @@ the keys and volume always fit.
 
 One deliberate moment per action: keys travel when pressed, pages crossfade,
 needles and segments ease to new readings. No idle animation on the music
-screens.
+screens. The gauges sweep once to full scale and back the first time Gauges
+opens, like a cluster's key-on test.

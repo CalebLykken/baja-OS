@@ -11,6 +11,26 @@ Item {
     id: page
     signal navigate(int index)
 
+    // The gauges sweep once, the first time this page is shown.
+    property bool testedOnce: false
+    function maybeTest() {
+        if (visible && !testedOnce) {
+            testedOnce = true
+            startTest.start()
+        }
+    }
+    onVisibleChanged: maybeTest()
+    Component.onCompleted: maybeTest()
+    Timer {
+        id: startTest
+        interval: 100       // let the grid lay out first
+        onTriggered: {
+            for (var i = 0; i < grid.children.length; i++)
+                if (grid.children[i].selfTest)
+                    grid.children[i].selfTest()
+        }
+    }
+
     Rectangle {
         id: strip
         readonly property bool shown: vehicle.codes.length > 0
@@ -55,6 +75,7 @@ Item {
     }
 
     GridLayout {
+        id: grid
         anchors { left: parent.left; right: parent.right; top: parent.top }
         anchors.bottom: strip.shown ? strip.top : parent.bottom
         anchors.bottomMargin: strip.shown ? Theme.gap : 0

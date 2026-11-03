@@ -23,6 +23,7 @@ import html
 import http.client
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -266,7 +267,7 @@ def _nearest_name(lon, lat, maps_dir, within_m=60):
     """The name of the closest mapped place to a bare coordinate, if close."""
     try:
         db = sqlite3.connect(f"file:{Path(maps_dir) / places.INDEX_NAME}?mode=ro", uri=True)
-        k = places.math.cos(places.math.radians(lat)) ** 2
+        k = math.cos(math.radians(lat)) ** 2
         row = db.execute("SELECT name, lon, lat FROM places WHERE kind != 'street'"
                          " ORDER BY (lon - ?) * (lon - ?) * ? + (lat - ?) * (lat - ?) LIMIT 1",
                          (lon, lon, k, lat, lat)).fetchone()
@@ -275,9 +276,7 @@ def _nearest_name(lon, lat, maps_dir, within_m=60):
         return ""
     if not row:
         return ""
-    dx = (row[1] - lon) * 111320 * places.math.cos(places.math.radians(lat))
-    dy = (row[2] - lat) * 110540
-    return row[0] if (dx * dx + dy * dy) ** 0.5 <= within_m else ""
+    return row[0] if places.distance_m(lon, lat, row[1], row[2]) <= within_m else ""
 
 
 def _search_offline(text, maps_dir):

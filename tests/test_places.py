@@ -10,7 +10,7 @@ import sqlite3
 import time
 import unittest
 
-from backend.places import _fts_query, along_route, looks_like_address, nearby, search, search_addresses, street_part
+from backend.places import _fts_query, along_route, distance_m, looks_like_address, nearby, search, search_addresses, street_part
 
 SEATTLE = (-122.3321, 47.6062)
 
@@ -276,6 +276,17 @@ class AddressSearchTest(unittest.TestCase):
         found = search_addresses(db, "100 pine", near=SEATTLE)
         self.assertEqual([r["area"] for r in found], ["Seattle", "Tacoma"])
         self.assertEqual(search_addresses(db, "100 pine")[0]["distance"], -1)
+
+    def test_distance_m_matches_the_flat_formula(self):
+        lon, lat = SEATTLE[0] + 0.009, SEATTLE[1] + 0.006
+        dx = (lon - SEATTLE[0]) * 111320 * math.cos(math.radians(lat))
+        dy = (lat - SEATTLE[1]) * 110540
+        expected = math.hypot(dx, dy)
+        self.assertAlmostEqual(distance_m(lon, lat, SEATTLE[0], SEATTLE[1]), expected, places=9)
+        self.assertTrue(900 < expected < 1000)
+
+    def test_distance_m_to_itself_is_zero(self):
+        self.assertEqual(distance_m(SEATTLE[0], SEATTLE[1], SEATTLE[0], SEATTLE[1]), 0)
 
 
 if __name__ == "__main__":

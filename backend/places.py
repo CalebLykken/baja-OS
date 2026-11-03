@@ -39,6 +39,12 @@ SKIP_POI_KINDS = {"bench", "drinking_water", "toilets", "post_box", "waste_baske
                   "railway", "platform", "stop_position", "subway_entrance", "level_crossing"}
 
 
+def distance_m(lon, lat, lon0, lat0):
+    """Metres from (lon0, lat0) to (lon, lat) on a flat map, near enough
+    for a city; the longitude scale is taken at `lat`."""
+    return math.hypot((lon - lon0) * 111320 * math.cos(math.radians(lat)), (lat - lat0) * 110540)
+
+
 # ---- PMTiles v3 ---------------------------------------------------------------
 
 def _varint(buf, pos):
@@ -389,9 +395,7 @@ def search_addresses(db, text, near=None, limit=8):
     for num, street, city, post, lon, lat in rows:
         dist = -1
         if near:
-            dx = (lon - near[0]) * 111320 * math.cos(math.radians(lat))
-            dy = (lat - near[1]) * 110540
-            dist = math.hypot(dx, dy)
+            dist = distance_m(lon, lat, near[0], near[1])
         out.append({"name": f"{num} {street}", "kind": "address", "area": city,
                     "lon": lon, "lat": lat, "distance": dist})
     out.sort(key=lambda r: r["distance"] if r["distance"] >= 0 else 0)
@@ -431,9 +435,7 @@ def search(db, text, near=None, limit=12):
     for name, kind, area_, weight, lon, lat, score in rows:
         dist = None
         if near:
-            dx = (lon - near[0]) * 111320 * math.cos(math.radians(lat))
-            dy = (lat - near[1]) * 110540
-            dist = math.hypot(dx, dy)
+            dist = distance_m(lon, lat, near[0], near[1])
         starts = name.lower().startswith(t)
         exact = name.lower() == t
         key = (name, area_)
@@ -482,10 +484,8 @@ def nearby(db, category, near, limit=12):
         if (name, area_) in seen:
             continue
         seen.add((name, area_))
-        dx = (lon - lon0) * 111320 * math.cos(math.radians(lat))
-        dy = (lat - lat0) * 110540
         out.append({"name": name, "kind": kind, "area": area_, "lon": lon, "lat": lat,
-                    "distance": math.hypot(dx, dy)})
+                    "distance": distance_m(lon, lat, lon0, lat0)})
     return out[:limit]
 
 

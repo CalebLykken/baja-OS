@@ -298,6 +298,7 @@ class MediaHub(QObject):
             return
         if (name == "phone" and self._source == "spotify"
                 and time.monotonic() - self._phone_connected_at < PHONE_RECONNECT_GRACE_S):
+            self._sources["phone"].pause()    # stays quiet: Spotify keeps the speakers
             return       # an iPhone auto-resuming after reconnecting
         self._pause_others(keep=name)
         self._set_source(name)

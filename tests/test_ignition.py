@@ -243,7 +243,9 @@ class DashboardTest(unittest.TestCase):
         for p in patches:
             self.addCleanup(p.stop)
         self.obd = FakeObd()
-        self.k = KeyOff(self.obd, FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now))
+        self.cancelled = []
+        self.k = KeyOff(self.obd, FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now),
+                        cancel_power=lambda: self.cancelled.append(self.now))
 
     def key_off(self):
         """A drive, then the key off and the countdown to 0."""
@@ -313,6 +315,39 @@ class DashboardTest(unittest.TestCase):
         self.key_off()
         self.k.keepOn()
         self.assertEqual(self.obd.calls, ["hold", "release"])
+
+    def test_keep_on_cancels_a_shutdown_waiting_for_an_update(self):
+        self.key_off()
+        self.k.keepOn()
+        self.assertEqual(len(self.cancelled), 1)
+
+    def test_the_key_coming_back_cancels_a_waiting_shutdown(self):
+        self.key_off()
+        self.k._answered({"speed": 0})
+        self.assertEqual(len(self.cancelled), 1)
+        self.assertEqual(self.obd.calls, ["hold", "release"])
+        self.k._answered({"speed": 0})
+        self.assertEqual(len(self.cancelled), 1)   # once
+
+    def test_moving_cancels_a_waiting_shutdown(self):
+        self.key_off()
+        self.k._gps = type("G", (), {"realFix": True, "speed": 10.0})()
+        self.k._tick()
+        self.assertEqual(len(self.cancelled), 1)
+
+    def test_nothing_to_cancel_before_the_shutdown_is_asked_for(self):
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + 5
+        self.k._tick()
+        self.k.keepOn()
+        self.assertEqual(self.cancelled, [])
+
+    def test_a_failed_shutdown_isnt_cancelled_later(self):
+        self.key_off()
+        self.k.power_failed("Access denied")
+        self.k.keepOn()
+        self.assertEqual(self.cancelled, [])
 
     def test_the_next_key_off_still_shuts_down(self):
         self.key_off()

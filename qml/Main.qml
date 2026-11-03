@@ -85,7 +85,7 @@ Window {
     }
 
     // This trip's distance, driving time and peaks, counted from start-up.
-    Trip { id: trip }
+    Trip { id: tripCounter }
 
     // ---- the one map engine ------------------------------------------------------
     property bool mapWanted: false
@@ -95,6 +95,18 @@ Window {
     // Start it once the start-up screen is done (it's on Home too).
     Timer { interval: 3000; running: true; onTriggered: root.mapWanted = true }
     onPageChanged: if (page === 0 || page === 2) mapWanted = true
+
+    // The other pages are built when first opened, or in the background a few
+    // seconds after start-up (one at a time, after the map engine), so the
+    // first frame and the map start don't wait for pages nobody is looking at.
+    property bool preloadMusic: false
+    property bool preloadSettings: false
+    property bool preloadGauges: false
+    property bool preloadTruck: false
+    Timer { interval: 4000; running: true; onTriggered: root.preloadMusic = true }
+    Timer { interval: 5000; running: true; onTriggered: root.preloadSettings = true }
+    Timer { interval: 6000; running: true; onTriggered: root.preloadGauges = true }
+    Timer { interval: 7000; running: true; onTriggered: root.preloadTruck = true }
 
     Loader {
         id: mapLoader
@@ -202,11 +214,14 @@ Window {
             }
         }
         PageHost { anchors.fill: parent; index: 3; current: root.page
-            GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            preload: root.preloadGauges
+            lazy: Component { GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
         PageHost { anchors.fill: parent; index: 4; current: root.page
-            TruckPage { anchors.fill: parent; trip: trip; onNavigate: (i) => root.page = i } }
+            preload: root.preloadTruck
+            lazy: Component { TruckPage { anchors.fill: parent; trip: tripCounter; onNavigate: (i) => root.page = i } } }
         PageHost { anchors.fill: parent; index: 5; current: root.page
-            SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
+            preload: root.preloadSettings
+            lazy: Component { SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
     }
 
     // Music: everything right of the rail.
@@ -214,7 +229,8 @@ Window {
         anchors { left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom }
         index: 1
         current: root.page
-        MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i }
+        preload: root.preloadMusic
+        lazy: Component { MusicPage { anchors.fill: parent; onNavigate: (i) => root.page = i } }
     }
 
     // Maps: everything right of the rail.

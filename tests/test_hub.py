@@ -332,6 +332,15 @@ class SwitchTest(unittest.TestCase):
             self.hub._fade_tick()
         self.assertEqual(self.hub._fade, 1.0)
 
+    def test_output_returns_to_local_volume_when_the_phone_loses_absolute_volume(self):
+        phone = self.hub._sources["phone"]
+        self.hub._source = "phone"
+        self.hub._apply_volume()
+        self.assertEqual(self.hub._pending_level, 1.0)      # held at the ceiling
+        phone.hasVolume = False
+        phone.volumeChanged.emit()
+        self.assertAlmostEqual(self.hub._pending_level, 0.2)
+
     def test_no_hush_without_a_switch(self):
         self.hub._pause_others(keep="local")
         self.assertEqual(self.hub._fade, 1.0)

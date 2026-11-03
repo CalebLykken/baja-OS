@@ -125,5 +125,11 @@ Rectangle {
         onFinished: { splash.visible = false; splash.finished() }
     }
 
-    TapHandler { onTapped: splash.finish() }
+    // A MouseArea, not a TapHandler: a handler only takes a passive grab, so
+    // the press would also reach the Home page and nav rail underneath. The
+    // MouseArea accepts it, and keeps swallowing touches while the fade runs.
+    MouseArea {
+        anchors.fill: parent
+        onPressed: splash.finish()
+    }
 }

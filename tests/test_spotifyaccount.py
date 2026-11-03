@@ -291,6 +291,22 @@ class StayingLinkedTest(AccountCase):
         a._loaded.emit(None, "x", True, 0)               # the old refresh reporting a sign-out
         self.assertTrue(a.linked)
 
+    def test_relinking_during_a_stale_library_read_still_loads_the_library(self):
+        a = self.linked_account()
+        self.now += 7200
+
+        def relink(req):
+            if "/me/tracks" in req.full_url:
+                self.during = None
+                a.signOut()
+                a.startLink("172.20.10.14", 8780)
+                a.callback("code", a._link["state"], "")   # its own refresh is skipped: the old one is running
+        self.during = relink
+        a.refresh()
+        self.assertTrue(a.linked)
+        self.assertEqual(len(a.songs), 1)
+        self.assertFalse(a.loading)
+
     def test_no_login_means_no_renewal(self):
         a = self.account()
         self.assertFalse(a.linked)

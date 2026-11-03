@@ -320,6 +320,7 @@ class SpotifyAccount(QObject):
         self._loading = False
         if generation != self._generation:        # signed out (or re-linked) since this began: its answer is stale
             self.changed.emit()
+            self.refresh()                        # a re-link's own refresh was skipped while this one ran
             return
         self._message = message
         if signed_out:

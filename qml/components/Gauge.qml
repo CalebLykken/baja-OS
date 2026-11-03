@@ -51,7 +51,8 @@ Card {
     // What's drawn eases toward the latest reading, so every look sweeps
     // smoothly between the ~5 Hz updates instead of jumping.
     property real shown: known ? value : minValue
-    Behavior on shown { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+    // Only while visible: a hidden page (they stay loaded) just snaps.
+    Behavior on shown { enabled: g.visible; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     readonly property real frac: clamp((shown - minValue) / (maxValue - minValue))
     // Key-on self-test: while testFrac >= 0 the dial draws it instead of the
     // reading. The numerals and the warning colour still follow the real value.
@@ -106,7 +107,10 @@ Card {
 
     // Round to ~0.5% steps so tiny jitter doesn't trigger repaints.
     readonly property real paintFrac: Math.round(drawFrac * 200) / 200
-    onPaintFracChanged: if (look !== "needle") dynamic.requestPaint()
+    // Canvas items paint even when hidden, and the gauges page stays loaded
+    // while you're on another page, so repaints are skipped unless visible and
+    // everything is redrawn once when the page comes back.
+    onPaintFracChanged: if (visible && look !== "needle") dynamic.requestPaint()
     // The peak marker shows only once the needle has really fallen back from
     // the peak. A new high is set the moment a sample arrives, while the eased
     // needle is still on its way up, so compare against the target (the latest
@@ -128,15 +132,16 @@ Card {
     onTargetFracChanged: updatePeakShown()
     onPeakFracChanged: updatePeakShown()
     onPeakHoldChanged: updatePeakShown()
-    onPeakShownChanged: dynamic.requestPaint()
+    onPeakShownChanged: if (visible) dynamic.requestPaint()
     // While shown, the marker only moves when the peak is cleared (which hides
     // it), so this is just a safety net and is rare.
     readonly property real peakPaintFrac: Math.round(peakFrac * 200) / 200
-    onPeakPaintFracChanged: if (peakShown) dynamic.requestPaint()
-    onWarningChanged: dynamic.requestPaint()
-    onStyleNameChanged: { face.requestPaint(); dynamic.requestPaint() }
+    onPeakPaintFracChanged: if (visible && peakShown) dynamic.requestPaint()
+    onWarningChanged: if (visible) dynamic.requestPaint()
+    onStyleNameChanged: if (visible) { face.requestPaint(); dynamic.requestPaint() }
     readonly property bool dark: Theme.dark          // day and night have their own colours
-    onDarkChanged: { face.requestPaint(); dynamic.requestPaint() }
+    onDarkChanged: if (visible) { face.requestPaint(); dynamic.requestPaint() }
+    onVisibleChanged: if (visible) { face.requestPaint(); dynamic.requestPaint() }
 
     Item {
         id: dial

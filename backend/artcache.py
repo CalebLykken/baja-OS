@@ -77,10 +77,11 @@ def lookup(name):
 
 
 @contextlib.contextmanager
-def writing(path):
+def writing(path, lru=True):
     """Yield a temporary path next to `path`; on a clean exit it replaces
     `path`, otherwise it's removed. The suffix is kept so image writers can
-    tell the format from it."""
+    tell the format from it. With lru=False (pinned_dir() files) the write
+    isn't counted against the LRU folder's budget and doesn't prune it."""
     try:
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=_TMP, suffix=path.suffix)
     except FileNotFoundError:   # the folder was deleted since cache_dir() made it
@@ -94,7 +95,8 @@ def writing(path):
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
-    _after_write(path)
+    if lru:
+        _after_write(path)
 
 
 def _after_write(path):
@@ -134,7 +136,7 @@ def store_pinned(name, data):
     """Like store(), but in pinned_dir(): only prune_pinned() removes it."""
     path = pinned_dir() / name
     if not path.is_file():
-        with writing(path) as tmp:
+        with writing(path, lru=False) as tmp:
             tmp.write_bytes(data)
     return path
 

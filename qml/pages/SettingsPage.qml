@@ -28,49 +28,65 @@ Item {
     onWifiShownChanged: if (typeof wifi !== "undefined") wifi.setScanning(wifiShown)
 
     // ---- the section list ------------------------------------------------
-    Column {
+    Item {
         id: list
         width: 232
+        height: col.implicitHeight
         anchors { left: parent.left; top: parent.top }
-        spacing: 8
 
-        Repeater {
-            model: page.sections
+        // One highlight that glides to the chosen row.
+        Rectangle {
+            y: page.section * (64 + col.spacing)
+            width: list.width
+            height: 64
+            radius: Theme.radius
+            color: Theme.panelHi
+            border.width: Theme.border
+            border.color: Theme.line
+            Behavior on y { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+
             Rectangle {
-                readonly property bool selected: page.section === index
-                width: list.width
-                height: 64
-                radius: Theme.radius
-                color: selected ? Theme.panelHi : (tap.pressed ? Theme.panel : "transparent")
-                border.width: selected ? Theme.border : 0
-                border.color: Theme.line
+                anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
+                width: 4
+                height: parent.height - 26
+                radius: 2
+                color: Theme.accent
+            }
+        }
 
+        Column {
+            id: col
+            width: list.width
+            spacing: 8
+
+            Repeater {
+                model: page.sections
                 Rectangle {
-                    visible: parent.selected
-                    anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
-                    width: 4
-                    height: parent.height - 26
-                    radius: 2
-                    color: Theme.accent
-                }
-                Row {
-                    anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
-                    spacing: 16
-                    Icon {
-                        anchors.verticalCenter: parent.verticalCenter
-                        name: modelData.icon
-                        size: 28
-                        color: parent.parent.selected ? Theme.accent : Theme.textDim
+                    readonly property bool selected: page.section === index
+                    width: list.width
+                    height: 64
+                    radius: Theme.radius
+                    color: !selected && tap.pressed ? Theme.panel : "transparent"
+
+                    Row {
+                        anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
+                        spacing: 16
+                        Icon {
+                            anchors.verticalCenter: parent.verticalCenter
+                            name: modelData.icon
+                            size: 28
+                            color: parent.parent.selected ? Theme.accent : Theme.textDim
+                        }
+                        Label {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.label
+                            color: parent.parent.selected ? Theme.text : Theme.textDim
+                            font.pixelSize: Theme.fontBody
+                            font.weight: parent.parent.selected ? Font.DemiBold : Font.Normal
+                        }
                     }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.label
-                        color: parent.parent.selected ? Theme.text : Theme.textDim
-                        font.pixelSize: Theme.fontBody
-                        font.weight: parent.parent.selected ? Font.DemiBold : Font.Normal
-                    }
+                    TapHandler { id: tap; onTapped: page.section = index }
                 }
-                TapHandler { id: tap; onTapped: page.section = index }
             }
         }
     }
@@ -81,6 +97,15 @@ Item {
         anchors { left: list.right; leftMargin: Theme.gap; right: parent.right; top: parent.top; bottom: parent.bottom }
         sourceComponent: [displaySection, soundSection, wifiSection, bluetoothSection,
                           mapSection, systemSection, aboutSection][page.section]
+
+        // A new section rises in; one section is alive at a time.
+        transform: Translate { id: enterShift }
+        onLoaded: enterAnim.restart()
+        ParallelAnimation {
+            id: enterAnim
+            NumberAnimation { target: content; property: "opacity"; from: 0; to: 1; duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { target: enterShift; property: "y"; from: 16; to: 0; duration: 180; easing.type: Easing.OutCubic }
+        }
     }
 
     // A scrolling column of cards, with a thin bar showing where you are.

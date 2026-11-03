@@ -9,8 +9,11 @@ tethering to the paired phone (NetworkManager's "bluetooth" connection for
 it), and drops it again once Wi-Fi is back, to spare the phone's battery.
 
 The radio only scans while the Wi-Fi settings are open (and right after a
-join or forget there): a scan takes the one radio off the hotspot's channel,
-which hurts a stream running over the phone. The backup's watchdog just reads
+join or forget there) or while there's no Wi-Fi at all: a scan takes the one
+radio off the hotspot's channel, which hurts a stream running over the phone,
+but with nothing to disturb, a frequent scan is what catches an iPhone
+advertising its hotspot for only a short while, which NetworkManager's own
+slowing scans can miss. The backup's watchdog just reads
 NetworkManager's connection list, which never scans; NetworkManager's signals
 say when to, and it otherwise wakes up only for a tethering deadline or a slow
 safety check (or every few seconds without those signals).
@@ -39,6 +42,7 @@ TETHER_RETRY_S = 120
 UNTETHER_AFTER_S = 60        # Wi-Fi back this long before letting the phone go
 HIDDEN_RETRIES = 2           # a hidden network can take more than one directed scan to show
 HIDDEN_RETRY_S = 5
+LOST_SCAN_S = 8              # between scans while there's no Wi-Fi
 IPHONE_GATEWAY = "172.20.10.1"
 HOTSPOT_ADDRESS = "172.20.10.14/28"   # a fixed extra address, for the "Send to Baja" Shortcut
 
@@ -158,6 +162,7 @@ class Wifi(QObject):
         self._no_wifi_since = None
         self._wifi_since = None
         self._last_tether_try = 0
+        self._last_lost_scan = 0
         self._hotspot_done = set()   # connections already looked at (a hotspot gets the fixed address)
         self._errors = {}            # what each worker last died of, while it keeps happening
         self._scanned.connect(self._on_scanned)
@@ -208,9 +213,11 @@ class Wifi(QObject):
         self._errors[what] = err
 
     def _ensure_hotspot_address(self):
-        """On an iPhone hotspot, give the connection a fixed second address
-        (172.20.10.14) so the phone's Shortcut always knows where the Pi is.
-        DHCP still runs alongside it for the route and DNS."""
+        """Once on a network, make it retry forever with no power saving,
+        however it was first joined. On an iPhone hotspot, also give the
+        connection a fixed second address (172.20.10.14) so the phone's
+        Shortcut always knows where the Pi is. DHCP still runs alongside it
+        for the route and DNS."""
         try:
             _, out, _ = nmcli("-t", "-f", "IP4.GATEWAY,GENERAL.CONNECTION", "device", "show", "wlan0", timeout=4)
             fields = dict(split_terse(l)[:2] for l in out.splitlines() if ":" in l)
@@ -219,6 +226,8 @@ class Wifi(QObject):
             if not conn or not gateway or conn in self._hotspot_done:
                 return                      # nothing up yet, or already looked at
             self._hotspot_done.add(conn)
+            nmcli("connection", "modify", "id", conn,
+                  "connection.autoconnect-retries", "0", "802-11-wireless.powersave", "2")
             if gateway != IPHONE_GATEWAY:
                 return
             _, addrs, _ = nmcli("-g", "ipv4.addresses", "connection", "show", "id", conn, timeout=4)
@@ -362,7 +371,7 @@ class Wifi(QObject):
         e = err.lower()
         if cls._wrong_password(err):
             return f"Wrong password for {ssid}"
-        if "no network with ssid" in e or "not found" in e:
+        if "no network with ssid" in e or "not found" in e or "could not be found" in e:
             return f"Can't see {ssid}; is the hotspot on?"
         if "not authorized" in e or "insufficient privileges" in e:
             return "Not allowed yet: run deploy/setup-pi.sh once on the Pi"
@@ -382,6 +391,8 @@ class Wifi(QObject):
         """Ms to the next poll. Signals say when Wi-Fi comes or goes, but the
         backup's waits end with no signal, so wake up for those."""
         if not self._nm.live():
+            return WATCH_EVERY_MS
+        if self._looking_for_hotspot():
             return WATCH_EVERY_MS
         if self._tether_due is None:
             return SAFETY_WATCH_MS
@@ -428,7 +439,18 @@ class Wifi(QObject):
         if control and wifi and wifi["name"] not in self._hotspot_done:
             threading.Thread(target=self._ensure_hotspot_address, daemon=True).start()
         self._tether_step(wifi is not None)
+        self._scan_if_lost()
         self._watch_timer.setInterval(self._watch_interval())
+
+    def _looking_for_hotspot(self):
+        """No Wi-Fi, and the phone isn't standing in over Bluetooth."""
+        return self._control and self._no_wifi_since is not None and not self.tetherActive
+
+    def _scan_if_lost(self):
+        now = time.monotonic()
+        if self._looking_for_hotspot() and now - self._last_lost_scan >= LOST_SCAN_S:
+            self._last_lost_scan = now
+            threading.Thread(target=lambda: nmcli("device", "wifi", "rescan", timeout=5), daemon=True).start()
 
     def _tether_step(self, on_wifi):
         now = time.monotonic()

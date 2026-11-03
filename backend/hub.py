@@ -26,10 +26,15 @@ frame; Spotify covers are downloaded and cached first.
 Which source was on, and where local music was up to, are saved in
 settings (every few seconds while it plays, and whenever that changes), so
 a restart picks up the same album and song, near the same place. Shuffle
-and repeat (the Pi's own music only; Spotify and the phone have no way to
-set them from here) are saved with it. Local
+and repeat for the Pi's own music are saved with it (Spotify keeps its own,
+and the phone has no way to set them from here). Local
 music plays again only if it was what was playing; after Spotify or the
 phone it waits, paused, for them to come back.
+
+Spotify comes back by itself: while it plays, what it's playing is saved, and
+once Spotify is signed in after a restart or a lost connection it carries on,
+unless something else is already playing. Pausing it, playing something else
+or moving it to another device forgets that, and Settings can turn it off.
 """
 
 import json
@@ -61,6 +66,8 @@ FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
 # in the pipe, or the new one starts with, must not come out at the new level.
 SWITCH_SETTLE_MS = 600
 SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
+RESUME_SETTING = "spotifyResume"
+RESUME_URI_SETTING = "spotifyResumeUri"
 
 
 def _rounded_card(img, out, size=600, radius_frac=0.014):
@@ -148,6 +155,7 @@ class MediaHub(QObject):
     modesChanged = pyqtSignal()
     mutedChanged = pyqtSignal()
     recentsChanged = pyqtSignal()
+    resumeChanged = pyqtSignal()
     albumsChanged = pyqtSignal()        # the Pi's music was rescanned
     scanningChanged = pyqtSignal()
 
@@ -164,6 +172,10 @@ class MediaHub(QObject):
                 local.set_modes(modes.get("shuffle") is True, modes.get("repeat"))
             local.restore(saved.get("local"), play=self._was_playing)
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
+        self._resume_on = str(settings.get(RESUME_SETTING, "true")) == "true" if settings else False
+        self._resume_uri = str(settings.get(RESUME_URI_SETTING, "")) if settings else ""
+        self._resume_tried = False
+        self._spotify_was_playing = False
         self._system_volume = bool(shutil.which("wpctl"))
         # The output level goes out through one thread, in order, latest
         # wins (a fade sends a quick run of them).
@@ -201,6 +213,9 @@ class MediaHub(QObject):
         phone.volumeChanged.connect(lambda: self._remote_volume_changed("phone"))
         spotify.volumeChanged.connect(lambda: self._remote_volume_changed("spotify"))
         spotify.changed.connect(self._spotify_changed)
+        spotify.playingChanged.connect(self._note_spotify)
+        spotify.trackChanged.connect(self._note_spotify)
+        spotify.modesChanged.connect(self.modesChanged)
         spotify.queueChanged.connect(self.queueChanged)
         local.queueChanged.connect(self.queueChanged)       # an album started
         local.modesChanged.connect(self.modesChanged)
@@ -267,6 +282,8 @@ class MediaHub(QObject):
                 getattr(self, sig).emit()
 
     def _pause_others(self, keep):
+        if keep != "spotify":
+            self._remember_spotify("")
         if keep != self._source:
             self._hush_for_switch()
         for name, src in self._sources.items():
@@ -297,8 +314,36 @@ class MediaHub(QObject):
 
     def _spotify_changed(self):
         sp = self._sources["spotify"]
+        signed_in = sp.available and sp.linked
         if self._source == "spotify" and not (sp.available and sp.active):
+            if signed_in:
+                self._remember_spotify("")    # moved to another device
             self._set_source("local")    # moved to another device, or Soloist stopped
+        if signed_in:
+            self._resume_spotify()
+        else:
+            self._resume_tried = False   # try again when it's back
+
+    # ---- Spotify carrying on by itself --------------------------------------
+    def _remember_spotify(self, uri):
+        if uri != self._resume_uri and self._settings:
+            self._settings.set(RESUME_URI_SETTING, uri)
+        self._resume_uri = uri
+
+    def _note_spotify(self):
+        sp = self._sources["spotify"]
+        if sp.playing:
+            self._remember_spotify(sp.resumeUri or self._resume_uri)
+        elif self._spotify_was_playing and sp.available and sp.linked and sp.active:
+            self._remember_spotify("")        # paused here, not lost
+        self._spotify_was_playing = sp.playing
+
+    def _resume_spotify(self):
+        if self._resume_tried or not self._resume_on or not self._resume_uri:
+            return
+        self._resume_tried = True
+        if not any(src.playing for src in self._sources.values()):
+            self._sources["spotify"].resume(self._resume_uri)
 
     def _remote_volume_changed(self, name):
         if name == self._source and self._remote_volume:
@@ -551,29 +596,34 @@ class MediaHub(QObject):
         if self._active.canSeek:
             self._active.seek(seconds)
 
+    @property
+    def _modes(self):
+        """Whose shuffle and repeat the keys show: Spotify's or the Pi's."""
+        return self._sources["spotify" if self._source == "spotify" else "local"]
+
     @pyqtProperty(bool, notify=modesChanged)
     def hasModes(self):
-        """Shuffle and repeat can be set: the Pi's own music is the source."""
-        return self._source == "local" and self._sources["local"].hasModes
+        """Shuffle and repeat can be set: the Pi's own music or Spotify is the source."""
+        return self._source != "phone" and self._modes.hasModes
 
     @pyqtProperty(bool, notify=modesChanged)
     def shuffle(self):
-        return self._sources["local"].shuffle
+        return self._modes.shuffle
 
     @pyqtProperty(str, notify=modesChanged)
     def repeat(self):
-        """'all', 'one' or 'off' for the Pi's own music."""
-        return self._sources["local"].repeat
+        """'all', 'one' or 'off'."""
+        return self._modes.repeat
 
     @pyqtSlot()
     def toggleShuffle(self):
         if self.hasModes:
-            self._sources["local"].toggleShuffle()
+            self._modes.toggleShuffle()
 
     @pyqtSlot()
     def cycleRepeat(self):
         if self.hasModes:
-            self._sources["local"].cycleRepeat()
+            self._modes.cycleRepeat()
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):
@@ -662,9 +712,32 @@ class MediaHub(QObject):
 
     @pyqtSlot(str)
     def playSpotify(self, uri):
-        """Play an album or playlist from `spotifyRecents` through Spotify;
-        the hub switches to it once it starts."""
+        """Play a song, album or playlist through Spotify; the hub switches
+        to it once it starts."""
         self._sources["spotify"].playUri(uri)
+
+    @pyqtSlot("QVariantList")
+    def playSpotifyTracks(self, uris):
+        """Play Spotify songs in order: the first now, the rest queued."""
+        self._sources["spotify"].playTracks(uris)
+
+    @pyqtSlot(str)
+    def queueSpotify(self, uri):
+        """Play a Spotify song after this one."""
+        self._sources["spotify"].addToQueue(uri)
+
+    @pyqtProperty(bool, notify=resumeChanged)
+    def spotifyResume(self):
+        """Spotify carries on by itself after a restart or a lost connection."""
+        return self._resume_on
+
+    @pyqtSlot(bool)
+    def setSpotifyResume(self, on):
+        if on != self._resume_on:
+            self._resume_on = on
+            if self._settings:
+                self._settings.set(RESUME_SETTING, "true" if on else "false")
+            self.resumeChanged.emit()
 
     @pyqtSlot(int)
     def setVolume(self, value):

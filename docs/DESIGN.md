@@ -38,8 +38,8 @@ Basin `#e8e3d4`, Olive `#f6f2e7`, Moss `#e5dfcc`, Contour `#c8bfa4`, text
 | Gauge numeral | auto, Bold | Gauge centres |
 | Readout | 56 Bold | Readouts (Truck and Home), the speed on the map |
 | Huge | 88 DemiBold | Distance to the next turn (Maps) |
-| Hero | 56 DemiBold | Place names (Maps), the Baja OS title in Settings |
-| Title | 40 DemiBold | The truck's name, track titles (Home and Music), card titles |
+| Hero | 56 DemiBold | Place names (Maps), the track title on Music, the Baja OS title in Settings |
+| Title | 40 DemiBold | The truck's name, track titles (Home), card titles |
 | Body | 30 Book | Artists, list rows, settings text |
 | Small | 24 Book, Lichen | Times, units, secondary lines |
 | Legend | 20 DemiBold, caps, tracking 2, Lichen | Instrument legends only: gauge and readout labels (RPM, BOOST) and nav labels |
@@ -127,16 +127,32 @@ Home
 │ BOOST -5.9 psi   COOLANT 140 °F   BATTERY 14.3 V   SPEED 34   │
 └──────────────────────────────────────────────────────────────┘
 
-Music (full screen)
-┌────────────────────────┐ ┌──────────────────────────────────┐
-│ Spotify      [⇄][↻][≡] │ │ [Up next | Albums | Spotify]     │
-│     cover (print)      │ │ Up next on Spotify               │
-│ make it to the end     │ │ would you like to go on a date…  │
-│ Forrest Nolan          │ │ …                                │
-│ ▬▬▬▬▬▬▬▬▭▭▭▭ 2:43 3:31 │ │                                  │
-│   [⏮]   [  ⏸  ]   [⏭]   │ │                                  │
-│ [−] ▮▮▮▮▮▮▮▯▯▯▯▯ 40 [+] │ │                                  │
-└────────────────────────┘ └──────────────────────────────────┘
+Music, Playing (full screen, no status bar)
+┌────────────────────────────────────────────────────────────┐
+│ [Playing | Up next | Albums | Spotify]      [turn, if any] │
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ ┌────────────────────┐  Spotify                            │
+│ │                    │  make it to the end                 │
+│ │                    │  Forrest Nolan                      │
+│ │   cover (print)    │  Next  would you like to go on…  ≡  │
+│ │                    │  ▬▬▬▬▬▬▬▬▬▬▬▭▭▭▭▭▭▭▭                │
+│ │                    │  2:43                          3:31 │
+│ │                    │  [  ⏮  ]  [    ⏸    ]  [  ⏭  ]      │
+│ └────────────────────┘                                     │
+│ [ ⇄ ]  [ ↻ ]  [ ≡ ]     [−] ▮▮▮▮▮▮▮▯▯▯▯▯ 40 [+]            │
+└────────────────────────────────────────────────────────────┘
+
+Music, browsing (Up next, Albums, Spotify)
+┌────────────────────────────────────────────────────────────┐
+│ [Playing | Up next | Albums | Spotify]      [turn, if any] │
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ five covers across, or a list                              │
+└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ [▣] make it to the end        [⏮] [⏸] [⏭]  [−] [+]         │
+└────────────────────────────────────────────────────────────┘
 ```
 
 Truck: the truck's name at the top; under the truck, this trip since start-up

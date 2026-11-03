@@ -328,11 +328,26 @@ Item {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     font.pixelSize: Theme.fontBody
-                    text: typeof spotify === "undefined" || !spotify.available ? "Not set up on this Pi"
-                          : spotify.linked ? "Linked as “" + spotify.deviceName + "”"
-                          : "Waiting to be picked in the Spotify app"
+                    text: typeof spotify === "undefined" ? "Not set up on this Pi" : spotify.statusText
                 }
-                Note { text: "In the Spotify app on your phone, tap the devices icon and pick “" + (typeof spotify !== "undefined" && spotify.deviceName || "Baja") + "” to play through the truck." }
+                Note { text: "In the Spotify app on your phone, tap the devices icon and pick “" + (typeof spotify !== "undefined" && spotify.deviceName || "Baja") + "” to play through the truck. It only needs the same Wi-Fi as the Pi the first time." }
+                Note {
+                    text: typeof spotifyAccount === "undefined" ? ""
+                          : spotifyAccount.linked ? "Your Spotify library is linked and stays linked after a restart."
+                          : "To see your playlists here, open Music, Spotify, Playlists and scan the code."
+                }
+                ConfirmButton {
+                    visible: typeof spotifyAccount !== "undefined" && spotifyAccount.linked
+                    text: "Unlink library"
+                    confirmText: "Tap again to unlink"
+                    onConfirmed: spotifyAccount.signOut()
+                }
+                Note { text: "Carry on playing Spotify after a restart or a lost connection" }
+                SegmentedControl {
+                    options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                    current: media.spotifyResume
+                    onPicked: (v) => media.setSpotifyResume(v)
+                }
             }
         }
     }
@@ -482,7 +497,7 @@ Item {
                 Note {
                     visible: wifi.available
                     text: wifi.networks.length === 0 ? "Looking for networks"
-                          : "For your phone's hotspot: turn on Personal Hotspot and keep that screen open, then tap the phone's name here. After that the Pi joins it by itself."
+                          : "For your phone's hotspot: turn on Personal Hotspot with Maximize Compatibility on, keep that screen open, then tap the phone's name here. After that the Pi joins it by itself."
                 }
                 Note {
                     visible: !wifi.available

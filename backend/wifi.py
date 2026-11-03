@@ -111,8 +111,12 @@ def saved_connections():
     conns = connections() or []
     for c in conns:
         if c["type"] == "802-11-wireless":
-            _, ssid, _ = nmcli("-g", "802-11-wireless.ssid", "connection", "show", "uuid", c["uuid"], timeout=4)
-            c["ssid"] = ssid.strip()
+            # -e no: terse mode would otherwise write ':' and '\\' in a name as
+            # '\:' and '\\', and it'd never match the scan. Only the newline
+            # nmcli adds goes, so a name's own spaces stay.
+            _, ssid, _ = nmcli("-e", "no", "-g", "802-11-wireless.ssid", "connection", "show",
+                               "uuid", c["uuid"], timeout=4)
+            c["ssid"] = ssid.rstrip("\n")
     return conns
 
 

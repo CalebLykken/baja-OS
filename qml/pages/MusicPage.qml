@@ -210,7 +210,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 6
-                        SourceBadge {}
+                        SourceBadge { Layout.fillWidth: true }
                         Label {
                             Layout.fillWidth: true
                             text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title

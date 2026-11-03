@@ -232,6 +232,26 @@ class FakeGpsd:
         return iter(self.lines.splitlines(True))
 
 
+class GpsdOddMessagesTest(unittest.TestCase):
+    """Odd JSON from gpsd is skipped, not fatal to the reader thread."""
+
+    def test_junk_lines_are_skipped_and_one_fix_reported(self):
+        sock = FakeGpsd([])
+        sock.lines = "".join(l + "\n" for l in (
+            "null", "[1,2]", "7", '{"class":"TPV","mode":null}',
+            '{"class":"TPV","mode":"3","lat":1}', '{"class":"TPV","mode":3,"lat":true,"lon":2}',
+            '{"class":"TPV","mode":3,"lat":47.6,"lon":-122.3,"speed":1.5}'))
+        got = []
+        g = Gps(None)
+        g._report.disconnect()
+        g._report.connect(got.append)
+        with mock.patch("backend.gps.socket.create_connection", lambda *a, **k: sock):
+            self.assertTrue(g._read_gpsd())
+        fixes = [r for r in got if "lat" in r]
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(fixes[0]["lat"], 47.6)
+
+
 class GpsdSatellitesTest(unittest.TestCase):
     """gpsd's SKY reports give the same satellite counts as the NMEA path."""
 

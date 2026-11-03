@@ -19,7 +19,7 @@ from datetime import timedelta
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 try:
     import gpiod
@@ -133,25 +133,41 @@ class Knob(QObject):
         last, steps = state(), 0
         down, released_at = False, 0.0
         while True:
-            if not req.wait_edge_events(timedelta(seconds=1)):
-                continue
-            req.read_edge_events()
-            now = time.monotonic()
+            try:
+                if not req.wait_edge_events(timedelta(seconds=1)):
+                    continue
+                req.read_edge_events()
+                now = time.monotonic()
 
-            s = state()
-            if s != last:
-                steps += STEPS.get((last, s), 0)
-                last = s
-                if s == REST:            # a click finished: which way did it go?
-                    if abs(steps) >= 2:
-                        click = 1 if steps > 0 else -1
-                        safe_emit(self, "turned", -click if FLIP else click)
-                    steps = 0
+                s = state()
+                if s != last:
+                    steps += STEPS.get((last, s), 0)
+                    last = s
+                    if s == REST:            # a click finished: which way did it go?
+                        if abs(steps) >= 2:
+                            click = 1 if steps > 0 else -1
+                            safe_emit(self, "turned", -click if FLIP else click)
+                        steps = 0
 
-            is_down = req.get_value(BUTTON) == Value.INACTIVE
-            if is_down and not down and now - released_at > PRESS_GAP_S:
-                down = True
-                safe_emit(self, "pressed")
-            elif not is_down and down:
-                down, released_at = False, now
-                safe_emit(self, "released")
+                is_down = req.get_value(BUTTON) == Value.INACTIVE
+                if is_down and not down and now - released_at > PRESS_GAP_S:
+                    down = True
+                    safe_emit(self, "pressed")
+                elif not is_down and down:
+                    down, released_at = False, now
+                    safe_emit(self, "released")
+            except Exception as e:       # a GPIO hiccup must not end the knob for good
+                errorlog.log.report(type(e), e, e.__traceback__, label="Knob: read error, retrying:")
+                time.sleep(1.0)
+                try:
+                    req.release()
+                except Exception:
+                    pass
+                req = self._request()
+                if req is None:
+                    print("Knob: its pins aren't available")
+                    return
+                try:
+                    last, steps = state(), 0
+                except Exception:
+                    pass      # the next pass fails again and comes back here, a second apart

@@ -41,7 +41,7 @@ import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 PORTS = ("/dev/serial/by-id/*OBDLink*", "/dev/serial/by-id/*ELM*", "/dev/ttyUSB*")
 FAST = (0x0C, 0x0B, 0x0D)            # RPM, manifold pressure, speed: every round
@@ -222,13 +222,17 @@ class Elm:
 
     def __init__(self, path):
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        a = termios.tcgetattr(self.fd)
-        a[0] = a[1] = a[3] = 0
-        a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-        a[4] = a[5] = termios.B115200
-        a[6][termios.VMIN] = a[6][termios.VTIME] = 0
-        termios.tcsetattr(self.fd, termios.TCSANOW, a)
-        termios.tcflush(self.fd, termios.TCIOFLUSH)
+        try:
+            a = termios.tcgetattr(self.fd)
+            a[0] = a[1] = a[3] = 0
+            a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+            a[4] = a[5] = termios.B115200
+            a[6][termios.VMIN] = a[6][termios.VTIME] = 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, a)
+            termios.tcflush(self.fd, termios.TCIOFLUSH)
+        except BaseException:             # don't leak the port when it won't set up
+            os.close(self.fd)
+            raise
 
     def close(self):
         try:
@@ -384,6 +388,8 @@ class ObdReader(QObject):
                     self._session(path)
                 except (OSError, termios.error):
                     pass                      # unplugged mid-read: look again
+                except Exception as e:        # a bad reply must not end the thread
+                    errorlog.log.report(type(e), e, e.__traceback__, label="OBD: reader error, retrying:")
                 safe_emit(self, "lost")
             # Looking for an adapter (or a plugged-back one) is never slower than RETRY_SLOW_S.
             self._nap(min(self._retry(), RETRY_SLOW_S))

@@ -99,7 +99,6 @@ QtObject {
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
     readonly property string backdrop: s.backdrop  // "none", "topo" or "stripes"
 
-    readonly property string mapFont: "Overpass"     // the map, its labels and its controls
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

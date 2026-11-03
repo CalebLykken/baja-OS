@@ -29,7 +29,7 @@ sunset, like the rest of the dashboard.
 | ![Truck](docs/screens/truck.jpg) | ![Settings](docs/screens/settings.jpg) |
 
 These were captured on the Pi's own screen with the engine off, so the
-engine numbers are the simulation (the **DEMO DATA** badge in the status bar).
+engine numbers are the simulation (**Demo** under the clock in the nav rail).
 
 ## Hardware
 
@@ -86,7 +86,7 @@ backend/datause.py   Wi-Fi and tether data use this month
 backend/system.py    temperature, fan, power warnings, restart and power
 backend/ignition.py  shuts the Pi down once the truck is off (the car goes quiet on the OBD adapter)
 backend/display.py   screen brightness over DDC/CI (software dim fallback)
-qml/Main.qml         window: nav rail + status bar + pages
+qml/Main.qml         window: nav rail (clock, warnings, next turn) + pages
 qml/pages/           Home, Music, Maps, Gauges, Truck, Settings
 qml/components/      Theme, Card, Gauge, NowPlaying, Readout, ...
 qml/assets/truck/    the Truck page's 3D model
@@ -316,7 +316,7 @@ with the engine already running. The journal lists the PIDs the car supports
 It only reads: it never clears codes or sends anything that writes. With the
 key off it checks every few seconds, then every 20 s after a minute, so the
 adapter can sleep. Until the car has answered once on an install (a Mac, a bench
-Pi), the gauges run a simulated drive and the status bar shows **DEMO DATA**.
+Pi), the gauges run a simulated drive and the nav rail shows **Demo** under the clock.
 After that, the truck never makes numbers up: with the car silent the engine
 values are dashes, and the battery stays real (the adapter reads it itself).
 `--demo` and `--no-demo` force the choice.

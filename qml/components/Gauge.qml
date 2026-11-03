@@ -3,7 +3,9 @@ import QtQuick
 // Round gauge in one of three looks, picked by Theme.gauge:
 //   arc       a value arc over a track (amber, rally)
 //   needle    a classic dial: ticks, numerals and a sweeping needle (cluster)
-//   segments  an arc of lit blocks like an LED bar graph (trail)
+//   segments  an arc of lit blocks like an LED bar graph (trail): muted
+//             while the reading is in range, with only the leading block
+//             in the accent, so a gauge that needs looking at stands out
 // Static parts are painted once; only what moves is redrawn, which keeps it
 // light on the Pi 2.
 Card {
@@ -52,6 +54,8 @@ Card {
     onPaintFracChanged: if (look !== "needle") dynamic.requestPaint()
     onWarningChanged: dynamic.requestPaint()
     onStyleNameChanged: { face.requestPaint(); dynamic.requestPaint() }
+    readonly property bool dark: Theme.dark          // day and night have their own colours
+    onDarkChanged: { face.requestPaint(); dynamic.requestPaint() }
 
     Item {
         id: dial
@@ -188,6 +192,7 @@ Card {
             var count = 28
             var gapA = 0.022
             var segA = (g.sweep - gapA * (count - 1)) / count
+            var tip = Math.floor(lit * count - 0.5)       // the leading lit block
             ctx.lineWidth = 18
             ctx.lineCap = "butt"
             for (var i = 0; i < count; i++) {
@@ -199,9 +204,10 @@ Card {
                 // Lit blocks only turn red when the reading itself is out of
                 // range; the warning zones just tint their unlit blocks.
                 // The redline's unlit blocks are a dim red so the zone reads
-                // as red, not brown.
+                // as red, not brown. In range, the lit blocks are muted and
+                // only the leading one is the accent, like a needle's tip.
                 var w = Theme.warn
-                ctx.strokeStyle = on ? "" + (g.warning ? Theme.warn : Theme.accent)
+                ctx.strokeStyle = on ? "" + (g.warning ? Theme.warn : i === tip ? Theme.accent : Theme.textDim)
                                      : (hot ? "rgba(" + Math.round(w.r * 255) + "," + Math.round(w.g * 255) + ","
                                               + Math.round(w.b * 255) + ",0.3)"
                                             : "" + Theme.panelHi)

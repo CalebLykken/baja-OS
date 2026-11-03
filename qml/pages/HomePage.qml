@@ -69,13 +69,13 @@ Item {
                 }
 
                 // Navigating: the next turn over the top of the map, on the
-                // same dark card as the Maps page (Apple Maps' look).
+                // same dark card as the Maps page.
                 Rectangle {
                     visible: page.mapReady && typeof routing !== "undefined" && routing.active
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
                     height: miniTurn.implicitHeight + 28
-                    radius: 20
-                    color: Theme.dark ? "#2c2c2e" : "#1c1c1e"
+                    radius: Theme.radius
+                    color: Theme.base.panel
                     RowLayout {
                         id: miniTurn
                         anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
@@ -84,7 +84,7 @@ Item {
                             Layout.alignment: Qt.AlignTop
                             name: typeof routing !== "undefined" ? routing.maneuverIcon || "straight" : "straight"
                             size: 64
-                            color: "white"
+                            color: Theme.base.text
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -93,7 +93,7 @@ Item {
                                 visible: typeof routing !== "undefined" && !routing.arrived
                                 numeric: true
                                 text: typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
-                                color: "white"
+                                color: Theme.base.text
                                 font.pixelSize: Theme.fontReadout
                             }
                             Label {
@@ -102,7 +102,7 @@ Item {
                                 maximumLineCount: 2
                                 elide: Text.ElideRight
                                 text: typeof routing !== "undefined" ? routing.instruction : ""
-                                color: "white"
+                                color: Theme.base.text
                                 font.pixelSize: Theme.fontSmall
                                 font.weight: Font.DemiBold
                             }
@@ -114,12 +114,13 @@ Item {
                     anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
                     width: arriveText.implicitWidth + 32
                     height: 64
-                    radius: 20
-                    color: Theme.dark ? "#2c2c2e" : "#ffffff"
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.width: Theme.border
+                    border.color: Theme.line
                     Label {
                         id: arriveText
                         anchors.centerIn: parent
-                        color: Theme.dark ? "#ffffff" : "#1c1c1e"
                         text: typeof routing !== "undefined"
                               ? "Arrive " + Units.arrivalText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
                         font.pixelSize: Theme.fontSmall

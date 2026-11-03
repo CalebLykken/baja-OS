@@ -28,6 +28,8 @@ I2C_SLAVE = 0x0703
 DDC_ADDR = 0x37
 VCP_BRIGHTNESS = 0x10
 DDC_DELAY = 0.05  # DDC/CI wants ~50 ms between a command and the next one
+DDC_TRIES = 3     # a write the panel NAKs is retried ...
+DDC_RETRY_S = 0.15  # ... after this pause
 SEATTLE = (47.6062, -122.3321)
 DUSK = -2.0       # sun this far below the horizon counts as night (screen dimming)
 MAP_DARK = -4.0   # the map goes dark a little later (between sunset and civil dusk) ...
@@ -98,6 +100,7 @@ class Display(QObject):
         self._ddc = None
         self._max = 100
         self._pending = None
+        self._written = None      # the level the panel last accepted (None: unknown)
         self._wake = threading.Condition()
 
         self._hw = False          # True once the probe found a DDC/CI panel
@@ -140,6 +143,8 @@ class Display(QObject):
             self._night = night
             self._apply(self._levels[night])
             self.nightChanged.emit()
+        else:
+            self._apply(self._levels[night])  # resend a level the panel never took
 
     def _probe(self):
         """Find the panel and read its brightness. Runs off the UI thread."""
@@ -165,6 +170,7 @@ class Display(QObject):
         if ok:
             self._hw = True
             self._brightness = round(current * 100 / maximum) if maximum else 100
+            self._written = self._brightness
             if self._day_default:
                 self._levels[False] = max(5, min(100, self._brightness))
             self.hardwareChanged.emit()
@@ -182,10 +188,20 @@ class Display(QObject):
                 while self._pending is None:
                     self._wake.wait()
                 value, self._pending = self._pending, None
+            self._write(value)
+
+    def _write(self, value):
+        """Send a level to the panel, retrying a NAK. If it never goes through
+        _written keeps the old level, so the next _apply sends it again."""
+        for attempt in range(DDC_TRIES):
             try:
                 self._ddc.set(round(value * self._max / 100))
+                self._written = value
+                return
             except OSError as e:
                 print(f"Brightness: DDC/CI write failed ({e})")
+                if attempt + 1 < DDC_TRIES:
+                    time.sleep(DDC_RETRY_S)
 
     @pyqtProperty(bool, notify=hardwareChanged)
     def hardware(self):
@@ -211,10 +227,11 @@ class Display(QObject):
     def _apply(self, value):
         if self._probing:
             return  # _probed applies the level once the panel is known
-        if value == self._brightness:
+        if value != self._brightness:
+            self._brightness = value
+            self.brightnessChanged.emit()
+        elif not self._hw or value == self._written:
             return
-        self._brightness = value
-        self.brightnessChanged.emit()
         if self._hw:
             with self._wake:
                 self._pending = value

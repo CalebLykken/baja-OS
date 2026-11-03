@@ -240,6 +240,15 @@ class PlayingFromTheDashboardTest(Connected):
         self.sp._fallback_timer.timeout.emit()
         self.assertEqual(self.sent, [])
 
+    def test_still_falls_back_if_it_only_buffered(self):
+        self.signed_in(active=True)
+        self.sp.resume("spotify:album:a")
+        self.send(type="playback_changed", status="buffering")
+        self.send(type="playback_changed", status="paused")     # ...and then it failed
+        self.sent.clear()
+        self.sp._fallback_timer.timeout.emit()
+        self.assertEqual(self.sent[-1], {"type": "command", "command": "play", "uri": "spotify:album:a"})
+
     def test_no_fallback_after_pausing(self):
         self.signed_in(active=True)
         self.sp.resume("spotify:album:a")

@@ -370,6 +370,19 @@ class SwitchTest(unittest.TestCase):
         self.hub._pause_others(keep="spotify")
         self.assertEqual(self.spotify.cancelled, 1)
 
+    def test_the_knob_starting_local_music_cancels_the_resume(self):
+        self.assertEqual(self.hub._source, "local")
+        self.local._queue = [{"title": "a", "artist": "b", "duration": 1}]
+        self.local._playing = False
+        self.hub.togglePlay()
+        self.assertTrue(self.local.playing)
+        self.assertEqual(self.spotify.cancelled, 1)
+
+    def test_spotify_playing_does_not_cancel_its_own_resume(self):
+        self.spotify.playing = True
+        self.hub._source_playing_changed("spotify")
+        self.assertFalse(getattr(self.spotify, "cancelled", 0))
+
     def test_no_hush_without_a_switch(self):
         self.hub._pause_others(keep="local")
         self.assertEqual(self.hub._fade, 1.0)

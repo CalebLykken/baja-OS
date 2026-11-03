@@ -48,12 +48,15 @@ ColumnLayout {
                     font.weight: Font.DemiBold
                 }
                 // Fills the column's width (its touch area); the segments
-                // stay a fixed width in the middle.
+                // stay a fixed width in the middle. A new preset glides the
+                // columns over (staggered by band); the dB labels above
+                // still jump to the true setting at once.
                 EqSlider {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 120
                     value: eq.gains[index]
+                    delay: index * 35       // preset change ripples low to high
                     limit: eq.limit
                     onMoved: (v) => eq.setGain(index, v)
                 }

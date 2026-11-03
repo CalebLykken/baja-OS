@@ -44,15 +44,30 @@ def _pw_cli(*args, timeout=3):
         return ""
 
 
+def node_info():
+    """(object id, object serial) of the running filter, or None.
+
+    PipeWire hands out object ids from a small pool and reuses them, so a
+    restarted filter can come back with the same id; the serial never repeats.
+    The serial is None if pw-cli doesn't print one.
+    """
+    out = _pw_cli("i", NODE)
+    m = re.search(r"^\s*id: (\d+)", out, re.M)
+    if not m:
+        return None
+    s = re.search(r'object\.serial\D*(\d+)', out)
+    return int(m[1]), (int(s[1]) if s else None)
+
+
 def node_id():
     """The filter's PipeWire object id, or None if it isn't running."""
-    m = re.search(r"^\s*id: (\d+)", _pw_cli("i", NODE), re.M)
-    return int(m[1]) if m else None
+    info = node_info()
+    return info[0] if info else None
 
 
 class Equalizer(QObject):
     changed = pyqtSignal()
-    _found = pyqtSignal(object)        # node id or None, from the watcher thread
+    _found = pyqtSignal(object)        # (id, serial) or None, from the watcher thread
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -93,17 +108,17 @@ class Equalizer(QObject):
 
     def _find(self):
         try:
-            nid = node_id()
+            info = node_info()
         except Exception:
             return                    # not found yet; the next check tries again
-        safe_emit(self, "_found", nid)
+        safe_emit(self, "_found", info)
 
-    def _on_found(self, nid):
+    def _on_found(self, info):
         was = self._node
-        self._node = nid
-        if nid is not None and nid != was:
-            self._push()              # (re)started: give it our gains
-        if (nid is None) != (was is None):
+        self._node = info
+        if info is not None and info != was:
+            self._push()              # (re)started, even under the same id: give it our gains
+        if (info is None) != (was is None):
             self.changed.emit()
 
     def _push(self):

@@ -155,8 +155,9 @@ class DataUseTests(unittest.TestCase):
         self.iface("wlan0", 100, 50)
         du = self.make()
         du.start()
-        self.addCleanup(du._first.stop)
-        self.addCleanup(du._timer.stop)
+        # Cleanups run after the test returns; the lambdas hold du so the
+        # QObject (and its child timers) is not collected before they stop.
+        self.addCleanup(lambda: (du._first.stop(), du._timer.stop()))
         self.assertNotIn("dataUse", self.settings.d)
         self.assertFalse(du.available)
         self.assertTrue(du._first.isSingleShot())

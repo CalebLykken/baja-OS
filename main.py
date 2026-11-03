@@ -265,7 +265,7 @@ def main():
     road = RoadInfo(gps)
     updater = Updater(vehicle, gps, routing, system.restartDashboard)
     system.hold_power_while(lambda: updater.updating)
-    system.before_power(settings.flush_and_wait)   # on disk before systemctl is asked
+    system.before_power(settings.flush_before_power)   # on disk before systemctl is asked
     voice = Voice(settings)
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops

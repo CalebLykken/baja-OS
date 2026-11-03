@@ -301,6 +301,42 @@ class SettingsTest(unittest.TestCase):
             self.s._writer.close(1)
         self.assertLess(time.monotonic() - started, 1)
 
+    def test_the_way_out_shares_one_budget_when_a_write_keeps_failing(self):
+        # SIGTERM, aboutToQuit and close() each flush on the way out; with a
+        # full card they must not wait 3 s each past systemd's 5 s stop.
+        self.store.fail_syncs = 10 ** 6
+        self.s.set("volume", 3)
+        started = time.monotonic()
+        with mock.patch("builtins.print"):
+            self.s.flush_and_wait()             # SIGTERM
+            self.s.flush_and_wait()             # aboutToQuit
+            self.s.flush_and_wait()
+            self.s.close()                      # after app.exec()
+        self.assertLess(time.monotonic() - started, 3.5)
+        self.assertEqual(self.store.syncs, 0)
+
+    def test_the_way_out_still_writes_everything_on_a_healthy_store(self):
+        self.s.set("volume", 3)
+        self.s.flush_and_wait()
+        self.s.set("style", "trail")            # changed after the first flush
+        self.s.flush_and_wait()
+        self.s.close()
+        self.assertEqual(self.store.values, {"volume": 3, "style": "trail"})
+
+    def test_the_flush_before_power_waits_in_full_after_the_budget_is_spent(self):
+        self.store.fail_syncs = 10 ** 6
+        with mock.patch("backend.settings.FLUSH_TIMEOUT_S", 0.2), mock.patch("builtins.print"):
+            s = self.make()
+            s.set("volume", 3)
+            s.flush_and_wait()                  # spends the way out's budget
+            with self.store.lock:
+                self.store.fail_syncs = 0
+            self.store.sync_gate = threading.Event()
+            threading.Timer(0.4, self.store.sync_gate.set).start()
+            s.flush_before_power()              # longer than the spent budget
+        self.assertEqual(self.store.values, {"volume": 3})
+        self.assertEqual(self.store.syncs, 1)
+
     def test_get_int_falls_back_on_junk(self):
         self.s.set("volume", "loud")
         self.assertEqual(self.s.get_int("volume", 40), 40)

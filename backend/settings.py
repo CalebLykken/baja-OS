@@ -25,6 +25,10 @@ save in bursts. So the UI thread never touches the file after start-up:
 - A write that fails (SD card full) stays queued; the writer retries it by
   itself with a growing pause, and flush(wait=True) reports False while any
   key is still unwritten.
+- The way out flushes more than once (SIGTERM, aboutToQuit, close()). Those
+  share one deadline, FLUSH_TIMEOUT_S from the first of them, so a store that
+  keeps failing can't stack 3 s waits past systemd's 5 s stop timeout. The
+  flush before a poweroff or reboot gets its own full wait.
 """
 
 import threading
@@ -34,7 +38,8 @@ from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QSettings, QTimer, p
 
 FLUSH_AFTER_MS = 1500       # quiet this long after a change, then write
 MAX_WAIT_MS = 10000         # but never sit on a change longer than this
-FLUSH_TIMEOUT_S = 3.0       # how long a waiting flush blocks (systemd allows 5 s)
+FLUSH_TIMEOUT_S = 3.0       # how long a waiting flush blocks, and the whole way out
+                            # (systemd allows 5 s)
 RETRY_FIRST_S = 2.0         # a failed write is tried again after this,
 RETRY_MAX_S = 30.0          # doubling up to this
 RETRY_WAITING_S = 0.25      # ...or this often while a flush is waiting on it
@@ -163,6 +168,7 @@ class Settings(QObject):
         self._flush_after_ms = flush_after_ms
         self._max_wait_ms = max_wait_ms
         self._flush_timer = QTimer(self, singleShot=True, timeout=self._timed_flush)
+        self._exit_deadline = None          # time.monotonic() the way out must end by
 
     @pyqtSlot(str, "QVariant", result="QVariant")
     def get(self, key, default=None):
@@ -202,16 +208,33 @@ class Settings(QObject):
             return True
         return self._writer.wait(timeout)       # also what failed earlier
 
+    def _exit_left(self, cap=FLUSH_TIMEOUT_S):
+        """What's left of the way out's one time budget; the first call starts it."""
+        now = time.monotonic()
+        if self._exit_deadline is None:
+            self._exit_deadline = now + FLUSH_TIMEOUT_S
+        return max(0.0, min(cap, self._exit_deadline - now))
+
     @pyqtSlot()
     def flush_and_wait(self):
-        """For the way out: everything on disk before this returns."""
+        """For the way out: everything on disk before this returns. Every
+        call on the way out (and close()) shares one FLUSH_TIMEOUT_S budget,
+        so a store that keeps failing doesn't make each of them wait in full."""
+        if not self.flush(wait=True, timeout=self._exit_left()):
+            print("Settings: the last write didn't finish (not saved)", flush=True)
+
+    @pyqtSlot()
+    def flush_before_power(self):
+        """Before a poweroff or reboot: everything on disk, with a full wait of
+        its own (systemd's stop timeout hasn't started yet)."""
         if not self.flush(wait=True):
             print("Settings: the last write didn't finish (not saved)", flush=True)
 
     def close(self, timeout=FLUSH_TIMEOUT_S):
-        """Write everything and stop the writer thread."""
+        """Write everything and stop the writer thread, within what's left of
+        the way out's budget (and never longer than timeout)."""
         self.flush_and_wait()
-        self._writer.close(timeout)
+        self._writer.close(self._exit_left(timeout))
 
     def get_int(self, key, default):
         try:

@@ -165,7 +165,12 @@ WebEngineView {
     // New map data (Settings > Map > Update): load it.
     Connections {
         target: maps
-        property string build: maps.build
+        // The build the page was loaded with: a plain value, assigned once at
+        // startup and then by the handler. Written as `build: maps.build` it
+        // would be a live binding that updates before this handler runs, so
+        // the comparison below would never see a change.
+        property string build: ""
+        Component.onCompleted: build = maps.build
         function onChanged() {
             if (maps.build !== build && maps.ready) { build = maps.build; web.reload() }
         }

@@ -309,8 +309,11 @@ class MediaHub(QObject):
         # Grace starts for the first phone and for a second one joining the first.
         if (name and not self._phone_name) or (connected - self._phones_connected):
             self._phone_connected_at = time.monotonic()
+        changed = name != self._phone_name
         self._phone_name = name
         self._phones_connected = connected
+        if changed and self._source == "phone":
+            self.sourceChanged.emit()    # another phone took over: the badge shows its name
 
     def _connected_phones(self):
         paired = getattr(self._sources["phone"], "paired", None) or []

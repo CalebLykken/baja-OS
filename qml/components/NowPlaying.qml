@@ -17,6 +17,8 @@ Card {
     property string shownTitle: ""
     property string shownArtist: ""
     property bool seeded: false
+    // The title the running slide is heading to.
+    property string slideTarget: ""
     readonly property string liveTitle: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
     readonly property string liveArtist: media.artist
 
@@ -25,8 +27,11 @@ Card {
         shownArtist = liveArtist
         seeded = true
     }
-    onLiveTitleChanged: np.trackChanged()
-    onLiveArtistChanged: np.trackChanged()
+    // Title and artist come from one notify signal, so both change handlers
+    // fire for one track change. Deferred on purpose: one emission, one
+    // decision, made after both values have settled.
+    onLiveTitleChanged: Qt.callLater(np.trackChanged)
+    onLiveArtistChanged: Qt.callLater(np.trackChanged)
 
     // A new song slides the words out to the left, swaps them while they
     // are invisible, and slides them back in from the right (a card being
@@ -40,6 +45,9 @@ Card {
             shownArtist = liveArtist
             return
         }
+        // Already sliding to this title: the midpoint script reads the live
+        // values, so there is nothing to restart.
+        if (slide.running && liveTitle === slideTarget) return
         if (slide.running) {
             slide.stop()
             words.opacity = 1
@@ -47,6 +55,7 @@ Card {
             shownTitle = liveTitle
             shownArtist = liveArtist
         }
+        slideTarget = liveTitle
         slide.start()
     }
 

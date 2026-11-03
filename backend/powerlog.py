@@ -128,9 +128,44 @@ def boot_facts():
 
 
 def prune(folder, keep=KEEP_BOOTS):
-    logs = sorted(Path(folder).glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for old in logs[keep:]:
-        old.unlink(missing_ok=True)
+    """Delete all but the newest `keep` logs. A file that vanishes or can't be
+    read part-way is skipped; this never raises."""
+    try:
+        found = list(Path(folder).glob("*.log"))
+    except OSError:
+        return
+    dated = []
+    for p in found:
+        try:
+            dated.append((p.stat().st_mtime, p))
+        except OSError:
+            pass
+    dated.sort(key=lambda d: d[0], reverse=True)
+    for _, old in dated[keep:]:
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+KERNEL_BACKOFF_FIRST = 5.0      # seconds before restarting the kernel follower
+KERNEL_BACKOFF_MAX = 300.0
+KERNEL_RUN_OK_S = 300.0         # a run this long counts as healthy: back-off resets
+
+
+def kernel_cmd(first):
+    """The journalctl command. The first run reads this boot from the start, so a
+    dip during boot is in the file too; restarts only want what is new."""
+    since = ["-n", "all"] if first else ["--since", "now"]
+    return ["journalctl", "-k", "-b", "-f", *since, "-o", "short-monotonic", "--no-pager"]
+
+
+def next_backoff(current, ran_for):
+    """Seconds to wait before the next restart, given the wait just used and how
+    long the last run lasted: doubles up to a cap, back to the start after a long run."""
+    if ran_for > KERNEL_RUN_OK_S:
+        return KERNEL_BACKOFF_FIRST
+    return min(current * 2, KERNEL_BACKOFF_MAX)
 
 
 class PowerLog(QObject):
@@ -160,12 +195,15 @@ class PowerLog(QObject):
     def _begin(self):
         try:
             self._folder.mkdir(parents=True, exist_ok=True)
-            boot = Path("/proc/sys/kernel/random/boot_id").read_text()[:8]
+            try:
+                boot = Path("/proc/sys/kernel/random/boot_id").read_text()[:8]
+            except OSError:
+                boot = time.strftime("%Y%m%d-%H%M%S")
             self._file = open(self._folder / f"{boot}.log", "a", buffering=1)
-            prune(self._folder)
         except OSError as e:
             print(f"Power log: can't write to {self._folder} ({e})", flush=True)
             return
+        prune(self._folder)
         restarts = _run("systemctl", "show", "baja-os", "-p", "NRestarts", "--value").strip()
         self.event(f"app started (service restarts this boot: {restarts or '?'})")
         self.event(f"supply at boot: {boot_facts()}")
@@ -231,18 +269,40 @@ class PowerLog(QObject):
                 pass
 
     def _kernel(self):
-        # From the start of this boot, so a dip during boot is in the file too.
+        first, wait = True, KERNEL_BACKOFF_FIRST
+        while True:
+            started = time.monotonic()
+            try:
+                self._follow_kernel(first)
+            except Exception as e:      # keep following whatever happens
+                self.event(f"kernel log follower failed: {type(e).__name__}: {e}")
+            first = False
+            ran_for = time.monotonic() - started
+            wait = KERNEL_BACKOFF_FIRST if ran_for > KERNEL_RUN_OK_S else wait
+            self.event(f"the kernel log stopped; following again in {wait:.0f} s")
+            time.sleep(wait)
+            wait = next_backoff(wait, ran_for)
+            self.event("following the kernel log again")
+
+    def _follow_kernel(self, first):
         try:
             proc = subprocess.Popen(
-                ["journalctl", "-k", "-b", "-f", "-n", "all", "-o", "short-monotonic", "--no-pager"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
+                kernel_cmd(first), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, errors="replace")
         except OSError as e:
             self.event(f"can't follow the kernel log: {e}")
             return
-        for line in proc.stdout:
-            if KERNEL_WORTH_KEEPING.search(line):
-                self.event("kernel: " + line.strip())
-        self.event("the kernel log stopped")
+        try:
+            for line in proc.stdout:
+                if KERNEL_WORTH_KEEPING.search(line):
+                    self.event("kernel: " + line.strip())
+        finally:
+            try:
+                proc.stdout.close()
+                proc.wait(timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                proc.kill()
+                proc.wait()
 
     @pyqtProperty(float, notify=changed)
     def supply(self):

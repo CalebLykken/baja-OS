@@ -66,7 +66,20 @@ if [ -n "$QT_QPA_PLATFORM" ]; then
     exec python3 main.py $FULLSCREEN "$@"
 fi
 
-started=$(date +%s)
+# Seconds since boot, which a clock step (chrony or the GPS setting the time
+# right after boot) can't move; the wall clock could make a fast eglfs crash
+# look slow, or negative, and skip the fallback. Falls back to the wall clock
+# only where /proc/uptime can't be read.
+mono_seconds() {
+    local up
+    if read -r up _ < /proc/uptime 2>/dev/null && [ -n "$up" ]; then
+        echo "${up%%.*}"
+    else
+        date +%s
+    fi
+}
+
+started=$(mono_seconds)
 QT_QPA_PLATFORM=eglfs python3 main.py $FULLSCREEN "$@"
 status=$?
 # Only a startup failure should fall back: Qt aborts (exit 134) when eglfs
@@ -74,7 +87,7 @@ status=$?
 # unhandled Python exception into an abort), so fall back only if it died
 # within the first 10 s; otherwise exit and let systemd restart us.
 # Ctrl-C/kill on eglfs exits 1 via Qt's console handler.
-if [ $status -ne 134 ] || [ $(( $(date +%s) - started )) -gt 10 ]; then
+if [ $status -ne 134 ] || [ $(( $(mono_seconds) - started )) -gt 10 ]; then
     exit $status
 fi
 echo "eglfs failed (exit $status); falling back to linuxfb" >&2

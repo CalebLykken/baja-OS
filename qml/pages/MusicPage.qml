@@ -4,23 +4,23 @@ import "../components"
 
 // The Music page, full screen like Maps (the clock moves into the rail).
 //
-// - Left: what's playing. The cover, the song, the keys and the volume;
-//   the equalizer key opens the EQ over the right-hand side.
-// - Right: three tabs. Up next (Spotify's queue, or the Pi's songs playing
-//   through); Albums (the Pi's own music by album: open one to play it, or
-//   a song in it); Spotify (albums and playlists played here recently, one
-//   tap to play again; your playlists, albums and Liked Songs once linked by
-//   a QR code; and the search key, which types over the bottom of the page
-//   like Maps).
-// - While navigating, the next turn sits on top of the right side; tap it
-//   for Maps.
+// Tabs across the top, with the next turn beside them while navigating (tap
+// it for Maps):
+// - Playing: the music has the page. The cover, the song, the next song, the
+//   keys and the volume; the equalizer key opens the EQ.
+// - Up next (Spotify's queue, or the Pi's songs playing through); Albums (the
+//   Pi's own music by album: open one to play it, or a song in it); Spotify
+//   (albums and playlists played here recently, one tap to play again; your
+//   playlists, albums and Liked Songs once linked by a QR code; and the search
+//   key, which types over the bottom of the page like Maps). These keep a
+//   player bar along the bottom; tap it to go back to Playing.
 Item {
     id: page
     objectName: "musicPage"
     signal navigate(int index)
 
     property bool eqOpen: false
-    property string tab: "next"                // "next", "albums" or "spotify"
+    property string tab: "playing"             // "playing", "next", "albums" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
     property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     property bool searchOpen: false            // the Spotify tab shows search rather than recents
@@ -30,7 +30,7 @@ Item {
     readonly property bool needsLink: libraryView && hasAccount && !spotifyAccount.linked
     property bool typing: false                // the keyboard is up
     property string query: ""
-    onVisibleChanged: if (!visible) { eqOpen = false; openAlbum = -1; closeSearch() }
+    onVisibleChanged: if (!visible) show("playing")     // always come back to the music
     Connections {
         target: media
         function onAlbumsChanged() {
@@ -51,6 +51,23 @@ Item {
     readonly property string spotifyError: typeof spotify !== "undefined"
                                            && (media.source === "spotify" || page.tab === "spotify") ? spotify.error : ""
 
+    readonly property bool browsing: tab !== "playing" || eqOpen
+    readonly property int barHeight: 84
+    // The song after this one, or null when that isn't known: the phone doesn't
+    // say, and a shuffle's order is the player's own.
+    readonly property var nextSong: {
+        if (media.source === "spotify") return media.upNext.length > 0 ? media.upNext[0] : null
+        if (media.source !== "local" || media.shuffle || media.repeat === "one") return null
+        var songs = media.queue, after = media.index + 1
+        return after < songs.length ? songs[after] : media.repeat === "all" && songs.length > 1 ? songs[0] : null
+    }
+
+    function show(which) {
+        tab = which
+        openAlbum = -1
+        eqOpen = false
+        closeSearch()
+    }
     function closeSearch() {
         searchOpen = typing = false
         query = ""
@@ -70,196 +87,271 @@ Item {
         return min < 60 ? min + " min" : Math.floor(min / 60) + " h " + (min % 60) + " min"
     }
 
-    RowLayout {
-        anchors { fill: parent; margins: 20 }
-        spacing: 20
+    ColumnLayout {
+        anchors { fill: parent; margins: Theme.gap }
+        spacing: Theme.gap
 
-        // ==== what's playing =============================================
-        Card {
-            id: nowCard
-            Layout.fillHeight: true
-            Layout.preferredWidth: 460
-
-            ColumnLayout {
-                anchors { fill: parent; margins: 24; topMargin: 14 }
-                spacing: 6
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    SourceBadge {}
-                    Item { Layout.fillWidth: true }
-                    // The Pi's own music and Spotify: the phone has no way to set these from here.
-                    IconButton {
-                        visible: media.hasModes
-                        icon: "shuffle"
-                        size: 60
-                        active: media.shuffle
-                        onClicked: media.toggleShuffle()
-                    }
-                    IconButton {
-                        visible: media.hasModes
-                        icon: media.repeat === "one" ? "repeat_one" : "repeat"
-                        size: 60
-                        active: media.repeat !== "off"
-                        onClicked: media.cycleRepeat()
-                    }
-                    IconButton {
-                        icon: "equalizer"
-                        size: 60
-                        active: page.eqOpen
-                        onClicked: page.eqOpen = !page.eqOpen
-                    }
-                }
-                AlbumArt {
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.topMargin: 4
-                    Layout.preferredWidth: Math.min(nowCard.width - 60, 320)
-                    Layout.preferredHeight: Layout.preferredWidth
-                    source: media.artCard
-                    placeholder: media.source === "phone" ? "phone" : "music"
-                }
-                Label {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 18
-                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-                    color: page.idle ? Theme.textDim : Theme.text
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideRight
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: page.spotifyError !== "" ? page.spotifyError : media.artist
-                    color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    elide: Text.ElideRight
-                }
-                Item { Layout.fillHeight: true }
-
-                // Tap or drag to seek. The touch area is much taller than the bar;
-                // the song only jumps on release, so a drag doesn't re-decode.
-                Item {
-                    id: seekArea
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 48
-                    readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
-                    property real dragValue: 0
-                    property bool dragging: false
-                    function at(x) { return Math.max(0, Math.min(1, x / width)) }
-                    ProgressBar {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width
-                        value: seekArea.dragging ? seekArea.dragValue
-                                                 : (media.duration > 0 ? media.position / media.duration : 0)
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        enabled: seekArea.canSeek
-                        onPressed: (m) => { seekArea.dragValue = seekArea.at(m.x); seekArea.dragging = true }
-                        onPositionChanged: (m) => seekArea.dragValue = seekArea.at(m.x)
-                        onReleased: (m) => {
-                            seekArea.dragging = false
-                            media.seek(Math.round(seekArea.at(m.x) * media.duration))
-                        }
-                        onCanceled: seekArea.dragging = false
-                    }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
-                    Item { Layout.fillWidth: true }
-                    Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
-                }
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: 28
-                    opacity: page.idle ? 0.4 : 1
-                    enabled: !page.idle
-                    IconButton { icon: "previous"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
-                    IconButton {
-                        icon: media.playing ? "pause" : "play"
-                        primary: true
-                        size: 104
-                        onClicked: media.togglePlay()
-                    }
-                    IconButton { icon: "next"; size: 84; anchors.verticalCenter: parent.verticalCenter; onClicked: media.next() }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    spacing: 14
-                    IconButton { icon: "remove"; size: 60; onClicked: media.volumeDown() }
-                    LevelBar {
-                        Layout.fillWidth: true
-                        opacity: media.muted ? 0.35 : 1
-                        value: media.volume / 100
-                        onMoved: (v) => media.setVolume(Math.round(v * 100))
-                    }
-                    Label {
-                        Layout.preferredWidth: 64
-                        horizontalAlignment: Text.AlignRight
-                        color: media.muted ? Theme.warn : Theme.text
-                        text: media.muted ? "Mute" : media.volume
-                        font.family: Theme.numFont
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    IconButton { icon: "add"; size: 60; onClicked: media.volumeUp() }
-                }
-            }
-        }
-
-        // ==== the right side =============================================
-        ColumnLayout {
+        // ==== the tabs, and the next turn while navigating ===============
+        RowLayout {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 16
+            Layout.fillHeight: false            // its keys fill this row, not the page
+            Layout.preferredHeight: page.barHeight
+            spacing: Theme.gap
 
-            // While navigating: the next turn (tap for Maps).
+            SegmentedControl {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                stretch: true
+                options: [{ label: "Playing", value: "playing" },
+                          { label: "Up next", value: "next" },
+                          { label: "Albums", value: "albums" },
+                          { label: "Spotify", value: "spotify" }]
+                current: page.tab
+                onPicked: (v) => page.show(v)
+            }
+
+            // Tap for Maps.
             Rectangle {
                 visible: page.navigating
-                Layout.fillWidth: true
-                Layout.preferredHeight: 92
+                Layout.preferredWidth: 440
+                Layout.fillHeight: true
                 radius: Theme.radius
                 color: turnTap.pressed ? Theme.panelHi : Theme.panel
                 border.width: Theme.border
                 border.color: Theme.accent
                 RowLayout {
                     anchors { fill: parent; leftMargin: 20; rightMargin: 20 }
-                    spacing: 16
+                    spacing: Theme.gap
                     Icon {
                         name: page.navigating ? routing.maneuverIcon || "straight" : "straight"
                         size: 56
                         color: Theme.accent
                     }
-                    Label {
-                        visible: page.navigating && !routing.arrived
-                        text: page.navigating ? Units.distanceText(routing.distanceToTurn) : ""
-                        font.family: Theme.numFont
-                        font.pixelSize: Theme.fontTitle
-                        font.weight: Font.DemiBold
-                    }
-                    Label {
+                    Column {
                         Layout.fillWidth: true
-                        text: page.navigating ? routing.instruction : ""
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontBody
-                        elide: Text.ElideRight
+                        Layout.preferredWidth: 1
+                        Label {
+                            visible: page.navigating && !routing.arrived
+                            text: page.navigating ? Units.distanceText(routing.distanceToTurn) : ""
+                            font.family: Theme.numFont
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        Label {
+                            width: parent.width
+                            text: page.navigating ? routing.instruction : ""
+                            color: Theme.textDim
+                            font.pixelSize: Theme.fontSmall
+                            elide: Text.ElideRight
+                        }
                     }
                 }
                 TapHandler { id: turnTap; onTapped: page.navigate(2) }
             }
+        }
 
-            SegmentedControl {
-                Layout.fillWidth: true
-                height: 72
-                stretch: true
-                options: [{ label: "Up next", value: "next" },
-                          { label: "Albums", value: "albums" },
-                          { label: "Spotify", value: "spotify" }]
-                current: page.tab
-                onPicked: (v) => { page.tab = v; page.openAlbum = -1; page.eqOpen = false; page.closeSearch() }
+        // ==== what's playing =============================================
+        // Two rows on one grid: the cover beside the song and the transport
+        // keys, ending level; then the modes beside the volume.
+        Card {
+            id: nowCard
+            visible: !page.browsing
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            // Square, leaving the row of keys below it.
+            readonly property int coverSize: height - 40 - Theme.touch - Theme.gap
+
+            RowLayout {
+                anchors { fill: parent; margins: 20 }
+                spacing: 28
+
+                ColumnLayout {
+                    Layout.fillWidth: false             // its keys share the cover's width
+                    Layout.preferredWidth: nowCard.coverSize
+                    Layout.fillHeight: true
+                    spacing: Theme.gap
+                    AlbumArt {
+                        Layout.preferredWidth: nowCard.coverSize
+                        Layout.preferredHeight: nowCard.coverSize
+                        source: media.artCard
+                        placeholder: media.source === "phone" ? "phone" : "music"
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Theme.touch
+                        spacing: Theme.gap
+                        // The Pi's own music and Spotify: the phone has no way to set these from here.
+                        WideKey {
+                            visible: media.hasModes
+                            icon: "shuffle"
+                            active: media.shuffle
+                            onClicked: media.toggleShuffle()
+                        }
+                        WideKey {
+                            visible: media.hasModes
+                            icon: media.repeat === "one" ? "repeat_one" : "repeat"
+                            active: media.repeat !== "off"
+                            onClicked: media.cycleRepeat()
+                        }
+                        WideKey {
+                            icon: "equalizer"
+                            onClicked: page.eqOpen = true
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: 1            // take what's left, not the title's length
+                    spacing: Theme.gap
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        spacing: 6
+                        SourceBadge {}
+                        Label {
+                            Layout.fillWidth: true
+                            text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
+                            color: page.idle ? Theme.textDim : Theme.text
+                            font.pixelSize: Theme.fontHero
+                            font.weight: Font.DemiBold
+                            lineHeight: 0.95
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                            color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
+                            font.pixelSize: Theme.fontBody
+                            elide: Text.ElideRight
+                        }
+                        Item { Layout.fillHeight: true }
+
+                        // The next song, when it's known: tap for the rest.
+                        Rectangle {
+                            visible: page.nextSong !== null
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 64
+                            radius: Theme.radius
+                            color: nextTap.pressed ? Theme.panelHi : "transparent"
+                            RowLayout {
+                                anchors { fill: parent; rightMargin: 8 }
+                                spacing: 12
+                                Label {
+                                    text: "Next"
+                                    color: Theme.textDim
+                                    font.pixelSize: Theme.fontSmall
+                                    font.weight: Font.DemiBold
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: 1
+                                    text: page.nextSong ? page.nextSong.title : ""
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                }
+                                Icon { name: "queue"; size: 28; color: Theme.textDim }
+                            }
+                            TapHandler { id: nextTap; onTapped: page.show("next") }
+                        }
+
+                        // Tap or drag to seek. The touch area is much taller than the bar;
+                        // the song only jumps on release, so a drag doesn't re-decode.
+                        Item {
+                            id: seekArea
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 44
+                            readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
+                            property real dragValue: 0
+                            property bool dragging: false
+                            function at(x) { return Math.max(0, Math.min(1, x / width)) }
+                            ProgressBar {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width
+                                height: 10
+                                radius: 5
+                                value: seekArea.dragging ? seekArea.dragValue
+                                                         : (media.duration > 0 ? media.position / media.duration : 0)
+                            }
+                            MouseArea {
+                                anchors { fill: parent; bottomMargin: -28 }
+                                enabled: seekArea.canSeek
+                                onPressed: (m) => { seekArea.dragValue = seekArea.at(m.x); seekArea.dragging = true }
+                                onPositionChanged: (m) => seekArea.dragValue = seekArea.at(m.x)
+                                onReleased: (m) => {
+                                    seekArea.dragging = false
+                                    media.seek(Math.round(seekArea.at(m.x) * media.duration))
+                                }
+                                onCanceled: seekArea.dragging = false
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                            Item { Layout.fillWidth: true }
+                            Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        Layout.preferredHeight: Theme.touch + 20
+                        spacing: Theme.gap
+                        opacity: page.idle ? 0.5 : 1
+                        enabled: !page.idle
+                        WideKey { icon: "previous"; size: Theme.touch + 20; onClicked: media.previous() }
+                        WideKey {
+                            icon: media.playing ? "pause" : "play"
+                            primary: true
+                            size: Theme.touch + 20
+                            Layout.preferredWidth: 1.4
+                            onClicked: media.togglePlay()
+                        }
+                        WideKey { icon: "next"; size: Theme.touch + 20; onClicked: media.next() }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        Layout.preferredHeight: Theme.touch
+                        spacing: Theme.gap
+                        IconButton { icon: "remove"; onClicked: media.volumeDown() }
+                        LevelBar {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 44
+                            opacity: media.muted ? 0.35 : 1
+                            value: media.volume / 100
+                            onMoved: (v) => media.setVolume(Math.round(v * 100))
+                        }
+                        // Tap to mute, as holding the knob does.
+                        Label {
+                            Layout.preferredWidth: 72
+                            Layout.fillHeight: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            color: media.muted ? Theme.warn : Theme.text
+                            text: media.muted ? "Mute" : media.volume
+                            font.family: Theme.numFont
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                            TapHandler { onTapped: media.toggleMute() }
+                        }
+                        IconButton { icon: "add"; onClicked: media.volumeUp() }
+                    }
+                }
             }
+        }
+
+        // ==== browsing ===================================================
+        ColumnLayout {
+            visible: page.browsing
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: Theme.gap
 
             Card {
                 id: content
@@ -315,11 +407,11 @@ Item {
                 GridView {
                     id: albumGrid
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen
-                    anchors { fill: parent; margins: 14; topMargin: 56 }
+                    anchors { fill: parent; margins: 12; topMargin: 52 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    cellWidth: Math.floor(width / 3)
-                    cellHeight: cellWidth + 74
+                    cellWidth: Math.floor(width / 5)
+                    cellHeight: cellWidth + 80
                     model: page.albums
                     delegate: CoverTile {
                         width: albumGrid.cellWidth
@@ -345,23 +437,21 @@ Item {
                 Item {
                     id: albumView
                     visible: page.tab === "albums" && page.openAlbum >= 0 && !page.eqOpen
-                    anchors { fill: parent; margins: 16 }
+                    anchors { fill: parent; margins: 20 }
                     readonly property var album: page.openAlbum >= 0 ? page.albums[page.openAlbum] : null
                     readonly property var tracks: page.openAlbum >= 0 && page.albums ? media.albumTracks(page.openAlbum) : []   // page.albums: re-read when a rescan changes the songs
 
                     RowLayout {
                         id: albumHead
                         anchors { left: parent.left; right: parent.right; top: parent.top }
-                        spacing: 18
+                        spacing: 20
                         IconButton {
-                            Layout.alignment: Qt.AlignTop
                             icon: "back"
-                            size: 72
                             onClicked: page.openAlbum = -1
                         }
                         Cover {
-                            Layout.preferredWidth: 150
-                            Layout.preferredHeight: 150
+                            Layout.preferredWidth: 120
+                            Layout.preferredHeight: 120
                             art: albumView.album ? albumView.album.art : ""
                             placeholder: "album"
                         }
@@ -369,14 +459,12 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredWidth: 1            // take what's left, not the title's length
                             Layout.alignment: Qt.AlignVCenter
-                            spacing: 4
+                            spacing: 0
                             Label {
                                 Layout.fillWidth: true
                                 text: albumView.album ? albumView.album.title : ""
                                 font.pixelSize: Theme.fontTitle
                                 font.weight: Font.DemiBold
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: 2
                                 elide: Text.ElideRight
                             }
                             Label {
@@ -395,8 +483,8 @@ Item {
                         }
                         TextButton {
                             Layout.alignment: Qt.AlignVCenter
-                            implicitWidth: 150
-                            implicitHeight: 96
+                            implicitWidth: 180
+                            implicitHeight: Theme.touch
                             text: "Play"
                             icon: "play"
                             primary: true
@@ -426,7 +514,7 @@ Item {
                     id: spotifyViews
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                     anchors { left: parent.left; right: searchKey.left; top: parent.top; margins: 12 }
-                    height: 56
+                    height: 72
                     stretch: true
                     options: [{ label: "Recent", value: "recent" }, { label: "Playlists", value: "playlists" },
                               { label: "Albums", value: "albums" }, { label: "Liked", value: "liked" }]
@@ -437,11 +525,11 @@ Item {
                     id: spotifyGrid
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                              && !page.needsLink && page.spotifyView !== "liked"
-                    anchors { fill: parent; margins: 14; topMargin: 80 }
+                    anchors { fill: parent; margins: 12; topMargin: 96 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    cellWidth: Math.floor(width / 3)
-                    cellHeight: cellWidth + 74
+                    cellWidth: Math.floor(width / 5)
+                    cellHeight: cellWidth + 80
                     model: page.spotifyView === "recent" || !page.hasAccount ? media.spotifyRecents
                            : page.spotifyView === "playlists" ? spotifyAccount.playlists : spotifyAccount.albums
                     delegate: CoverTile {
@@ -474,7 +562,7 @@ Item {
                     id: likedList
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                              && !page.needsLink && page.spotifyView === "liked"
-                    anchors { fill: parent; margins: 12; topMargin: 80 }
+                    anchors { fill: parent; margins: 12; topMargin: 96 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     model: page.hasAccount ? spotifyAccount.songs : []
@@ -500,44 +588,48 @@ Item {
                 }
 
                 // ---- Spotify: linking your library --------------------------
-                ColumnLayout {
+                RowLayout {
                     id: linkView
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen && page.needsLink
-                    anchors { fill: parent; margins: 20; topMargin: 84 }
-                    spacing: 14
+                    anchors { fill: parent; margins: 20; topMargin: 96 }
+                    spacing: 28
                     readonly property string url: page.hasAccount ? spotifyAccount.linkUrl : ""
                     readonly property string ip: typeof network !== "undefined" ? network.ip : ""
                     onVisibleChanged: if (!visible && page.hasAccount) Qt.callLater(spotifyAccount.cancelLink)
                     Image {
                         visible: linkView.url !== ""
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 300
-                        Layout.preferredHeight: 300
+                        Layout.alignment: Qt.AlignVCenter
+                        Layout.preferredWidth: Math.min(300, linkView.height)
+                        Layout.preferredHeight: Layout.preferredWidth
                         source: linkView.visible && typeof phone !== "undefined" ? phone.qrFor(linkView.url) : ""
                         smooth: false
                     }
-                    Label {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        horizontalAlignment: Text.AlignHCenter
-                        color: page.hasAccount && spotifyAccount.message !== "" ? Theme.warn : Theme.textDim
-                        font.pixelSize: Theme.fontBody
-                        text: !page.hasAccount ? ""
-                              : !spotifyAccount.available ? "This needs a Spotify app on this Pi: run deploy/spotify/set-spotify-search.sh."
-                              : spotifyAccount.message !== "" ? spotifyAccount.message
-                              : linkView.url !== "" ? "Scan this with your phone, on the same Wi-Fi or hotspot as the truck, and sign in. You only do this once."
-                              : "Link your Spotify account to see your playlists, albums and Liked Songs here. You only do this once."
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 20
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: page.hasAccount && spotifyAccount.message !== "" ? Theme.warn : Theme.textDim
+                            font.pixelSize: Theme.fontBody
+                            text: !page.hasAccount ? ""
+                                  : !spotifyAccount.available ? "This needs a Spotify app on this Pi: run deploy/spotify/set-spotify-search.sh."
+                                  : spotifyAccount.message !== "" ? spotifyAccount.message
+                                  : linkView.url !== "" ? "Scan this with your phone, on the same Wi-Fi or hotspot as the truck, and sign in. You only do this once."
+                                  : "Link your Spotify account to see your playlists, albums and Liked Songs here. You only do this once."
+                        }
+                        TextButton {
+                            visible: page.hasAccount && spotifyAccount.available && linkView.url === ""
+                            implicitWidth: 340
+                            implicitHeight: Theme.touch
+                            text: linkView.ip !== "" ? "Link Spotify" : "Connect to Wi-Fi first"
+                            primary: true
+                            enabled: linkView.ip !== ""
+                            onClicked: spotifyAccount.startLink(linkView.ip, phone.port)
+                        }
                     }
-                    TextButton {
-                        visible: page.hasAccount && spotifyAccount.available && linkView.url === ""
-                        Layout.alignment: Qt.AlignHCenter
-                        implicitWidth: 300
-                        text: linkView.ip !== "" ? "Link Spotify" : "Connect to Wi-Fi first"
-                        primary: true
-                        enabled: linkView.ip !== ""
-                        onClicked: spotifyAccount.startLink(linkView.ip, phone.port)
-                    }
-                    Item { Layout.fillHeight: true }
                 }
 
                 IconButton {
@@ -545,7 +637,7 @@ Item {
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                     anchors { right: parent.right; top: parent.top; margins: 12 }
                     icon: "search"
-                    size: 56
+                    size: 72
                     onClicked: { page.searchOpen = page.typing = true }
                 }
 
@@ -560,10 +652,10 @@ Item {
                         id: searchHead
                         anchors { left: parent.left; right: parent.right; top: parent.top }
                         spacing: 12
-                        IconButton { icon: "back"; size: 64; onClicked: page.closeSearch() }
+                        IconButton { icon: "back"; size: 72; onClicked: page.closeSearch() }
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 64
+                            Layout.preferredHeight: 72
                             radius: Theme.radius
                             color: Theme.panelHi
                             border.width: Theme.border
@@ -606,17 +698,85 @@ Item {
                     }
                 }
 
-                // ---- the equalizer, over the right-hand side ----------------
+                // ---- the equalizer ------------------------------------------
                 IconButton {
                     visible: page.eqOpen
-                    anchors { right: parent.right; top: parent.top; margins: 14 }
+                    anchors { right: parent.right; top: parent.top; margins: 12 }
                     icon: "close"
-                    size: 56
+                    size: 72
                     onClicked: page.eqOpen = false
                 }
                 EqualizerPanel {
                     visible: page.eqOpen
-                    anchors { fill: parent; margins: 20; topMargin: 84 }
+                    anchors { fill: parent; margins: 20; topMargin: 96 }
+                }
+            }
+
+            // What's playing stays in reach, and a tap goes back to it. The
+            // equalizer takes this room too.
+            Card {
+                id: playerBar
+                visible: !page.eqOpen
+                Layout.fillWidth: true
+                Layout.preferredHeight: Theme.touch + 24
+
+                RowLayout {
+                    anchors { fill: parent; margins: 12 }
+                    spacing: Theme.gap
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: Theme.gap
+                            Cover {
+                                Layout.preferredWidth: Theme.touch
+                                Layout.preferredHeight: Theme.touch
+                                art: media.artCard
+                                placeholder: media.source === "phone" ? "phone" : "music"
+                            }
+                            Column {
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                Label {
+                                    width: parent.width
+                                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
+                                    color: page.idle ? Theme.textDim : Theme.text
+                                    font.pixelSize: Theme.fontBody
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    width: parent.width
+                                    text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                                    color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                        TapHandler { onTapped: page.show("playing") }
+                    }
+                    Row {
+                        spacing: Theme.gap
+                        opacity: page.idle ? 0.5 : 1
+                        enabled: !page.idle
+                        IconButton { icon: "previous"; onClicked: media.previous() }
+                        IconButton {
+                            icon: media.playing ? "pause" : "play"
+                            primary: true
+                            onClicked: media.togglePlay()
+                        }
+                        IconButton { icon: "next"; onClicked: media.next() }
+                    }
+                    IconButton { icon: "remove"; onClicked: media.volumeDown() }
+                    IconButton { icon: "add"; onClicked: media.volumeUp() }
+                }
+                ProgressBar {
+                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: Theme.border }
+                    height: 4
+                    radius: 0
+                    value: media.duration > 0 ? media.position / media.duration : 0
                 }
             }
         }
@@ -625,7 +785,7 @@ Item {
     // Typing a Spotify search: the keyboard across the bottom, as on Maps.
     Keyboard {
         visible: page.typing
-        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 16 }
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: Theme.gap }
         height: 340
         doneLabel: "Search"
         doneEnabled: page.query.trim() !== ""
@@ -635,6 +795,13 @@ Item {
     }
 
     // ---- small parts ------------------------------------------------------
+    // A key that shares its row's width with the others.
+    component WideKey: IconButton {
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        Layout.preferredWidth: 1
+    }
+
     // A cover: the picture, or a quiet tile with an icon when there isn't one.
     component Cover: Rectangle {
         property string art
@@ -686,7 +853,7 @@ Item {
             Label {
                 width: parent.width
                 text: tile.title
-                font.pixelSize: Theme.fontSmall + 2
+                font.pixelSize: Theme.fontSmall
                 font.weight: Font.DemiBold
                 color: tile.current ? Theme.accent : Theme.text
                 elide: Text.ElideRight
@@ -695,7 +862,7 @@ Item {
                 width: parent.width
                 text: tile.subtitle
                 color: Theme.textDim
-                font.pixelSize: Theme.fontSmall - 2
+                font.pixelSize: Theme.fontSmall
                 elide: Text.ElideRight
             }
         }
@@ -744,7 +911,7 @@ Item {
             IconButton {
                 visible: result.kind === "track"
                 icon: "add"
-                size: 60
+                size: 84
                 onClicked: result.queued()
             }
         }

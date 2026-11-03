@@ -490,6 +490,7 @@ Item {
                                 color: Theme.textDim
                             }
                             ConfirmButton {
+                                id: forgetBtn
                                 visible: model.saved && wifi.canControl
                                 implicitHeight: 48
                                 text: "Forget"
@@ -500,7 +501,9 @@ Item {
                         TapHandler {
                             id: rowTap
                             enabled: !model.active && wifi.canControl && wifi.busy === ""
-                            onTapped: {
+                            onTapped: (eventPoint) => {
+                                // A tap on Forget reaches this handler too; it is not a tap on the row.
+                                if (forgetBtn.visible && forgetBtn.contains(forgetBtn.mapFromItem(netRow, eventPoint.position))) return
                                 if (model.saved || !model.secure) wifi.join(model.ssid, "")
                                 else joinSheet.open(model.ssid)
                             }

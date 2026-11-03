@@ -97,12 +97,30 @@ Card {
     // Round to ~0.5% steps so tiny jitter doesn't trigger repaints.
     readonly property real paintFrac: Math.round(drawFrac * 200) / 200
     onPaintFracChanged: if (look !== "needle") dynamic.requestPaint()
-    // The peak marker repaints only when a new high is set (or it clears), or
-    // when the live reading crosses it; that is rare.
-    readonly property real peakPaintFrac: Math.round(peakFrac * 200) / 200
-    onPeakPaintFracChanged: dynamic.requestPaint()
-    readonly property bool peakShown: peakHold && peakFrac > frac + 0.02
+    // The peak marker shows only once the needle has really fallen back from
+    // the peak. A new high is set the moment a sample arrives, while the eased
+    // needle is still on its way up, so compare against the target (the latest
+    // reading) as well as the eased position: the marker stays hidden on the
+    // climb and appears when the needle eases down past it. It shows at 0.04
+    // clear of the needle and hides again at 0.02, so a needle hovering near
+    // the peak doesn't make it blink. Its repaints follow only those changes.
+    readonly property real targetFrac: clamp(((known ? value : minValue) - minValue) / (maxValue - minValue))
+    property bool peakShown: false
+    function updatePeakShown() {
+        var ahead = peakFrac - Math.max(targetFrac, frac)
+        var on = peakHold && peakFrac >= 0 && ahead > (peakShown ? 0.02 : 0.04)
+        if (on !== peakShown)
+            peakShown = on
+    }
+    onFracChanged: updatePeakShown()
+    onTargetFracChanged: updatePeakShown()
+    onPeakFracChanged: updatePeakShown()
+    onPeakHoldChanged: updatePeakShown()
     onPeakShownChanged: dynamic.requestPaint()
+    // While shown, the marker only moves when the peak is cleared (which hides
+    // it), so this is just a safety net and is rare.
+    readonly property real peakPaintFrac: Math.round(peakFrac * 200) / 200
+    onPeakPaintFracChanged: if (peakShown) dynamic.requestPaint()
     onWarningChanged: dynamic.requestPaint()
     onStyleNameChanged: { face.requestPaint(); dynamic.requestPaint() }
     readonly property bool dark: Theme.dark          // day and night have their own colours

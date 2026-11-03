@@ -14,7 +14,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import Gps
-from backend.roadinfo import TRACE_EVERY_S, RoadInfo
+from backend.roadinfo import GAP_S, TRACE_EVERY_S, RoadInfo
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -46,6 +46,18 @@ class TraceTest(unittest.TestCase):
         for n in range(3):
             self.fix(n)
         self.assertEqual(self.trace(), [0, 1, 2])
+
+    def test_a_fix_after_a_gap_starts_the_trace_again(self):
+        for n in range(3):
+            self.fix(n)
+        self.fix(3, after=GAP_S + 1)
+        self.assertEqual(self.trace(), [3])
+
+    def test_a_gap_just_under_the_limit_keeps_the_old_points(self):
+        for n in range(3):
+            self.fix(n)
+        self.fix(3, after=GAP_S - 0.5)
+        self.assertEqual(self.trace(), [0, 1, 2, 3])
 
     def test_status_updates_add_nothing(self):
         self.fix(0)

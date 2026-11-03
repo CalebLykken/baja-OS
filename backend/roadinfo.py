@@ -8,7 +8,6 @@ import collections
 import json
 import threading
 import time
-import urllib.error
 import urllib.request
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
@@ -19,6 +18,7 @@ ROUTER = "http://127.0.0.1:8002"
 CHECK_EVERY_MS = 3000
 MOVING_MS = 2.0           # below this the fixes are too close together to match
 KEEP_S = 20               # a limit older than this (no match since) is dropped
+GAP_S = 5.0               # a few missed fixes is still one drive; longer and the old points can't be trusted to join up
 TRACE_EVERY_S = 0.8       # the trace keeps about one fix a second, however often they come
 
 
@@ -45,6 +45,8 @@ class RoadInfo(QObject):
     def _on_fix(self):
         now = time.monotonic()
         if self._gps.hasFix and not self._gps.stale and now - self._fix_at >= TRACE_EVERY_S:
+            if now - self._fix_at > GAP_S:
+                self._fixes.clear()       # after a gap, start the trace again
             self._fix_at = now
             self._fixes.append((self._gps.lat, self._gps.lon))
 
@@ -71,10 +73,8 @@ class RoadInfo(QObject):
                 if edges:
                     last = edges[-1]                 # the road the truck is on now
                     limit, name = int(last.get("speed_limit") or 0), str((last.get("names") or [""])[0])
-            except (OSError, urllib.error.URLError, ValueError):
-                pass                                  # no match this time: keep the last one
-            except (AttributeError, TypeError, KeyError, IndexError):
-                pass                                  # an answer that isn't the usual shape: the same
+            except (OSError, ValueError, AttributeError, TypeError, KeyError, IndexError):
+                pass          # no match this time, or an answer that isn't the usual shape: keep the last one
             finally:
                 safe_emit(self, "_matched", limit, name)    # always, or _busy would never clear
         threading.Thread(target=work, name="road-match", daemon=True).start()

@@ -32,12 +32,22 @@ Card {
     tappable: peakHold
     onTapped: peak = known ? value : Number.NEGATIVE_INFINITY
     // The peak follows real readings only, never the key-on sweep or the easing.
-    onValueChanged: if (peakHold && known && value > peak) peak = value
-    onKnownChanged: if (peakHold && known && value > peak) peak = value
+    // Not while the gauge is still being created: value, min/max and known are
+    // bindings that settle one after another, and a handler writing peak in the
+    // middle of that makes peakFrac and targetFrac binding loops that leave
+    // peakFrac stale. onCompleted takes the first reading instead.
+    property bool ready: false
+    Component.onCompleted: {
+        ready = true
+        peak = peakHold && known ? value : Number.NEGATIVE_INFINITY
+        updatePeakShown()
+    }
+    onValueChanged: if (ready && peakHold && known && value > peak) peak = value
+    onKnownChanged: if (ready && peakHold && known && value > peak) peak = value
     // A units switch rescales min/max, so the old peak is meaningless. Clear it
     // rather than set it to value: value and min/max can update in either order.
-    onMinValueChanged: peak = Number.NEGATIVE_INFINITY
-    onMaxValueChanged: peak = Number.NEGATIVE_INFINITY
+    onMinValueChanged: if (ready) peak = Number.NEGATIVE_INFINITY
+    onMaxValueChanged: if (ready) peak = Number.NEGATIVE_INFINITY
     // What's drawn eases toward the latest reading, so every look sweeps
     // smoothly between the ~5 Hz updates instead of jumping.
     property real shown: known ? value : minValue
@@ -107,6 +117,8 @@ Card {
     readonly property real targetFrac: clamp(((known ? value : minValue) - minValue) / (maxValue - minValue))
     property bool peakShown: false
     function updatePeakShown() {
+        if (!ready)
+            return  // the bindings below are still settling; onCompleted calls this
         var ahead = peakFrac - Math.max(targetFrac, frac)
         var on = peakHold && peakFrac >= 0 && ahead > (peakShown ? 0.02 : 0.04)
         if (on !== peakShown)

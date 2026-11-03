@@ -7,6 +7,7 @@ Column {
     property string value
     property string unit
     property bool warning: false
+    property real _lastPulse: 0
 
     SequentialAnimation {
         id: pulse
@@ -22,10 +23,22 @@ Column {
     // and pulses twice, then holds still. The pulse is one-shot on purpose: it
     // fires only on the false-to-true edge and never loops, so a driver's eye is
     // caught once and the Pi is not asked to render a continuous animation.
+    // The pulse is also rate-limited to once per 30 s. Thresholds have no
+    // hysteresis, so a reading sitting on a limit would otherwise flip warning
+    // back and forth and pulse repeatedly. The color still follows warning
+    // immediately; only the pulse is held off during the cooldown.
     // Scale leaves the layout size alone, so the unit label does not move.
     onWarningChanged: {
-        if (warning) pulse.restart();
-        else { pulse.stop(); num.scale = 1 }
+        if (warning) {
+            var now = Date.now();
+            if (now - _lastPulse > 30000) {
+                pulse.restart();
+                _lastPulse = now;
+            }
+        } else {
+            pulse.stop();
+            num.scale = 1;
+        }
     }
 
     Legend { text: r.label }

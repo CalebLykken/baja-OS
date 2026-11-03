@@ -8,6 +8,7 @@ of ELM327 replies.
 
 import contextlib
 import io
+import time
 import unittest
 from unittest import mock
 
@@ -339,6 +340,64 @@ class RetryWaitTest(unittest.TestCase):
 
 class Stop(Exception):
     pass
+
+
+class HungUpPortTest(unittest.TestCase):
+    """An unplugged adapter's tty reads empty at once; that is an error, not a wait."""
+
+    def elm(self):
+        elm = Elm.__new__(Elm)
+        elm.fd = 99
+        return elm
+
+    def patched(self, read):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(obd.termios, "tcflush"))
+        stack.enter_context(mock.patch.object(obd.os, "write"))
+        stack.enter_context(mock.patch.object(obd.select, "select", lambda r, w, x, t: (r, [], [])))
+        return stack.enter_context(mock.patch.object(obd.os, "read", read))
+
+    def test_eof_raises_at_once_without_spinning(self):
+        read = self.patched(mock.Mock(return_value=b""))
+        started = time.monotonic()
+        with self.assertRaises(OSError):
+            self.elm().send("010C", timeout=3.0)
+        self.assertEqual(read.call_count, 1)
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_a_normal_reply_still_works(self):
+        self.patched(mock.Mock(return_value=b"41 0C 1A F8\r\r>"))
+        self.assertEqual(self.elm().send("010C"), "41 0C 1A F8")
+
+
+class GoneAdapterSessionTest(unittest.TestCase):
+    """If the port is gone when the readings stop, that is `lost`, not `quiet`."""
+
+    class FakeElm:
+        def __init__(self, path):
+            pass
+
+        def send(self, command, timeout=3.0):
+            return "OK"
+
+        def close(self):
+            pass
+
+    def test_port_gone_raises_and_does_not_say_quiet(self):
+        reader = ObdReader()
+        events = []
+        reader.quiet.connect(lambda: events.append("quiet"))
+        reader._protocol = "0"
+        reader._wait = lambda elm, path: True
+        reader._poll = lambda elm: None
+        with mock.patch.object(obd, "Elm", self.FakeElm), \
+                mock.patch.object(obd.time, "sleep", lambda s: None), \
+                mock.patch.object(obd.os.path, "exists", lambda p: False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(OSError):
+                reader._session("/dev/x")
+        self.assertEqual(events, [])
 
 
 class HoldTest(unittest.TestCase):

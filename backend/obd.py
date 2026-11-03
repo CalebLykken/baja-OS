@@ -31,6 +31,7 @@ adapter is quiet while the Pi powers off. At most the step in progress
 finishes.
 """
 
+import errno
 import glob
 import os
 import re
@@ -261,7 +262,12 @@ class Elm:
         buf, end = b"", time.monotonic() + timeout
         while time.monotonic() < end:
             if select.select([self.fd], [], [], 0.05)[0]:
-                buf += os.read(self.fd, 4096)
+                chunk = os.read(self.fd, 4096)
+                if not chunk:
+                    # A hung-up tty (adapter unplugged) is always readable and
+                    # reads empty: without this the loop spins until timeout.
+                    raise OSError(errno.EIO, "OBD adapter hung up")
+                buf += chunk
                 if b">" in buf:
                     break
         text = buf.decode(errors="replace").replace(">", "")
@@ -416,6 +422,9 @@ class ObdReader(QObject):
                     if len(found) == 1 and found in "123456789ABC":
                         self._protocol = found
                 self._poll(elm)
+                if not os.path.exists(path):
+                    # The adapter went, not the car: only `lost`, never `quiet`.
+                    raise OSError(errno.ENODEV, "OBD adapter gone")
                 self._since = time.monotonic()
                 print("OBD: the car stopped answering", flush=True)
                 safe_emit(self, "quiet")

@@ -249,7 +249,7 @@ class SystemInfo(QObject):
         """Uncaught errors since start (main.log_exception), as of the last check."""
         return self._v["errors"]
 
-    @pyqtProperty(str, constant=True)
+    @pyqtProperty(str, notify=changed)
     def version(self):
         return self._version
 

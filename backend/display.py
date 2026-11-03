@@ -144,16 +144,21 @@ class Display(QObject):
     def _probe(self):
         """Find the panel and read its brightness. Runs off the UI thread."""
         current = 0
-        path = find_ddc_bus()
-        if path:
-            try:
-                self._ddc = DdcBrightness(path)
-                current, self._max = self._ddc.get()
-            except OSError as e:
-                print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
-                self._ddc = None
-        ok = self._ddc is not None
-        safe_emit(self, "_probe_done", ok, current if ok else 0, self._max if ok else 100)
+        try:
+            path = find_ddc_bus()
+            if path:
+                try:
+                    self._ddc = DdcBrightness(path)
+                    current, self._max = self._ddc.get()
+                except OSError as e:
+                    print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
+                    self._ddc = None
+        except Exception as e:
+            print(f"Brightness: DDC probe failed ({e}); dimming in software")
+            self._ddc = None
+        finally:
+            ok = self._ddc is not None
+            safe_emit(self, "_probe_done", ok, current if ok else 0, self._max if ok else 100)
 
     def _probed(self, ok, current, maximum):
         self._probing = False

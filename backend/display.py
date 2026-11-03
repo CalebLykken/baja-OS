@@ -2,7 +2,7 @@
 
 The Waveshare panel takes brightness over DDC/CI: standard monitor commands
 sent on the HDMI cable's I2C line (VCP feature 0x10). `Display` finds that
-I2C bus, reads the current level at startup, and writes changes on a
+I2C bus, reads the current level once at startup (off the UI thread), and writes changes on a
 background thread so dragging the slider never stalls the UI.
 
 When there is no DDC/CI screen (a Mac, or a panel that ignores it),
@@ -22,7 +22,7 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import sun
+from backend import safe_emit, sun
 
 I2C_SLAVE = 0x0703
 DDC_ADDR = 0x37
@@ -82,6 +82,8 @@ class Display(QObject):
     brightnessChanged = pyqtSignal()
     nightChanged = pyqtSignal()
     screenOffChanged = pyqtSignal()
+    hardwareChanged = pyqtSignal()
+    _probe_done = pyqtSignal(bool, int, int)
 
     def __init__(self, settings=None, location=None, parent=None):
         super().__init__(parent)
@@ -92,30 +94,22 @@ class Display(QObject):
         self._sun_down = False
         self._auto = settings is None or str(settings.get("autoNight", "true")) == "true"
         self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
-        self._brightness = 80
+        self._brightness = 100  # software dimming starts undimmed (overlay clear)
         self._ddc = None
         self._max = 100
         self._pending = None
         self._wake = threading.Condition()
 
-        path = find_ddc_bus()
-        if path:
-            try:
-                self._ddc = DdcBrightness(path)
-                current, self._max = self._ddc.get()
-                self._brightness = round(current * 100 / self._max)
-            except OSError as e:
-                print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
-                self._ddc = None
-
-        if self._ddc:
-            threading.Thread(target=self._writer, daemon=True).start()
-        else:
-            self._brightness = 100  # software dimming starts undimmed
+        self._hw = False          # True once the probe found a DDC/CI panel
+        self._probing = False     # start() began the probe and it hasn't settled
+        self._day_default = True  # the day level follows the panel until one is saved/set
         self._levels = {
-            False: self._saved("brightnessDay", self._brightness),
+            False: self._saved("brightnessDay", 100),
             True: self._saved("brightnessNight", 40),
         }
+        if self._settings is not None and self._settings.get("brightnessDay") is not None:
+            self._day_default = False
+        self._probe_done.connect(self._probed)
 
     def _saved(self, key, default):
         if self._settings is None:
@@ -126,6 +120,11 @@ class Display(QObject):
             return default
 
     def start(self):
+        # The DDC probe blocks on the panel's I2C bus, so it runs on the writer
+        # thread. Until it settles the brightness stays at 100 (the software
+        # overlay fully transparent) and level changes wait in _levels.
+        self._probing = True
+        threading.Thread(target=self._writer, daemon=True).start()
         self._check_sun(force=True)
         self._sun_check.start()
 
@@ -142,7 +141,35 @@ class Display(QObject):
             self._apply(self._levels[night])
             self.nightChanged.emit()
 
+    def _probe(self):
+        """Find the panel and read its brightness. Runs off the UI thread."""
+        current = 0
+        path = find_ddc_bus()
+        if path:
+            try:
+                self._ddc = DdcBrightness(path)
+                current, self._max = self._ddc.get()
+            except OSError as e:
+                print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
+                self._ddc = None
+        ok = self._ddc is not None
+        safe_emit(self, "_probe_done", ok, current if ok else 0, self._max if ok else 100)
+
+    def _probed(self, ok, current, maximum):
+        self._probing = False
+        if ok:
+            self._hw = True
+            self._brightness = round(current * 100 / maximum) if maximum else 100
+            if self._day_default:
+                self._levels[False] = max(5, min(100, self._brightness))
+            self.hardwareChanged.emit()
+            self.brightnessChanged.emit()
+        self._apply(self._levels[self._night])
+
     def _writer(self):
+        self._probe()
+        if self._ddc is None:
+            return
         # Only the newest value matters, so a burst of slider moves collapses
         # into one write per DDC round trip.
         while True:
@@ -155,10 +182,12 @@ class Display(QObject):
             except OSError as e:
                 print(f"Brightness: DDC/CI write failed ({e})")
 
-    @pyqtProperty(bool, constant=True)
+    @pyqtProperty(bool, notify=hardwareChanged)
     def hardware(self):
-        """True when brightness drives the panel backlight, not an overlay."""
-        return self._ddc is not None
+        """True when brightness drives the panel backlight, not an overlay.
+        False until the startup probe finds the panel (the overlay is clear
+        then, brightness reads 100)."""
+        return self._hw
 
     @pyqtProperty(int, notify=brightnessChanged)
     def brightness(self):
@@ -168,16 +197,20 @@ class Display(QObject):
     def setBrightness(self, value):
         value = max(5, min(100, int(value)))
         self._levels[self._night] = value
+        if not self._night:
+            self._day_default = False
         if self._settings is not None:
             self._settings.set("brightnessNight" if self._night else "brightnessDay", value)
         self._apply(value)
 
     def _apply(self, value):
+        if self._probing:
+            return  # _probed applies the level once the panel is known
         if value == self._brightness:
             return
         self._brightness = value
         self.brightnessChanged.emit()
-        if self._ddc:
+        if self._hw:
             with self._wake:
                 self._pending = value
                 self._wake.notify()

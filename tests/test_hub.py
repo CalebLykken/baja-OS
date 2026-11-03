@@ -65,6 +65,9 @@ class FakeSource(QObject):
     def resume(self, uri):
         self.resumed.append(uri)
 
+    def cancel_resume(self):
+        self.cancelled = getattr(self, "cancelled", 0) + 1
+
     def toggleShuffle(self):
         self.shuffled += 1
 
@@ -340,6 +343,12 @@ class SwitchTest(unittest.TestCase):
         phone.hasVolume = False
         phone.volumeChanged.emit()
         self.assertAlmostEqual(self.hub._pending_level, 0.2)
+
+    def test_another_source_cancels_a_pending_spotify_resume(self):
+        self.hub._pause_others(keep="local")
+        self.assertEqual(self.spotify.cancelled, 1)
+        self.hub._pause_others(keep="spotify")
+        self.assertEqual(self.spotify.cancelled, 1)
 
     def test_no_hush_without_a_switch(self):
         self.hub._pause_others(keep="local")

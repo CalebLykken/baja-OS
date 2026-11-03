@@ -61,6 +61,10 @@ START_WAIT_MS = 120
 SETTLE_MS = 250            # after pausing, before the volume goes back up
 MUTE_MS = 150              # the knob's mute ramps like this, so it doesn't click
 FADE_GIVE_UP_MS = 3000     # a source that never answers doesn't leave it silent
+# Local music leaves the Pi's output low and the phone and Spotify want it at
+# 100%, so a switch goes through silence: whatever the old source still has
+# in the pipe, or the new one starts with, must not come out at the new level.
+SWITCH_SETTLE_MS = 600
 SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
 RESUME_SETTING = "spotifyResume"
 RESUME_URI_SETTING = "spotifyResumeUri"
@@ -191,6 +195,8 @@ class MediaHub(QObject):
         self._fade_timer = QTimer(self, interval=FADE_STEP_MS, timeout=self._fade_tick)
         self._give_up = QTimer(self, singleShot=True, interval=FADE_GIVE_UP_MS,
                                timeout=self._give_up_waiting)
+        self._switching = QTimer(self, singleShot=True, interval=SWITCH_SETTLE_MS,
+                                 timeout=self._fade_in_after_switch)
         self._volume = max(0, min(100, int(volume)))
         self._max = max(30, min(100, int(max_volume)))
         self._art = {}                  # source -> (art url, rounded card url)
@@ -278,6 +284,8 @@ class MediaHub(QObject):
     def _pause_others(self, keep):
         if keep != "spotify":
             self._remember_spotify("")
+        if keep != self._source:
+            self._hush_for_switch()
         for name, src in self._sources.items():
             if name != keep and src.playing:
                 if hasattr(src, "pause"):
@@ -456,11 +464,22 @@ class MediaHub(QObject):
             QTimer.singleShot(SETTLE_MS, self._volume_back_if_paused)
 
     def _fade_in_if_playing(self):
-        if self.playing and not self._pausing:
+        if self.playing and not self._pausing and not self._switching.isActive():
             self._fade_to(1.0, FADE_IN_MS)
 
+    def _hush_for_switch(self):
+        self._fade_timer.stop()
+        self._after_fade = None
+        self._fade = self._fade_target = 0.0
+        self._apply_volume()
+        self._switching.start()
+
+    def _fade_in_after_switch(self):
+        self._fade_to(1.0, FADE_IN_MS)
+
     def _volume_back_if_paused(self):
-        if not (self._resuming or self._pausing or self._fade_timer.isActive()):
+        if not (self._resuming or self._pausing or self._fade_timer.isActive()
+                or self._switching.isActive()):
             self._fade, self._fade_target = 1.0, 1.0
             self._apply_volume()
 

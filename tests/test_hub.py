@@ -283,6 +283,61 @@ class HubTest(unittest.TestCase):
             self.assertFalse(plays_on_start(read_state(saved(source, playing))), source)
 
 
+class SwitchTest(unittest.TestCase):
+    """Local music's output is low, the phone's and Spotify's is 100%: the
+    level must go through silence, never straight up."""
+
+    def setUp(self):
+        with mock.patch("shutil.which", return_value="/usr/bin/wpctl"), \
+                mock.patch("subprocess.run"):
+            self.local = MediaPlayer()
+            self.spotify = FakeSource()
+            self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
+        self.levels = []
+        real_apply = self.hub._apply_volume
+
+        def recording():
+            real_apply()
+            self.levels.append(self.hub._fade * (1.0 if self.hub._remote_volume else 0.2))
+        self.hub._apply_volume = recording
+
+    def tearDown(self):
+        self.hub._switching.stop()
+        self.hub._fade_timer.stop()
+
+    def test_the_level_never_jumps_up(self):
+        self.spotify.play()
+        self.assertEqual(self.hub._source, "spotify")
+        self.assertEqual(self.hub._fade, 0.0)
+        self.assertEqual(max(self.levels), 0.0)
+        self.assertTrue(self.hub._switching.isActive())
+
+    def test_it_comes_back_up_after_settling(self):
+        self.spotify.play()
+        self.hub._switching.stop()
+        self.hub._fade_in_after_switch()
+        while self.hub._fade_timer.isActive():
+            self.hub._fade_tick()
+        self.assertEqual(self.hub._fade, 1.0)
+        self.assertEqual(self.levels[-1], 1.0)
+        rising = [v for v in self.levels if v]
+        self.assertEqual(rising, sorted(rising))
+
+    def test_comes_back_even_if_the_source_stopped_meanwhile(self):
+        self.spotify.play()
+        self.spotify.pause()
+        self.hub._switching.stop()
+        self.hub._fade_in_after_switch()
+        while self.hub._fade_timer.isActive():
+            self.hub._fade_tick()
+        self.assertEqual(self.hub._fade, 1.0)
+
+    def test_no_hush_without_a_switch(self):
+        self.hub._pause_others(keep="local")
+        self.assertEqual(self.hub._fade, 1.0)
+        self.assertFalse(self.hub._switching.isActive())
+
+
 class FakeSink(QObject):
     """Stands in for QAudioSink: no audio device needed, nothing asks the feed for data."""
     stateChanged = pyqtSignal(object)

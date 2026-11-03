@@ -47,7 +47,10 @@ Item {
     readonly property var albums: media.albums
     // Read once per queueChanged, so bindings that only need one song don't
     // rebuild the whole queue (every song on the Pi) on each song change.
-    readonly property var queueSongs: media.queue
+    // Skipped while Spotify plays, so Spotify queue events don't rebuild the
+    // Pi's whole song list. Local and phone sources keep the Pi queue, and
+    // _set_source emits sourceChanged and queueChanged, so it refreshes on switch back.
+    readonly property var queueSongs: media.source === "spotify" ? [] : media.queue
     readonly property var spotifyNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available

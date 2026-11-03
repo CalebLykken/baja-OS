@@ -224,11 +224,14 @@ class FakeGps:
 
 
 class FakeSettings:
+    def __init__(self, on=True):
+        self.value = "true" if on else "false"     # "Shut down with key"
+
     def get(self, key, default=None):
-        return "true"                              # "Shut down with key" is on
+        return self.value
 
     def set(self, key, value):
-        pass
+        self.value = value
 
 
 class DashboardTest(unittest.TestCase):
@@ -339,6 +342,58 @@ class DashboardTest(unittest.TestCase):
             self.k._second()
         self.assertEqual(self.k.countdown, -1)
         self.assertEqual(self.powered, [])
+
+    def off_and_quiet_for(self, seconds):
+        """The setting off, the key at ACC for `seconds`; returns the KeyOff."""
+        k = KeyOff(self.obd, FakeGps(), FakeSettings(on=False),
+                   power_off=lambda: self.powered.append(self.now))
+        k._answered({"speed": 0})
+        k._quiet()
+        for _ in range(int(seconds)):
+            self.now += 1
+            k._second()
+        return k
+
+    def test_turning_it_on_while_already_quiet_waits_and_counts_down(self):
+        k = self.off_and_quiet_for(600)
+        k.setEnabled(True)
+        self.assertEqual(self.powered, [])         # not at once
+        self.assertEqual(k.countdown, -1)          # the quiet wait starts over
+        for _ in range(int(QUIET_S) - 1):
+            self.now += 1
+            k._second()
+        self.assertEqual(k.countdown, -1)
+        self.now += 1
+        k._second()
+        self.assertEqual(k.countdown, 10)          # the prompt, with Keep on
+        self.assertEqual(self.powered, [])
+        for _ in range(int(WARN_S)):
+            self.now += 1
+            k._second()
+        self.assertEqual(self.powered, [self.now])
+
+    def test_keep_on_works_after_turning_it_on_while_quiet(self):
+        k = self.off_and_quiet_for(600)
+        k.setEnabled(True)
+        self.now += QUIET_S
+        k._second()
+        self.assertEqual(k.countdown, 10)
+        k.keepOn()
+        self.assertEqual(k.countdown, -1)
+        self.now += 60
+        k._second()
+        self.assertEqual(self.powered, [])
+
+    def test_turning_it_on_with_the_car_answering_changes_nothing(self):
+        k = KeyOff(self.obd, FakeGps(), FakeSettings(on=False),
+                   power_off=lambda: self.powered.append(self.now))
+        k._answered({"speed": 0})
+        k.setEnabled(True)
+        self.assertEqual(k.countdown, -1)
+        k._quiet()                                 # the key goes off after
+        self.now += QUIET_S + WARN_S
+        k._tick()
+        self.assertEqual(self.powered, [self.now])
 
     def test_logs_the_battery_each_second_for_two_minutes(self):
         self.k._answered({"speed": 0})

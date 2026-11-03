@@ -80,6 +80,13 @@ class KeyOffLogic:
         if self.seen_on and self.quiet_at is None:
             self.quiet_at = self.quiet_since = now
 
+    def restart_wait(self, now):
+        """The setting was just turned on: whatever quiet time went by while
+        it was off doesn't count, so the prompt always gets its full wait and
+        countdown, with Keep on, instead of an instant power off."""
+        if self.quiet_at is not None:
+            self.quiet_at = now
+
     def voltage(self, now, volts):
         """A battery reading. Over RUNNING_V, it counts for VOLTS_FRESH_S
         (the reader may stop) or until a lower one."""
@@ -234,6 +241,8 @@ class KeyOff(QObject):
         if on != self._enabled:
             self._enabled = on
             self._settings.set(SETTING, "true" if on else "false")
+            if on:
+                self._logic.restart_wait(time.monotonic())
             self._tick()
             self.changed.emit()
 

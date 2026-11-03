@@ -22,6 +22,8 @@
 #
 # Exits 75 when it changed the code, so run.sh starts over on what's there now.
 
+export LC_ALL=C                         # git's messages are matched below: always English
+
 MARKER=.update-state
 CLEAN=.update-state.clean
 MAX_STARTS=3
@@ -81,9 +83,11 @@ if [ "$phase" = deferred ]; then
     fi
     echo "update-guard: merging the update to ${target} that waited for the truck to stop" >&2
     save merging 0 || exit 0            # as the dashboard does: cut off, it is put back
+    sync                                # on disk before the tree changes
     if out=$(git merge -q --ff-only "$target" 2>&1); then
         sync
         save pending 0 || exit 0
+        sync
         exit 75
     fi
     echo "update-guard: couldn't merge: $out" >&2

@@ -8,6 +8,11 @@ import QtQuick
 //             in the accent, so a gauge that needs looking at stands out
 // Static parts are painted once; only what moves is redrawn, which keeps it
 // light on the Pi 2.
+// With peakHold a gauge remembers its highest real reading since start-up and
+// marks it, like the tell-tale needle on a race tachometer: a dimmed block
+// (segments), a tick across the track (arc) or a tick on the bezel (needle),
+// in the warning colour if the peak was in a warning zone. The marker only
+// shows once it is clearly above the live reading. Tap the gauge to clear it.
 Card {
     id: g
     property string label
@@ -20,8 +25,15 @@ Card {
     property real warnBelow: Number.NEGATIVE_INFINITY
     property int decimals: 0
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
+    property bool peakHold: false   // remember and mark the highest reading
+    property real peak: Number.NEGATIVE_INFINITY
 
     readonly property bool warning: known && (value > warnAbove || value < warnBelow)
+    tappable: peakHold
+    onTapped: peak = known ? value : Number.NEGATIVE_INFINITY
+    // The peak follows real readings only, never the key-on sweep or the easing.
+    onValueChanged: if (peakHold && known && value > peak) peak = value
+    onKnownChanged: if (peakHold && known && value > peak) peak = value
     // What's drawn eases toward the latest reading, so every look sweeps
     // smoothly between the ~5 Hz updates instead of jumping.
     property real shown: known ? value : minValue
@@ -39,6 +51,9 @@ Card {
                                      ? clamp((warnAbove - minValue) / (maxValue - minValue)) : 1
     readonly property real warnLowFrac: isFinite(warnBelow)
                                         ? clamp((warnBelow - minValue) / (maxValue - minValue)) : 0
+    readonly property real peakFrac: isFinite(peak)
+                                     ? clamp((peak - minValue) / (maxValue - minValue)) : -1
+    readonly property bool peakHot: isFinite(peak) && (peak > warnAbove || peak < warnBelow)
     readonly property string look: Theme.gauge
     readonly property string styleName: Theme.style
 
@@ -78,6 +93,12 @@ Card {
     // Round to ~0.5% steps so tiny jitter doesn't trigger repaints.
     readonly property real paintFrac: Math.round(drawFrac * 200) / 200
     onPaintFracChanged: if (look !== "needle") dynamic.requestPaint()
+    // The peak marker repaints only when a new high is set (or it clears), or
+    // when the live reading crosses it; that is rare.
+    readonly property real peakPaintFrac: Math.round(peakFrac * 200) / 200
+    onPeakPaintFracChanged: dynamic.requestPaint()
+    readonly property bool peakShown: peakHold && peakFrac > frac + 0.02
+    onPeakShownChanged: dynamic.requestPaint()
     onWarningChanged: dynamic.requestPaint()
     onStyleNameChanged: { face.requestPaint(); dynamic.requestPaint() }
     readonly property bool dark: Theme.dark          // day and night have their own colours
@@ -187,30 +208,66 @@ Card {
             }
         }
 
-        // The moving part for the arc and segment looks.
+        // The moving part for the arc and segment looks; for the needle look
+        // (whose needle is a rotated Rectangle) only the peak marker.
         Canvas {
             id: dynamic
             anchors.fill: parent
-            visible: g.look !== "needle"
             onWidthChanged: requestPaint()
 
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
-                if (dial.r <= 0 || g.look === "needle")
+                if (dial.r <= 0)
                     return
                 if (g.look === "segments") {
                     dial.paintSegments(ctx, g.paintFrac)
-                    return
+                } else if (g.look === "arc") {
+                    ctx.lineCap = "round"
+                    ctx.lineWidth = Theme.style === "rally" ? 16 : 12
+                    ctx.strokeStyle = "" + (g.warning ? Theme.warn : Theme.accent)
+                    ctx.beginPath()
+                    ctx.arc(dial.cx, dial.cx, dial.r, g.startAngle,
+                            g.startAngle + g.sweep * Math.max(0.001, g.paintFrac), false)
+                    ctx.stroke()
                 }
-                ctx.lineCap = "round"
-                ctx.lineWidth = Theme.style === "rally" ? 16 : 12
-                ctx.strokeStyle = "" + (g.warning ? Theme.warn : Theme.accent)
-                ctx.beginPath()
-                ctx.arc(dial.cx, dial.cx, dial.r, g.startAngle,
-                        g.startAngle + g.sweep * Math.max(0.001, g.paintFrac), false)
-                ctx.stroke()
+                if (g.peakShown)
+                    dial.paintPeak(ctx)
             }
+        }
+
+        // The tell-tale marker at the held peak, in the accent (or the warning
+        // colour if the peak was in a warning zone).
+        function paintPeak(ctx) {
+            var c = g.peakHot ? Theme.warn : Theme.accent
+            var pf = g.peakPaintFrac
+            if (g.look === "segments") {
+                // The block at the peak, dimmer than the live leading block.
+                var count = 28
+                var gapA = 0.022
+                var segA = (g.sweep - gapA * (count - 1)) / count
+                var pi = Math.max(0, Math.min(count - 1, Math.floor(pf * count - 0.5)))
+                var a = g.startAngle + pi * (segA + gapA)
+                ctx.lineWidth = 18
+                ctx.lineCap = "butt"
+                ctx.strokeStyle = "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + ","
+                                  + Math.round(c.b * 255) + ",0.55)"
+                ctx.beginPath()
+                ctx.arc(dial.cx, dial.cx, dial.r - 4, a, a + segA, false)
+                ctx.stroke()
+                return
+            }
+            // arc: a tick across the track; needle: a tick on the bezel
+            var ang = g.startAngle + g.sweep * pf
+            var inner = g.look === "needle" ? dial.r + 3 : dial.r - 10
+            var outer = g.look === "needle" ? dial.r + 13 : dial.r + 10
+            ctx.lineWidth = 3
+            ctx.lineCap = "butt"
+            ctx.strokeStyle = "" + c
+            ctx.beginPath()
+            ctx.moveTo(dial.cx + Math.cos(ang) * inner, dial.cx + Math.sin(ang) * inner)
+            ctx.lineTo(dial.cx + Math.cos(ang) * outer, dial.cx + Math.sin(ang) * outer)
+            ctx.stroke()
         }
 
         // Draws the block bar graph. lit < 0 paints every block unlit.

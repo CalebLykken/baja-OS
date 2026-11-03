@@ -29,6 +29,8 @@ MAX_BYTES = 100 * 1024 * 1024
 STALE_TMP_S = 3600          # a temp file this old was left by a crash
 _TMP = ".tmp-"
 _prune_lock = threading.Lock()
+_total = None               # running estimate of the folder's bytes; None until a walk
+_made = None                # the art folder cache_dir() last created (as a string)
 
 
 def cache_root():
@@ -37,8 +39,11 @@ def cache_root():
 
 
 def cache_dir():
+    global _made
     d = cache_root() / "art"
-    d.mkdir(parents=True, exist_ok=True)
+    if _made != str(d):     # mkdir only the first time per path, not on every lookup
+        d.mkdir(parents=True, exist_ok=True)
+        _made = str(d)
     return d
 
 
@@ -69,7 +74,11 @@ def writing(path):
     """Yield a temporary path next to `path`; on a clean exit it replaces
     `path`, otherwise it's removed. The suffix is kept so image writers can
     tell the format from it."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=_TMP, suffix=path.suffix)
+    try:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=_TMP, suffix=path.suffix)
+    except FileNotFoundError:   # the folder was deleted since cache_dir() made it
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=_TMP, suffix=path.suffix)
     os.close(fd)
     try:
         yield Path(tmp)
@@ -78,7 +87,23 @@ def writing(path):
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
-    prune(keep=path)
+    _after_write(path)
+
+
+def _after_write(path):
+    """Count the new file against the folder's size and only walk the folder
+    (prune) on the first write of a run or once the estimate passes the cap.
+    A name that was already there is counted twice: that only means an
+    earlier real prune, which then records the true total."""
+    global _total
+    with _prune_lock:
+        if _total is not None:
+            try:
+                _total += path.stat().st_size
+            except OSError:
+                pass
+        if _total is None or _total > MAX_BYTES:
+            _prune_locked(path, MAX_BYTES)
 
 
 def drop_stale_temp(folder):
@@ -101,27 +126,33 @@ def store(name, data):
 def prune(keep=None, limit=None):
     """Delete least recently used files until the folder fits the cap
     (never `keep`), and temp files left by a crash."""
-    limit = MAX_BYTES if limit is None else limit
     with _prune_lock:
-        files = []
-        now = time.time()
-        for f in cache_dir().iterdir():
-            try:
-                st = f.stat()
-            except OSError:
-                continue
-            if f.name.startswith(_TMP):
-                if now - st.st_mtime > STALE_TMP_S:
-                    with contextlib.suppress(OSError):
-                        f.unlink()
-                continue
-            files.append((st.st_mtime, f, st.st_size))
-        total = sum(size for _, _, size in files)
-        for _, f, size in sorted(files, key=lambda t: t[0]):
-            if total <= limit:
-                break
-            if keep is not None and f == keep:
-                continue
-            with contextlib.suppress(OSError):
-                f.unlink()
-                total -= size
+        _prune_locked(keep, MAX_BYTES if limit is None else limit)
+
+
+def _prune_locked(keep, limit):
+    """The folder walk behind prune(); the caller holds _prune_lock."""
+    global _total
+    files = []
+    now = time.time()
+    for f in cache_dir().iterdir():
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if f.name.startswith(_TMP):
+            if now - st.st_mtime > STALE_TMP_S:
+                with contextlib.suppress(OSError):
+                    f.unlink()
+            continue
+        files.append((st.st_mtime, f, st.st_size))
+    total = sum(size for _, _, size in files)
+    for _, f, size in sorted(files, key=lambda t: t[0]):
+        if total <= limit:
+            break
+        if keep is not None and f == keep:
+            continue
+        with contextlib.suppress(OSError):
+            f.unlink()
+            total -= size
+    _total = total

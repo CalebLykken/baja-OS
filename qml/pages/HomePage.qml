@@ -71,7 +71,15 @@ Item {
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
                 Rectangle {
-                    visible: typeof routing !== "undefined" && routing.active
+                    id: nextTurnCard
+                    readonly property bool shown: typeof routing !== "undefined" && routing.active
+                    opacity: shown ? 1 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                    transform: Translate {
+                        y: nextTurnCard.shown ? 0 : -16
+                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                    }
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
                     height: miniTurn.implicitHeight + 28
                     radius: Theme.radius
@@ -110,7 +118,15 @@ Item {
                     }
                 }
                 Rectangle {
-                    visible: typeof routing !== "undefined" && routing.active
+                    id: arrivePill
+                    readonly property bool shown: typeof routing !== "undefined" && routing.active
+                    opacity: shown ? 1 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                    transform: Translate {
+                        y: arrivePill.shown ? 0 : 16
+                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                    }
                     anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
                     width: arriveText.implicitWidth + 32
                     height: 64

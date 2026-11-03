@@ -34,6 +34,10 @@ Card {
     // The peak follows real readings only, never the key-on sweep or the easing.
     onValueChanged: if (peakHold && known && value > peak) peak = value
     onKnownChanged: if (peakHold && known && value > peak) peak = value
+    // A units switch rescales min/max, so the old peak is meaningless. Clear it
+    // rather than set it to value: value and min/max can update in either order.
+    onMinValueChanged: peak = Number.NEGATIVE_INFINITY
+    onMaxValueChanged: peak = Number.NEGATIVE_INFINITY
     // What's drawn eases toward the latest reading, so every look sweeps
     // smoothly between the ~5 Hz updates instead of jumping.
     property real shown: known ? value : minValue
@@ -213,6 +217,7 @@ Card {
         Canvas {
             id: dynamic
             anchors.fill: parent
+            visible: g.look !== "needle" || g.peakHold
             onWidthChanged: requestPaint()
 
             onPaint: {

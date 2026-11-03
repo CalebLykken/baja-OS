@@ -165,6 +165,28 @@ class LinkingTest(AccountCase):
         a.startLink("10.0.0.2", 8780)
         self.assertEqual(a.linkUrl, "")
 
+    def test_a_reply_without_a_usable_lifetime_still_links(self):
+        for lifetime in (None, "soon", float("nan"), float("inf")):
+            with self.subTest(expires_in=lifetime):
+                answer = {"access_token": "a", "refresh_token": "r", "expires_in": lifetime}
+                with mock.patch.object(spotifyaccount, "_post_form", return_value=answer):
+                    a = self.account()
+                    a.startLink("10.0.0.2", 8780)
+                    a.callback("code", a._link["state"], "")
+                self.assertTrue(a.linked)
+                self.assertEqual(a._access, "a")
+                self.assertEqual(a._access_until, self.now + 3600 - spotifyaccount.TOKEN_MARGIN_S)
+
+    def test_a_reply_that_is_not_an_object_still_says_so_on_the_phone(self):
+        for junk in ([], "tokens", None):
+            with self.subTest(reply=junk):
+                with mock.patch.object(spotifyaccount, "_post_form", return_value=junk):
+                    a = self.account()
+                    a.startLink("10.0.0.2", 8780)
+                    a.callback("code", a._link["state"], "")
+                self.assertEqual((a.linked, a.message, a.linkUrl),
+                                 (False, "Couldn't finish linking Spotify", ""))
+
 
 class StayingLinkedTest(AccountCase):
     def test_a_restart_needs_no_new_link(self):

@@ -24,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import tempfile
@@ -208,7 +209,7 @@ class SpotifyAccount(QObject):
                 self._save_login(str(tokens["refresh_token"]))
                 self._keep_access(tokens)
                 safe_emit(self, "_linked", True, "")
-            except (OSError, ValueError, KeyError) as e:
+            except Exception as e:               # always answer, or the link screen waits forever
                 print(f"Spotify account: linking failed ({type(e).__name__})", flush=True)
                 safe_emit(self, "_linked", False, "Couldn't finish linking Spotify")
         threading.Thread(target=work, daemon=True).start()
@@ -222,8 +223,16 @@ class SpotifyAccount(QObject):
 
     # ---- reading the library ------------------------------------------------
     def _keep_access(self, tokens):
+        if not isinstance(tokens, dict):
+            raise ValueError("token reply isn't an object")
         self._access = str(tokens["access_token"])
-        self._access_until = time.monotonic() + float(tokens.get("expires_in", 3600)) - TOKEN_MARGIN_S
+        try:
+            lifetime = float(tokens.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            lifetime = 3600.0
+        if not math.isfinite(lifetime):
+            lifetime = 3600.0
+        self._access_until = time.monotonic() + lifetime - TOKEN_MARGIN_S
 
     def _valid_access(self):
         with self._lock:

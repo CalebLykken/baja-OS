@@ -47,6 +47,13 @@ def cache_dir():
     return d
 
 
+def pinned_dir():
+    """Where the library's embedded covers live: not subject to the LRU cap."""
+    d = cache_root() / "library-art"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def digest(data):
     """A file-name-safe hash of bytes or a string."""
     if isinstance(data, str):
@@ -121,6 +128,27 @@ def store(name, data):
         with writing(path) as tmp:
             tmp.write_bytes(data)
     return path
+
+
+def store_pinned(name, data):
+    """Like store(), but in pinned_dir(): only prune_pinned() removes it."""
+    path = pinned_dir() / name
+    if not path.is_file():
+        with writing(path) as tmp:
+            tmp.write_bytes(data)
+    return path
+
+
+def prune_pinned(used):
+    """Delete the files in pinned_dir() that aren't in `used` (paths), and
+    temp files left by a crash."""
+    folder = pinned_dir()
+    drop_stale_temp(folder)
+    keep = {str(p) for p in used}
+    for f in folder.iterdir():
+        if not f.name.startswith(_TMP) and str(f) not in keep:
+            with contextlib.suppress(OSError):
+                f.unlink()
 
 
 def prune(keep=None, limit=None):

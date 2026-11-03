@@ -64,6 +64,7 @@ class AccountCase(unittest.TestCase):
         self.login = self.folder / "login.json"
         self.settings = FakeSettings(saved="yes")
         self.requests = []
+        self.during = None                  # called with each request as it goes out: a sign-out can land mid-flight
         self.token_answer = {"access_token": "acc", "refresh_token": "ref", "expires_in": 3600}
         self.answers = {}
         self.now = 100.0
@@ -80,6 +81,8 @@ class AccountCase(unittest.TestCase):
 
     def urlopen(self, req, timeout=None):
         self.requests.append(req)
+        if self.during:
+            self.during(req)
         if "api/token" in req.full_url:
             answer = self.token_answer
         else:
@@ -245,6 +248,54 @@ class StayingLinkedTest(AccountCase):
         self.assertFalse(self.login.exists())
         self.assertEqual((a.linked, a.songs), (False, []))
         self.assertEqual(self.settings["spotifyLibrary"], "{}")
+
+    def test_signing_out_during_a_token_renewal_stays_signed_out(self):
+        a = self.linked_account()
+        self.now += 7200
+        self.token_answer = {"access_token": "acc2", "refresh_token": "ref2", "expires_in": 3600}
+        self.during = lambda req: a.signOut() if "api/token" in req.full_url else None
+        a.refresh()
+        self.assertFalse(a.linked)
+        self.assertFalse(self.login.exists())            # the rotated token isn't saved back
+        self.assertEqual(a.songs, [])
+        self.assertEqual(self.settings["spotifyLibrary"], "{}")
+        self.assertFalse(a.loading)
+
+    def test_signing_out_during_a_library_read_stays_signed_out(self):
+        a = self.linked_account()
+        self.now += 7200
+        self.during = lambda req: a.signOut() if "/me/tracks" in req.full_url else None
+        a.refresh()
+        self.assertFalse(a.linked)
+        self.assertFalse(self.login.exists())
+        self.assertEqual((a.playlists, a.albums, a.songs), ([], [], []))
+        self.assertEqual(self.settings["spotifyLibrary"], "{}")
+        self.assertFalse(a.loading)
+
+    def test_signing_out_while_linking_finishes_unlinked(self):
+        a = self.account()
+        a.startLink("172.20.10.14", 8780)
+        self.during = lambda req: a.signOut()
+        a.callback("code", a._link["state"], "")
+        self.assertFalse(a.linked)
+        self.assertFalse(self.login.exists())
+        self.assertEqual(a.songs, [])
+
+    def test_an_old_answer_doesnt_undo_a_new_link(self):
+        a = self.linked_account()
+        a.signOut()
+        a._loaded.emit({"playlists": [], "albums": [], "songs": [{"name": "old"}]}, "", False, 0)
+        self.assertEqual(a.songs, [])
+        a.startLink("172.20.10.14", 8780)
+        a.callback("code", a._link["state"], "")
+        a._loaded.emit(None, "x", True, 0)               # the old refresh reporting a sign-out
+        self.assertTrue(a.linked)
+
+    def test_no_login_means_no_renewal(self):
+        a = self.account()
+        self.assertFalse(a.linked)
+        a.refresh()
+        self.assertEqual(self.token_posts(), [])
 
     def test_a_broken_login_file_just_means_not_linked(self):
         self.login.write_text("{nonsense")

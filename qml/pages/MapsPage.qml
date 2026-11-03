@@ -775,12 +775,13 @@ Item {
                     stepFade.stop()
                     turnContent.opacity = 1
                     arrivalMoment.restart()
-                } else if (shown) {
+                } else {
                     resetArrival()
                 }
             }
-            // Once the card has slid away the next arrival starts clean.
-            onVisibleChanged: if (!visible) resetArrival()
+            // A new route starts clean even if the last arrival ended while
+            // another page was open (page visibility is not the signal).
+            onShownChanged: if (shown && !arrivedNow) resetArrival()
             Component.onCompleted: if (arrivedNow) barFill = 1
             ParallelAnimation {
                 id: arrivalMoment

@@ -180,7 +180,8 @@ class RobustnessTest(unittest.TestCase):
         self.assertEqual((maps.region, maps.build), ("", ""))
 
     def test_a_failing_search_still_clears_the_results(self):
-        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread)).start()
+        # A stand-in threading module: workers run inline; MapService also makes a Lock.
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread, Lock=threading.Lock)).start()
         mock.patch("builtins.print").start()
         (self.dir / "places.sqlite").write_bytes(b"")
         maps = MapService(self.dir)
@@ -190,7 +191,7 @@ class RobustnessTest(unittest.TestCase):
         self.assertEqual(maps.results, [])
 
     def test_a_failing_nearby_search_still_answers(self):
-        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread)).start()
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.InlineThread, Lock=threading.Lock)).start()
         mock.patch("builtins.print").start()
         maps = MapService(self.dir)
         maps._results = [{"name": "old"}]

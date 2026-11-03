@@ -83,6 +83,18 @@ Card {
     readonly property bool dark: Theme.dark          // day and night have their own colours
     onDarkChanged: { face.requestPaint(); dynamic.requestPaint() }
 
+    // The face draws its numerals, ticks and redline from the scale, so a
+    // units switch (which changes the range and limits) must repaint it.
+    // A Connections block, so this can't clash with other handlers on g.
+    Connections {
+        target: g
+        function onMinValueChanged() { face.requestPaint(); dynamic.requestPaint() }
+        function onMaxValueChanged() { face.requestPaint(); dynamic.requestPaint() }
+        function onLabelDivisorChanged() { face.requestPaint() }
+        function onWarnFracChanged() { face.requestPaint(); dynamic.requestPaint() }
+        function onWarnLowFracChanged() { face.requestPaint(); dynamic.requestPaint() }
+    }
+
     Item {
         id: dial
         width: Math.min(parent.width - 24, parent.height - 24)

@@ -21,7 +21,7 @@ try:
     from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QThread, QTimer, pyqtSignal
     from PyQt6.QtMultimedia import QAudio
     from backend import gapless, library
-    from backend.library import (LibraryPlayer, LibraryScanner, _number, cached_tracks, group_albums,
+    from backend.library import (LibraryPlayer, LibraryScanner, _listing, _number, _walk, cached_tracks, group_albums,
                                  play_order, resume_point, scan, signature, step)
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 or mutagen isn't installed ({e})")
@@ -251,6 +251,59 @@ class ScanCacheTest(ScanBase):
         self.assertEqual(signature(self.top), before)
         write_wav(self.file, 0.002)
         self.assertNotEqual(signature(self.top), before)
+
+
+class WalkTest(ScanBase):
+    def make_tree(self):
+        top = self.root / "tree"
+        for d in ("b", "a", "a.x", "a/deep"):
+            (top / d).mkdir(parents=True, exist_ok=True)
+        for name in ("b/2.mp3", "a/1.WAV", "a.x/3.flac", "a/deep/4.ogg", "a/cover.JPG",
+                     "a/notes.txt", "a/x.nfo", "b/no_suffix", "top.png"):
+            (top / name).write_bytes(b"x")
+        (top / "a" / "folder.mp3").mkdir()              # a folder named like a song
+        return top
+
+    def test_walk_yields_only_audio_and_covers_in_path_order(self):
+        top = self.make_tree()
+        got = [p for p, st in _walk(top)]
+        want = sorted(p for p in top.rglob("*") if p.is_file()
+                      and p.suffix.lower() in (".mp3", ".wav", ".flac", ".ogg", ".jpg", ".png"))
+        self.assertEqual(got, want)
+        self.assertEqual(len(got), 6)
+        self.assertTrue(all(st.st_size == 1 for _, st in _walk(top)))
+
+    def test_symlinked_files_are_listed_and_symlinked_folders_are_not_entered(self):
+        top = self.make_tree()
+        (top / "link.mp3").symlink_to(top / "b" / "2.mp3")
+        (top / "linkdir").symlink_to(top / "a", target_is_directory=True)
+        (top / "dangling.mp3").symlink_to(top / "missing.mp3")
+        got = [str(p.relative_to(top)) for p, _ in _walk(top)]
+        self.assertIn("link.mp3", got)
+        self.assertNotIn("dangling.mp3", got)
+        self.assertFalse(any(g.startswith("linkdir") for g in got))
+
+    def test_an_unreadable_or_missing_folder_is_skipped(self):
+        top = self.make_tree()
+        self.assertEqual(list(_walk(self.root / "nope")), [])
+        real = os.scandir
+
+        def scandir(path):
+            if str(path).endswith("deep"):
+                raise PermissionError(path)
+            return real(path)
+        with mock.patch.object(library.os, "scandir", scandir):
+            got = [p.name for p, _ in _walk(top)]
+        self.assertNotIn("4.ogg", got)
+        self.assertIn("1.WAV", got)
+
+    def test_signature_and_scan_with_a_listing_match_the_plain_calls(self):
+        top = self.songs(6, 3)
+        listing = _listing(top)
+        self.assertEqual(signature(top), {str(p): (st.st_mtime_ns, st.st_size) for p, st in listing})
+        with mock.patch.object(library, "_walk", side_effect=AssertionError("walked again")):
+            given = scan(top, listing)
+        self.assertEqual(given, scan(top))
 
 
 class TapAlbumAsSongEndsTest(unittest.TestCase):
@@ -675,6 +728,14 @@ class ScannerTest(ScanBase):
         spin(300)                                          # several unchanged passes
         self.assertEqual(self.got, [3])
         self.assertIs(self.threads[0], app.thread())
+
+    def test_a_pass_walks_the_folder_once(self):
+        s = self.scanner(interval=3600)
+        with mock.patch.object(library, "_walk", wraps=library._walk) as walk:
+            s.start()
+            self.wait_for(1)
+        self.assertEqual(self.got, [3])
+        self.assertEqual(walk.call_count, 1)
 
     def test_a_change_is_picked_up(self):
         s = self.scanner(interval=0.05)

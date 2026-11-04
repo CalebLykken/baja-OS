@@ -172,23 +172,49 @@ def has_audio_files(folder):
 
 
 def _walk(root):
-    """(path, stat) for every audio file and cover picture under root, sorted."""
-    for path in sorted(root.rglob("*")):
-        suffix = path.suffix.lower()
-        if suffix not in AUDIO_EXTENSIONS and suffix not in COVER_TYPES:
-            continue
+    """(path, stat) for every audio file and cover picture under root, sorted.
+    Like rglob it doesn't descend into symlinked folders and does yield
+    symlinked files; the suffix is checked on the bare name, so the files
+    that are neither (.txt, .nfo ...) cost no Path and no stat."""
+    found, stack = [], [(str(root), ())]
+    while stack:
+        top, names = stack.pop()
         try:
-            st = path.stat()
-        except OSError:
+            with os.scandir(top) as it:
+                entries = list(it)
+        except OSError:                     # an unreadable folder is skipped
             continue
-        if stat.S_ISREG(st.st_mode):
-            yield path, st
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append((entry.path, names + (entry.name,)))
+                    continue
+                suffix = os.path.splitext(entry.name)[1].lower()
+                if suffix not in AUDIO_EXTENSIONS and suffix not in COVER_TYPES:
+                    continue
+                st = entry.stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                found.append((names + (entry.name,), entry.path, st))
+    # Path order, as sorted(rglob) gave: by each name in turn, not by the string.
+    found.sort(key=lambda item: item[0])
+    return [(Path(path), st) for _, path, st in found]
+
+
+def _listing(folder):
+    """The sorted (path, stat) pairs of the folder's audio files and covers."""
+    return _walk(Path(folder).expanduser())
+
+
+def _signature_of(listing):
+    return {str(p): (st.st_mtime_ns, st.st_size) for p, st in listing}
 
 
 def signature(folder):
     """{path: (mtime_ns, size)} of the folder's audio files and covers, from
     stat alone: if it hasn't changed, neither has anything a scan would find."""
-    return {str(p): (st.st_mtime_ns, st.st_size) for p, st in _walk(Path(folder).expanduser())}
+    return _signature_of(_listing(folder))
 
 
 def _read_track(path, folder_art):
@@ -241,16 +267,17 @@ def _reuse(entry, stamp, path, folder_art):
         return None
 
 
-def scan(folder):
+def scan(folder, walked=None):
     """Return a sorted list of track dicts for every audio file under folder.
-    A file whose time and size are as last time keeps the tags read then (so
-    a scan reads only what changed), and the result is saved."""
+    `walked` is the folder's _listing, if the caller has just made one. A
+    file whose time and size are as last time keeps the tags read then (so a
+    scan reads only what changed), and the result is saved."""
     root = Path(folder).expanduser()
     old = _load_cache(root)
     files, tracks = {}, []
     # Once per folder: listing the folder for every song made a big one O(n²).
     folder_art = functools.cache(_folder_art)
-    for path, st in _walk(root):
+    for path, st in (_listing(root) if walked is None else walked):
         if path.suffix.lower() not in AUDIO_EXTENSIONS:
             continue
         key, stamp = str(path), [st.st_mtime_ns, st.st_size]
@@ -298,9 +325,10 @@ class LibraryScanner(QObject):
         last = None
         while not self._stop.is_set():
             try:
-                now = signature(self._folder)
+                listing = _listing(self._folder)     # one walk serves both
+                now = _signature_of(listing)
                 if now != last:
-                    tracks = scan(self._folder)
+                    tracks = scan(self._folder, listing)
                     last = now
                     if not self._stop.is_set():
                         self.found.emit(tracks)

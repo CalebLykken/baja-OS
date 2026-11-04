@@ -66,9 +66,10 @@ class GoldenHourTest(unittest.TestCase):
             self.assertIsNone(es)
 
     def test_near_the_equator_the_bands_are_short(self):
+        # 10 degrees at 15 degrees an hour is 40 minutes at the equinox.
         (ms, me), (es, ee) = golden_hour(*QUITO, date(2024, 3, 20))
-        self.assertLess(me - ms, timedelta(minutes=40))
-        self.assertLess(ee - es, timedelta(minutes=40))
+        self.assertLess(me - ms, timedelta(minutes=45))
+        self.assertLess(ee - es, timedelta(minutes=45))
 
 
 if __name__ == "__main__":

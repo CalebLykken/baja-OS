@@ -5,8 +5,10 @@ import "../components"
 // Six live gauges in a 3x2 grid. Warning thresholds (vehicle.limits, from
 // backend/vehicle.py) turn a gauge red. A reading that isn't known (the car
 // isn't answering) shows a dash instead of a number; the speed is also known
-// from the GPS. While the car reports trouble codes (vehicle.codes), a strip
-// under the grid lists each with its description.
+// from the GPS. RPM, speed and boost hold a peak tell-tale marker (see
+// Gauge.qml); tap one of those gauges to clear its peak. While the car
+// reports trouble codes (vehicle.codes), a strip under the grid lists each
+// with its description.
 Item {
     id: page
     signal navigate(int index)
@@ -89,12 +91,14 @@ Item {
             known: vehicle.engineKnown
             value: vehicle.rpm; minValue: 0; maxValue: 7000; warnAbove: vehicle.limits.rpmHigh
             labelDivisor: 1000
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "Speed  ·  gear " + (vehicle.engineKnown ? vehicle.gear || "N" : "—"); unit: Units.speedUnit
             known: vehicle.speedKnown
             value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -102,6 +106,7 @@ Item {
             known: vehicle.engineKnown
             value: Units.boost(vehicle.boost); minValue: Units.boost(-20); maxValue: Units.boost(20)
             warnAbove: Units.boost(vehicle.limits.boostHigh)
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

@@ -101,10 +101,16 @@ WebEngineView {
             console.warn("map page:", message, "(" + source + ":" + line + ")")
         }
     }
+    // Every page load (a crash retry, a map update) starts with no page to
+    // talk to, so the Maps page stops sending until the new page says ready
+    // (then it re-shows the pin and sends what it held back).
+    signal loading()
     onLoadingChanged: (request) => {
         if (request.status === WebEngineView.LoadStartedStatus || request.status === WebEngineView.LoadSucceededStatus)
             forgetSent()            // a new page (or a reload) has none of the last values
-        if (request.status === WebEngineView.LoadFailedStatus)
+        if (request.status === WebEngineView.LoadStartedStatus)
+            loading()
+        else if (request.status === WebEngineView.LoadFailedStatus)
             web.failed(request.errorString)
         else if (request.status === WebEngineView.LoadSucceededStatus)
             reloadTimer.stop()      // already reloaded by something else (a map update)
@@ -167,7 +173,12 @@ WebEngineView {
     // New map data (Settings > Map > Update): load it.
     Connections {
         target: maps
-        property string build: maps.build
+        // The build the page was loaded with: a plain value, assigned once at
+        // startup and then by the handler. Written as `build: maps.build` it
+        // would be a live binding that updates before this handler runs, so
+        // the comparison below would never see a change.
+        property string build: ""
+        Component.onCompleted: build = maps.build
         function onChanged() {
             if (maps.build !== build && maps.ready) { build = maps.build; web.reload() }
         }

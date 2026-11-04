@@ -80,5 +80,44 @@ class InstallSoloistTest(unittest.TestCase):
             self.assertNotIn("%h/baja-OS", path.read_text(), path.relative_to(REPO))
 
 
+class UpdateSoloistTest(unittest.TestCase):
+    """The daily updater swaps the binary but never restarts the player: the
+    timer fires mid-drive and a restart would cut off Spotify Connect."""
+
+    def test_a_new_build_is_installed_without_restarting_the_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = root / "build"
+            build.mkdir()
+            (build / "soloist").write_text("#!/bin/sh\necho soloist-new\n")
+            os.chmod(build / "soloist", 0o755)
+            subprocess.run(["tar", "-czf", str(root / "soloist.tar.gz"), "-C", str(build), "soloist"],
+                           check=True)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # curl is told "-o <file>"; hand back the prebuilt archive.
+            (bin_dir / "curl").write_text(
+                '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
+                f'cp "{root / "soloist.tar.gz"}" "$out"\n')
+            (bin_dir / "systemctl").write_text(STUB_SYSTEMCTL)
+            for name in ("curl", "systemctl"):
+                os.chmod(bin_dir / name, 0o755)
+            log = root / "systemctl.log"
+            home = root / "home"
+            done = subprocess.run(
+                ["sh", str(DEPLOY / "spotify" / "update-soloist.sh")],
+                capture_output=True, text=True,
+                env={"HOME": str(home), "SYSTEMCTL_LOG": str(log),
+                     "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertTrue((home / ".local" / "opt" / "soloist" / "soloist").is_file())
+            self.assertFalse(log.exists(), "the updater touched systemctl")
+
+    def test_the_script_never_restarts_the_player(self):
+        code = [l for l in (DEPLOY / "spotify" / "update-soloist.sh").read_text().splitlines()
+                if not l.lstrip().startswith("#")]
+        self.assertFalse([l for l in code if "systemctl" in l])
+
+
 if __name__ == "__main__":
     unittest.main()

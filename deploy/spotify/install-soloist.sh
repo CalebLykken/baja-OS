@@ -5,7 +5,7 @@
 # key exists.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-# Units first, so the updater's restart finds the service. The updater's
+# Units first. The updater's
 # unit gets this checkout's path for @APP@, the way setup-pi.sh fills
 # baja-os.service; escaped for systemd (quoted word, % and \) and then sed.
 APP=$(cd "$HERE/../.." && pwd)

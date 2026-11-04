@@ -316,7 +316,7 @@ class Wifi(QObject):
         """Join a network that doesn't broadcast its name (typed in by hand).
         An empty password means an open network."""
         if not valid_ssid(ssid):
-            self._message = "That isn't a valid network name"
+            self._message = "That isn't a valid network name. It needs 1 to 32 letters"
             self.changed.emit()
             return
         saved = [c for c in self._saved if c["ssid"] == ssid]
@@ -377,9 +377,11 @@ class Wifi(QObject):
         if cls._wrong_password(err):
             return f"Wrong password for {ssid}"
         if "no network with ssid" in e or "not found" in e or "could not be found" in e:
-            return f"Can't see {ssid}; is the hotspot on?"
+            return f"Can't see {ssid}. Is the hotspot on?"
         if "not authorized" in e or "insufficient privileges" in e:
-            return "Not allowed yet: run deploy/setup-pi.sh once on the Pi"
+            return "Not allowed yet. Run deploy/setup-pi.sh once on the Pi"
+        if "timed out" in e:                # a weak or far-off hotspot, usually
+            return f"{ssid} took too long to answer. Try again closer to it"
         return f"Couldn't join {ssid}"
 
     # ---- the phone as a backup ------------------------------------------------

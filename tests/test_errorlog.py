@@ -6,6 +6,7 @@ logging never raises.
 """
 
 import io
+import json
 import unittest
 
 from backend.errorlog import ErrorLog
@@ -120,6 +121,60 @@ class ErrorLogTest(unittest.TestCase):
             self.log.report(*raised(exc))
         self.assertLessEqual(len(self.log._kinds), 201)
         self.assertEqual(self.log.count(), 300)
+
+    def test_a_stdlib_error_from_two_project_functions_is_two_errors(self):
+        for fn in (self._parse_a, self._parse_b):
+            for _ in range(5):
+                self.log.report(*fn())
+        self.assertEqual(self.out.getvalue().count("Traceback"), 6)
+
+    def test_a_stdlib_error_from_one_project_function_is_one_error(self):
+        for _ in range(10):
+            self.log.report(*self._parse_a())
+        self.assertEqual(self.out.getvalue().count("Traceback"), 3)
+
+    def test_the_label_tells_otherwise_identical_errors_apart(self):
+        for label in ("GPS: reader error, retrying:", "Knob: read error, retrying:"):
+            for _ in range(5):
+                self.log.report(*raised(KeyError("k")), label=label)
+        self.assertEqual(self.out.getvalue().count("Traceback"), 6)
+        self.log.flush()
+        self.assertIn("Same error 2 more times in the last 60s: KeyError at", self.out.getvalue())
+
+    def test_key_of_a_project_frame_error_is_unchanged(self):
+        kind, where = ErrorLog.key(*raised(KeyError("k"))[::2])
+        self.assertEqual(kind, "KeyError")
+        self.assertRegex(where, r"^test_errorlog\.py:\d+ in [ab]$")
+
+    def test_key_of_a_stdlib_error_names_the_project_frame_first(self):
+        kind, where = ErrorLog.key(*self._parse_a()[::2])
+        self.assertEqual(kind, "JSONDecodeError")
+        self.assertRegex(where, r"^test_errorlog\.py:\d+ in _parse_a > decoder\.py:\d+ in raw_decode$")
+
+    def test_a_relative_filename_is_still_found_in_the_project(self):
+        import os
+        rel = os.path.relpath(os.path.join(os.path.dirname(__file__), "rel_demo.py"))
+        ns = {"json": json}
+        exec(compile("def f():\n    json.loads('{')\n", rel, "exec"), ns)
+        try:
+            ns["f"]()
+        except ValueError as e:
+            where = ErrorLog.key(type(e), e.__traceback__)[1]
+        self.assertRegex(where, r"^rel_demo\.py:\d+ in f > decoder\.py:\d+ in raw_decode$")
+
+    @staticmethod
+    def _parse_a():
+        try:
+            json.loads("{")
+        except ValueError as e:
+            return type(e), e, e.__traceback__
+
+    @staticmethod
+    def _parse_b():
+        try:
+            json.loads("{")
+        except ValueError as e:
+            return type(e), e, e.__traceback__
 
 
 if __name__ == "__main__":

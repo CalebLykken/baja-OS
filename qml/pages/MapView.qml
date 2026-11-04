@@ -68,8 +68,10 @@ WebEngineView {
         callAll(list)
     }
 
-    // Set once, not bound: a day/night change restyles the running map.
-    Component.onCompleted: url = maps.pageUrl + "?mode=" + mode
+    // Set once, not bound: a day/night change restyles the running map. Main's
+    // Loader binds `mode` after this item completes, so wait a turn of the event
+    // loop; set here, the page would always boot as night and restyle to day.
+    Component.onCompleted: Qt.callLater(() => { url = maps.pageUrl + "?mode=" + mode })
     onModeChanged: call("setMode('" + mode + "')")
     onInsetLeftChanged: sendInsets()
     backgroundColor: mode === "day" ? "#d9d5cc" : "#14160f"

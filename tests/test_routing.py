@@ -407,6 +407,112 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(self.settings.values["route"], "")
 
 
+class ClockAfterRebootTest(unittest.TestCase):
+    """fake-hwclock: after a reboot the clock starts where it stopped, so a
+    route left days ago looks seconds old until the clock is set."""
+
+    BOOT, EARLIER = "boot-now", "boot-before"
+
+    def setUp(self):
+        for name, value in (("boot_id", lambda: self.BOOT), ("CLOCK_POLL_S", 0)):
+            p = mock.patch(f"backend.routing.{name}", value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.gps = FakeGps()
+
+    def make(self, boot, started=True, age=60):
+        with mock.patch("backend.routing.boot_id", lambda: boot):
+            record = route_record("Shop", *END, started, time.time() - age)
+        self.settings = FakeSettings(route=record)
+        router = Router(self.gps, self.settings)
+        self.said, self.asked, self.resumed = [], [], []
+        router.speak.connect(self.said.append)
+        router.resumed.connect(lambda *a: self.resumed.append(a))
+        router._request = lambda *a, **k: self.asked.append(a)
+        router._on_status(True)
+        return router
+
+    def test_saved_route_from_an_earlier_boot_is_not_aged_yet(self):
+        text = route_record("Shop", *END, True, 1000.0)
+        r = saved_route(text, 1000.0 + 60, "another boot")
+        self.assertTrue(r["unverified"])
+        self.assertEqual(r["at"], 1000.0)
+        self.assertNotIn("unverified", saved_route(text, 1000.0 + 60, json.loads(text)["boot"]))
+        self.assertIsNone(saved_route(text, 1000.0 + RESUME_S + 1, json.loads(text)["boot"]))
+
+    def test_an_earlier_boot_waits_for_the_clock(self):
+        router = self.make(self.EARLIER)
+        router._on_fix()
+        self.assertEqual(self.asked, [])             # looks 60 s old, but nobody knows
+        self.assertEqual(self.said, [])
+
+    def test_the_clock_set_and_it_is_recent_carries_on(self):
+        router = self.make(self.EARLIER, age=1800)
+        router._on_clock(True)
+        self.assertEqual(self.asked, [("Shop", *END)])
+        answer(router, ROUTE, "", "Shop", False)
+        self.assertEqual(self.said, ["Continuing to Shop. Drive north."])
+
+    def test_the_clock_set_and_it_is_days_old_stays_gone(self):
+        router = self.make(self.EARLIER)
+        # The clock jumps ahead days when it's set.
+        with mock.patch("backend.routing.time") as t:
+            t.time.return_value = time.time() + 4 * 86400
+            router._on_clock(True)
+        self.assertEqual(self.asked, [])
+        self.assertFalse(router.active)
+        self.assertEqual(self.settings.values["route"], "")
+
+    def test_the_clock_never_set_gives_a_preview_not_guidance(self):
+        router = self.make(self.EARLIER)
+        router._on_clock(False)
+        self.assertEqual(self.asked, [("Shop", *END)])
+        answer(router, ROUTE, "", "Shop", False)
+        self.assertFalse(router.active)
+        self.assertEqual(self.said, [])
+        self.assertEqual(self.resumed, [("Shop", *END)])
+
+    def test_the_same_boot_carries_on_without_the_clock(self):
+        router = self.make(self.BOOT)
+        router._on_fix()
+        self.assertEqual(self.asked, [("Shop", *END)])
+        answer(router, ROUTE, "", "Shop", False)
+        self.assertEqual(self.said, ["Continuing to Shop. Drive north."])
+
+    def test_a_place_picked_while_waiting_is_not_lost(self):
+        router = self.make(self.EARLIER)
+        router.routeTo("Cafe", -122.01, 47.01)
+        router._on_clock(False)
+        self.assertEqual(self.asked, [("Cafe", -122.01, 47.01)])
+
+    def test_the_wait_is_over_when_the_clock_is_set(self):
+        router = self.make(self.EARLIER)
+        answers = iter([False, False, True])
+        got = []
+        router._synced.connect(got.append)
+        with mock.patch("backend.routing.clock_synced", lambda: next(answers)):
+            router._wait_for_clock()
+        self.assertEqual(got, [True])
+
+    def test_the_wait_is_bounded(self):
+        router = self.make(self.EARLIER)
+        got = []
+        router._synced.connect(got.append)
+        with mock.patch("backend.routing.clock_synced", lambda: False), \
+                mock.patch("backend.routing.CLOCK_WAIT_S", 0):
+            router._wait_for_clock()
+        self.assertEqual(got, [False])
+
+    def test_start_waits_in_a_thread_only_for_an_earlier_boot(self):
+        for boot, waits in ((self.EARLIER, True), (self.BOOT, False)):
+            router = self.make(boot)
+            router._check = lambda: None
+            with mock.patch("backend.routing.threading.Thread") as thread:
+                router.start()
+            self.assertEqual(thread.called, waits, boot)
+            router._check_timer.stop()
+
+
 class SavingTest(unittest.TestCase):
     """What gets saved as the route changes."""
 

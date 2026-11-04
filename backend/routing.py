@@ -18,11 +18,17 @@ a fresh boot once the key-off shutdown is on) doesn't lose it: once there's
 a position and the service answers, it's worked out again, and guidance
 carries on by itself if it had started. A route that ended, arrived, or
 wasn't driven for a few hours stays gone.
+
+Without its battery the Pi boots with the clock where it was when it shut
+down (fake-hwclock), so a route saved before an earlier boot can't be aged
+until the clock is set: it waits for that, a bounded time, and only then
+is judged by its age. Never set, it comes back as a preview, not guidance.
 """
 
 import json
 import math
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -51,6 +57,8 @@ THEN_M = 300              # a turn this soon after the next one is shown with it
 RESUME_S = 3 * 3600       # after a restart, a route saved this recently comes back ...
 HERE_M = 300              # ... unless the truck is already this close to its end
 RESAVE_S = 60             # while guiding, the saved route's time is kept this fresh
+CLOCK_WAIT_S = 120        # a route from an earlier boot waits this long for the clock to be set ...
+CLOCK_POLL_S = 3          # ... asking this often
 
 # Early warnings: (metres, how to say it), imperial and metric.
 ALERTS = {
@@ -246,26 +254,54 @@ def decode_polyline6(encoded):
     return coords
 
 
+def boot_id():
+    """This boot's id, or "" where there isn't one (off the Pi)."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def clock_synced():
+    """Whether the system clock has been set from the network (or whatever
+    keeps it): it isn't just fake-hwclock's last guess."""
+    try:
+        out = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.strip() == "yes"
+
+
 def route_record(name, lon, lat, started, now, stops=()):
-    """What's saved in settings for a route: JSON."""
+    """What's saved in settings for a route: JSON, with the boot it was saved in."""
     return json.dumps({"name": name, "lon": lon, "lat": lat, "started": started, "at": now,
-                       "stops": [list(s) for s in stops]})
+                       "boot": boot_id(), "stops": [list(s) for s in stops]})
 
 
-def saved_route(text, now):
+def saved_route(text, now, boot=""):
     """The route to pick up again after a restart, from what was saved:
     {name, lon, lat, started}, plus stops [(name, lon, lat)] if it has any,
     or None if there's none or it's too old. Without its battery the Pi's
     clock can be behind after a restart, so a save that looks a little in
-    the future still counts."""
+    the future still counts.
+
+    A save from an earlier boot than `boot` can't be aged yet: the clock
+    may not be set (it starts where it stopped, so the save looks seconds
+    old however long ago it was). It comes back with unverified True and
+    its time "at", to be aged once the clock is known to be right."""
     try:
         r = json.loads(text) if text else None
         if not isinstance(r, dict) or not isinstance(r.get("name"), str):
             return None
-        if abs(now - float(r["at"])) > RESUME_S:
+        earlier_boot = bool(boot) and r.get("boot") != boot
+        if not earlier_boot and abs(now - float(r["at"])) > RESUME_S:
             return None
         out = {"name": r["name"], "lon": float(r["lon"]), "lat": float(r["lat"]),
                "started": r.get("started") is True}
+        if earlier_boot:
+            out.update(unverified=True, at=float(r["at"]))
         stops = [(str(n), float(lon), float(lat)) for n, lon, lat in r.get("stops") or []]
         if stops:
             out["stops"] = stops
@@ -520,6 +556,7 @@ class Router(QObject):
     resumed = pyqtSignal(str, float, float)     # a preview from before a restart is back
     _got = pyqtSignal(object, str, str, bool, int)   # response, error, destination name, reroute, request number
     _status = pyqtSignal(bool)
+    _synced = pyqtSignal(bool)      # the clock is set (True), or never was in time (False)
 
     def __init__(self, gps, settings=None, parent=None):
         super().__init__(parent)
@@ -545,11 +582,13 @@ class Router(QObject):
         self._arrive_timer = QTimer(self, singleShot=True, interval=20000, timeout=self.stop)
         # The route from before a restart, until it can be asked for again,
         # then while that answer is on its way.
-        self._resume = saved_route(str(settings.get("route", "")), time.time()) if settings else None
+        self._resume = (saved_route(str(settings.get("route", "")), time.time(), boot_id())
+                        if settings else None)
         self._resuming = None
         self._saved_at = 0.0
         self._got.connect(self._on_route)
         self._status.connect(self._on_status)
+        self._synced.connect(self._on_clock)
         self._check_timer = QTimer(self, interval=30000, timeout=self._check)
         gps.fixChanged.connect(self._on_fix)    # new positions only, not status updates
         gps.changed.connect(self._on_gps_changed)
@@ -557,6 +596,33 @@ class Router(QObject):
     def start(self):
         self._check()
         self._check_timer.start()
+        if self._resume and self._resume.get("unverified"):
+            threading.Thread(target=self._wait_for_clock, name="clock", daemon=True).start()
+
+    def _wait_for_clock(self):
+        """Worker thread: until the clock is set, for up to CLOCK_WAIT_S."""
+        deadline = time.monotonic() + CLOCK_WAIT_S
+        synced = clock_synced()
+        while not synced and time.monotonic() < deadline:
+            time.sleep(CLOCK_POLL_S)
+            synced = clock_synced()
+        safe_emit(self, "_synced", synced)
+
+    def _on_clock(self, synced):
+        r = self._resume
+        if not r or not r.get("unverified"):
+            return                                  # a new place was picked, or it's gone
+        r["unverified"] = False
+        if not synced:
+            # Its age can't be told: at most the preview, never guidance to
+            # a place from who knows how long ago.
+            print(f"Maps: the clock isn't set; not guiding to {r['name']} by itself")
+            r["started"] = False
+        elif abs(time.time() - r.pop("at")) > RESUME_S:
+            print(f"Maps: the route to {r['name']} is too old; not resuming it")
+            self._forget()
+            return
+        self._resume_if_ready()
 
     # ---- is the service there? ---------------------------------------------------
     def _check(self):
@@ -592,7 +658,7 @@ class Router(QObject):
         """Ask for the route from before the restart again, once there's a
         position and the service answers."""
         r = self._resume
-        if not r or not self._available or not self._gps.hasFix or self._gps.stale:
+        if not r or r.get("unverified") or not self._available or not self._gps.hasFix or self._gps.stale:
             return
         self._resume = None
         if self._dest:

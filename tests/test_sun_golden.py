@@ -53,17 +53,16 @@ class GoldenHourTest(unittest.TestCase):
 
     def test_far_north_winter(self):
         day = date(2024, 12, 21)
-        # Tromso is in polar night: the sun never gets above -4 here, so the
-        # whole band is missing. The asserts follow what altitude() shows.
+        # At the 2024-12-21 solstice the sun peaks around -3 degrees in
+        # Tromso. That is above -4 but never reaches +6, so the morning band
+        # has only a start and the evening band only an end.
         peak = altitude(*TROMSO, solar_noon(*TROMSO, day))
         (ms, me), (es, ee) = golden_hour(*TROMSO, day)
-        if peak < GOLDEN_LOW:
-            self.assertEqual(((ms, me), (es, ee)), ((None, None), (None, None)))
-        else:
-            self.assertIsNotNone(ms)
-            self.assertIsNotNone(ee)
-            self.assertIsNone(me)
-            self.assertIsNone(es)
+        self.assertGreater(peak, GOLDEN_LOW)
+        self.assertIsNotNone(ms)
+        self.assertIsNotNone(ee)
+        self.assertIsNone(me)
+        self.assertIsNone(es)
 
     def test_near_the_equator_the_bands_are_short(self):
         # 10 degrees at 15 degrees an hour is 40 minutes at the equinox.

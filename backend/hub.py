@@ -37,6 +37,7 @@ unless something else is already playing. Pausing it, playing something else
 or moving it to another device forgets that, and Settings can turn it off.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -97,9 +98,13 @@ def art_card(url):
     """A file URL of the cover as a rounded square, or '' if it can't load."""
     path = QUrl(url).toLocalFile() if url else ""
     img = QImage(path) if path else QImage()
+    in_cache = bool(path) and os.path.dirname(path) == str(artcache.cache_dir())
     if img.isNull():
+        if in_cache:        # a corrupt download: drop it so the next play fetches it again
+            with contextlib.suppress(OSError):
+                os.unlink(path)
         return ""
-    if os.path.dirname(path) == str(artcache.cache_dir()):
+    if in_cache:
         key = os.path.basename(path)       # already a content/URL hash; its mtime changes on every use
     else:
         try:

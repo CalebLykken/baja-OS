@@ -45,7 +45,9 @@ obj.moved.connect(got.append)
 out = {}
 for name, y in [("top_lower_half", 4), ("middle", 120), ("just_above", 114),
                 ("just_below", 126), ("dead_zone_edge", 117.5), ("bottom", 240),
-                ("cut_upper_half", 236), ("past_top", -30), ("past_bottom", 300)]:
+                ("cut_upper_half", 236), ("top_near_edge", 8), ("bottom_near_edge", 232),
+                ("boost_two", 108), ("cut_two", 132), ("small_above", 117),
+                ("small_below", 123), ("past_top", -30), ("past_bottom", 300)]:
     del got[:]
     QMetaObject.invokeMethod(area, "apply", Qt.ConnectionType.DirectConnection, Q_ARG("QVariant", y))
     out[name] = got[-1]
@@ -82,9 +84,19 @@ class EqPanelTest(unittest.TestCase):
         self.assertEqual(self.out["cut_upper_half"], -12)
         self.assertEqual(self.out["bottom"], -12)
 
+    def test_tap_rounds_away_from_zero(self):
+        # Fractions below .5 still light the segment under the finger
+        # (Math.round would give 11, -11, 1 and -1 here).
+        self.assertEqual(self.out["top_near_edge"], 12)
+        self.assertEqual(self.out["bottom_near_edge"], -12)
+        self.assertEqual(self.out["boost_two"], 2)
+        self.assertEqual(self.out["cut_two"], -2)
+
     def test_zero_reachable_by_tap(self):
         self.assertEqual(self.out["middle"], 0)
         self.assertEqual(self.out["dead_zone_edge"], 0)
+        self.assertEqual(self.out["small_above"], 0)
+        self.assertEqual(self.out["small_below"], 0)
 
     def test_just_beyond_dead_zone(self):
         self.assertEqual(self.out["just_above"], 1)

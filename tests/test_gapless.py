@@ -11,6 +11,7 @@ from collections import deque
 from unittest import mock
 
 try:
+    from PyQt6 import sip
     from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
     from PyQt6.QtMultimedia import QAudio
 
@@ -444,10 +445,6 @@ class TeardownTest(Base):
         self.assertEqual(engine._decoding.index, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SinkRetryTest(Base):
     def setUp(self):
         super().setUp()
@@ -457,7 +454,9 @@ class SinkRetryTest(Base):
                                   lambda ms, fn: self.retries.append(fn))
         patch.start()
         self.addCleanup(patch.stop)
-        self.out = self.engine((1, 1))._out
+        # Its own output on this thread, not the engine's, which is on the audio
+        # thread making a sink of its own.
+        self.out = gapless._Output(types.SimpleNamespace())
         self.out.make_sink("A")
 
     def fail(self, sink):
@@ -492,3 +491,21 @@ class SinkRetryTest(Base):
         a.stop = lambda: a.stateChanged.emit(QAudio.State.StoppedState)
         self.out.make_sink("B")
         self.assertEqual(self.retries, [])
+
+    def test_deleted_sink_reporting_a_stop_is_ignored(self):
+        a = self.out.sink
+        a.err = QAudio.Error.IOError
+        sip.delete(a)
+        self.out._state(a, QAudio.State.StoppedState)
+        self.assertEqual(self.retries, [])
+
+    def test_retry_after_output_is_deleted_does_nothing(self):
+        self.fail(self.out.sink)
+        made = len(FakeSink.made)
+        sip.delete(self.out)
+        self.retries[0]()
+        self.assertEqual(len(FakeSink.made), made)
+
+
+if __name__ == "__main__":
+    unittest.main()

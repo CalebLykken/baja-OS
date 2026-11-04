@@ -36,6 +36,7 @@ import time
 from array import array
 from collections import deque
 
+from PyQt6 import sip
 from PyQt6.QtCore import (QCoreApplication, QIODevice, QObject, QThread, QTimer, QUrl,
                           pyqtSignal, pyqtSlot)
 from PyQt6.QtMultimedia import QAudio, QAudioDecoder, QAudioFormat, QAudioSink
@@ -135,11 +136,20 @@ class _Output(QObject):
         self.sink.start(self.feed)
 
     def _state(self, sink, state):
+        # Shutdown deletes the sink, and its destructor reports the stop here.
+        if sip.isdeleted(sink):
+            return
         if (sink is self.sink and state == QAudio.State.StoppedState
                 and sink.error() != QAudio.Error.NoError):
             device = sink.device()
             # Only if no make_sink (a new output device) came first: it'd undo that.
-            QTimer.singleShot(1000, lambda: sink is self.sink and self.make_sink(device))
+            QTimer.singleShot(1000, lambda: self._retry(sink, device))
+
+    def _retry(self, sink, device):
+        if sip.isdeleted(self) or sip.isdeleted(sink):
+            return
+        if sink is self.sink:
+            self.make_sink(device)
 
     @pyqtSlot(float)
     def set_volume(self, v):

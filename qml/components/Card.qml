@@ -17,6 +17,8 @@ Rectangle {
         GradientStop { position: 0; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panelTop }
         GradientStop { position: 1; color: card.tappable && tap.pressed ? Theme.panelHi : Theme.panel }
     }
+    scale: card.tappable && tap.pressed ? 0.97 : 1
+    Behavior on scale { NumberAnimation { duration: 70 } }
 
     Label {
         visible: card.heading !== ""

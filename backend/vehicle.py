@@ -139,6 +139,10 @@ class VehicleData(QObject):
         self._gps_real = gps.source == "gps"
         if self.speed != was or self._flags() != before:
             self._settle(before)
+        else:
+            # a stopped receiver reports the same 0.0 on every fix: still
+            # re-arm the launch, or its start time goes stale while it waits
+            self._watch_launch()
 
     def _flags(self):
         return self._live, self.simulated, self.engineKnown, self.speedKnown, self.voltageKnown

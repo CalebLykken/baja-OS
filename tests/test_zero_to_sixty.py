@@ -5,8 +5,9 @@
 
 import unittest
 
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
+from backend.gps import MPH_TO_MS
 from backend.vehicle import VehicleData
 
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -92,6 +93,50 @@ class Run(unittest.TestCase):
             v._settle(v._flags())
         self.assertEqual(v.zeroToSixty, 0.0)
         self.assertEqual(self.fired, [])
+
+
+class FakeGps(QObject):
+    """The bits of backend/gps.py that VehicleData reads."""
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.realFix, self.speed, self.source = False, 0.0, ""
+
+    def fix(self, mph):
+        self.realFix, self.speed, self.source = True, mph * MPH_TO_MS, "gps"
+        self.changed.emit()
+
+
+class GpsOnly(unittest.TestCase):
+    """With the car silent the speed is the GPS's; a stopped receiver reports
+    the same 0.0 on every fix."""
+
+    def setUp(self):
+        self.now = 0.0
+        self.v = VehicleData(settings=None, demo=False)
+        self.v._clock = lambda: self.now
+        self.gps = FakeGps()
+        self.v.set_gps(self.gps)
+
+    def at(self, t, mph):
+        self.now = t
+        self.gps.fix(mph)
+
+    def test_a_wait_at_exactly_zero_does_not_age_the_start(self):
+        for t in range(1, 21):
+            self.at(t, 0)           # sat at the light, 0.0 on every fix
+        self.at(20.2, 5)
+        self.at(24, 30)
+        self.at(27.8, 61)
+        self.assertEqual(self.v.zeroToSixty, 7.8)    # from the last fix at rest
+
+    def test_a_very_long_wait_does_not_drop_the_run(self):
+        for t in range(0, 41):
+            self.at(t, 0)
+        self.at(40.2, 5)
+        self.at(44, 61)
+        self.assertEqual(self.v.zeroToSixty, 4.0)
 
 
 if __name__ == "__main__":

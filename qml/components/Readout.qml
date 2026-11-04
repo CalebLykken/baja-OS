@@ -1,6 +1,10 @@
 import QtQuick
 
 // Compact numeric readout: a legend on top, a big value with its unit below.
+// A placeholder value ("", or any dash a caller passes for "no reading") is
+// drawn as one dim em dash with no unit, so it cannot pass for a real value at
+// a glance, and it can never be in warning. While a real value is in warning
+// the legend turns Ember too, so the readout stays marked after the pulse ends.
 Column {
     id: r
     property string label
@@ -8,6 +12,11 @@ Column {
     property string unit
     property bool warning: false
     property real _lastPulse: 0
+    readonly property bool placeholder: {
+        var v = String(value).trim();
+        return v === "" || v === "—" || v === "–" || v === "-" || v === "--";
+    }
+    readonly property bool _warn: warning && !placeholder
 
     SequentialAnimation {
         id: pulse
@@ -29,7 +38,7 @@ Column {
     // immediately; only the pulse is held off during the cooldown.
     // Scale leaves the layout size alone, so the unit label does not move.
     onWarningChanged: {
-        if (warning) {
+        if (warning && !placeholder) {
             var now = Date.now();
             if (now - _lastPulse > 30000) {
                 pulse.restart();
@@ -40,21 +49,30 @@ Column {
             num.scale = 1;
         }
     }
+    onPlaceholderChanged: if (placeholder) { pulse.stop(); num.scale = 1 }
 
-    Legend { text: r.label }
+    Legend {
+        objectName: "readoutLegend"
+        text: r.label
+        color: r._warn ? Theme.warn : Theme.textDim
+        Behavior on color { ColorAnimation { duration: 180 } }
+    }
     Row {
         spacing: 6
         Label {
             id: num
+            objectName: "readoutNumeral"
             numeric: true
-            text: r.value
-            color: r.warning ? Theme.warn : Theme.text
+            text: r.placeholder ? "—" : r.value
+            color: r.placeholder ? Theme.textDim : (r._warn ? Theme.warn : Theme.text)
             font.pixelSize: Theme.fontReadout
             font.weight: Theme.numWeight
             transformOrigin: Item.Left
             Behavior on color { ColorAnimation { duration: 180 } }
         }
         Label {
+            objectName: "readoutUnit"
+            visible: !r.placeholder && r.unit !== ""
             text: r.unit
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall

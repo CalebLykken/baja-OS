@@ -111,6 +111,7 @@ class _Output(QObject):
         self.feed = None
         self.volume = 1.0
         self.last_pull = None
+        self._on_state = None
 
     @pyqtSlot(object)
     def make_sink(self, device):
@@ -118,19 +119,27 @@ class _Output(QObject):
             self.feed = _Feed(self)
             self.feed.open(QIODevice.OpenModeFlag.ReadOnly)
         if self.sink is not None:
+            # Its stop must not reach _state and start a retry.
+            try:
+                self.sink.stateChanged.disconnect(self._on_state)
+            except (TypeError, RuntimeError):
+                pass
             self.sink.stop()
             self.sink.deleteLater()
         self.sink = QAudioSink(device, audio_format(), self)
         self.sink.setBufferSize(int(BYTES_PER_S * BUFFER_S) // FRAME * FRAME)
         self.sink.setVolume(self.volume)
-        self.sink.stateChanged.connect(self._state)
+        sink = self.sink
+        self._on_state = lambda state, s=sink: self._state(s, state)
+        sink.stateChanged.connect(self._on_state)
         self.sink.start(self.feed)
 
-    def _state(self, state):
-        if (state == QAudio.State.StoppedState and self.sink is not None
-                and self.sink.error() != QAudio.Error.NoError):
-            device = self.sink.device()
-            QTimer.singleShot(1000, lambda: self.sink is not None and self.make_sink(device))
+    def _state(self, sink, state):
+        if (sink is self.sink and state == QAudio.State.StoppedState
+                and sink.error() != QAudio.Error.NoError):
+            device = sink.device()
+            # Only if no make_sink (a new output device) came first: it'd undo that.
+            QTimer.singleShot(1000, lambda: sink is self.sink and self.make_sink(device))
 
     @pyqtSlot(float)
     def set_volume(self, v):

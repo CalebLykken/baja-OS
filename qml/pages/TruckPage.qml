@@ -6,7 +6,8 @@ import "../assets/truck"
 
 // The Baja in 3D: turns slowly on its own, drag sideways to spin it (let go
 // mid-swipe and it keeps turning, then slows). Opening the page whips it
-// round once, at most every 30 s. Only
+// round once, at most every 30 s. Tap the name five times within 3 s for a
+// showroom double spin and a one-line aside. Only
 // renders while this page is on screen (PageHost hides it otherwise), so
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
 // triangles) converted to Qt's own mesh files, which load at once, with
@@ -43,9 +44,47 @@ Item {
         if (dragging || Date.now() - lastIntro < 30000) return
         lastIntro = Date.now()
         flick.stop()
+        intro.duration = 1400
         intro.from = spin
         intro.to = spin + 360
         intro.start()
+    }
+
+    // Easter egg: five quick taps on the name give a double spin and a
+    // one-line aside for 4 s. Only one-shot animations; no timer runs idle.
+    property int eggTaps: 0
+    property real eggFirstTap: 0       // Date.now() of the first tap in the run
+    property string eggLine: ""        // shown in place of "Drag to spin"
+    property int eggIndex: 0           // next aside, in order
+    readonly property var eggLines: [
+        "Half car. Half truck. All Baja.",
+        "Built in Lafayette, Indiana",
+        "210 hp of turbo flat-four",
+        "The bed is just a very open trunk",
+        "Sport Utility Truck, est. 2003"
+    ]
+    function eggTap() {
+        if (dragging) return
+        if (Date.now() - eggFirstTap > 3000) {
+            eggTaps = 0
+            eggFirstTap = Date.now()
+        }
+        eggTaps++
+        if (eggTaps < 5) return
+        eggTaps = 0
+        eggLine = eggLines[eggIndex]
+        eggIndex = (eggIndex + 1) % eggLines.length
+        flick.stop()
+        intro.duration = 2000
+        intro.from = spin
+        intro.to = spin + 720
+        intro.start()
+        eggHold.restart()
+    }
+    SequentialAnimation {
+        id: eggHold
+        PauseAnimation { duration: 4000 }
+        ScriptAction { script: page.eggLine = "" }
     }
     onVisibleChanged: if (visible) playIntro()
     Component.onCompleted: if (visible) playIntro()
@@ -181,6 +220,8 @@ Item {
     Column {
         anchors { left: parent.left; top: parent.top; leftMargin: 8; topMargin: 4 }
         spacing: 2
+        // Tap handler only: a drag on the name still reaches the page's DragHandler.
+        TapHandler { onTapped: page.eggTap() }
         Label {
             text: "2005 Subaru Baja Turbo"
             font.pixelSize: Theme.fontTitle
@@ -188,8 +229,15 @@ Item {
         }
         Row {
             spacing: 8
-            Icon { name: "rotate"; size: 18; color: Theme.textDim; anchors.verticalCenter: parent.verticalCenter }
-            Label { text: "Drag to spin"; color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+            Icon {
+                name: "rotate"; size: 18; color: Theme.textDim
+                anchors.verticalCenter: parent.verticalCenter
+                visible: page.eggLine === ""
+            }
+            Label {
+                text: page.eggLine !== "" ? page.eggLine : "Drag to spin"
+                color: Theme.textDim; font.pixelSize: Theme.fontSmall
+            }
         }
     }
 

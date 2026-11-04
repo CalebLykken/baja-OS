@@ -5,7 +5,9 @@
 #
 #   merging   the merge never finished (a power cut, say): back to the commit
 #             it started from.
-#   pending   the new version hasn't proved itself yet. Each start counts;
+#   pending   the new version hasn't proved itself yet. Each start counts,
+#             except one that follows a run that ended on purpose (the
+#             .update-state.clean file: short key-on trips aren't failures);
 #             after MAX_STARTS without the dashboard removing the file, back
 #             to the commit before it.
 #
@@ -16,7 +18,14 @@
 # Exits 75 when it changed the code, so run.sh starts over on what's there now.
 
 MARKER=.update-state
+CLEAN=.update-state.clean
 MAX_STARTS=3
+
+# The last run ended on purpose (the app, or run.sh, leaves this: a key-off
+# shut down at 25 s is no failed start). Taken now, whatever follows.
+clean=no
+[ -f "$CLEAN" ] && clean=yes
+rm -f "$CLEAN"
 
 [ -f "$MARKER" ] || exit 0
 
@@ -58,6 +67,11 @@ if [ "$phase" = pending ]; then
     case "$starts" in
         ''|*[!0-9]*) starts=0 ;;
     esac
+    # A clean end of the run before cancels its count (that run was counted
+    # when it began). Not at 0: that start is the new version's first.
+    if [ "$clean" = yes ] && [ "$starts" -gt 0 ]; then
+        exit 0
+    fi
     starts=$((starts + 1))
     if [ "$starts" -le "$MAX_STARTS" ]; then
         save pending "$starts"

@@ -56,7 +56,7 @@ from backend.spotifyaccount import SpotifyAccount
 from backend.spotifysearch import SpotifySearch
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
-from backend.updater import Updater
+from backend.updater import Updater, mark_clean_exit
 from backend.vehicle import VehicleData
 from backend.wifi import Wifi
 
@@ -340,6 +340,7 @@ def main():
     updater.start()
     clock.mark("started")
     code = app.exec()
+    mark_clean_exit()             # a normal end isn't a failed start (deploy/update-guard.sh)
     errorlog.log.flush()          # repeats still being counted go to the journal now
     settings.close()              # everything on disk, writer thread stopped
     if scanner:

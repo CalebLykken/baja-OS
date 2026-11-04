@@ -172,6 +172,19 @@ KIND_WORDS = {
     "parking_entrance": "Parking", "stop": "Transit stop", "station": "Station",
     "townhall": "Town hall", "social_facility": "Social services", "pitch": "Sports field",
     "address": "Address",
+    "supermarket": "Grocery store", "convenience": "Convenience store", "greengrocer": "Produce market",
+    "alcohol": "Liquor store", "aerodrome": "Airport", "doctors": "Doctor", "dentist": "Dentist",
+    "camp_site": "Campground", "caravan_site": "RV park", "picnic_site": "Picnic area",
+    "slipway": "Boat launch", "marina": "Marina", "halt": "Train stop", "tram_stop": "Streetcar stop",
+    "ferry_terminal": "Ferry terminal", "bicycle": "Bike shop", "outdoor": "Outdoor store",
+    "car_rental": "Car rental", "car_parts": "Auto parts", "tyres": "Tire shop", "bbq": "Barbecue",
+    "viewpoint": "Viewpoint", "theme_park": "Theme park", "dog_park": "Dog park",
+    "nature_reserve": "Nature reserve", "national_park": "National park", "beach": "Beach",
+    "fire_station": "Fire station", "police": "Police", "post_office": "Post office",
+    "library": "Library", "hospital": "Hospital", "pharmacy": "Pharmacy", "cafe": "Coffee shop",
+    "pub": "Pub", "bar": "Bar", "ice_cream": "Ice cream", "motel": "Motel", "hotel": "Hotel",
+    "hostel": "Hostel", "golf_course": "Golf course", "trailhead": "Trailhead", "zoo": "Zoo",
+    "museum": "Museum",
 }
 
 

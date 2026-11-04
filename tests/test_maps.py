@@ -303,5 +303,25 @@ class StaleBuildTest(unittest.TestCase):
             self.maps._remove_stale_build()
 
 
+class DescribeTest(unittest.TestCase):
+    """The subtitle under a search result: a plain-English kind, then the area."""
+
+    def test_common_poi_kinds_read_like_a_person_says_them(self):
+        describe = maps_module._describe
+        self.assertEqual(describe("supermarket", "Ballard"), "Grocery store in Ballard")
+        self.assertEqual(describe("camp_site", ""), "Campground")
+        self.assertEqual(describe("aerodrome", ""), "Airport")
+
+    def test_unknown_kind_falls_back_to_its_name(self):
+        self.assertEqual(maps_module._describe("some_new_kind", ""), "Some new kind")
+
+    def test_every_label_fits_the_result_row(self):
+        for kind, words in maps_module.KIND_WORDS.items():
+            with self.subTest(kind=kind):
+                self.assertTrue(words, "label is empty")
+                self.assertLessEqual(len(words), 18)
+                self.assertTrue(words[0].isupper(), f"{words!r} doesn't start with a capital")
+
+
 if __name__ == "__main__":
     unittest.main()

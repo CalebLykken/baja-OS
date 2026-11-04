@@ -47,6 +47,13 @@ def cache_dir():
     return d
 
 
+def pinned_dir():
+    """Where the library's embedded covers live: not subject to the LRU cap."""
+    d = cache_root() / "library-art"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def digest(data):
     """A file-name-safe hash of bytes or a string."""
     if isinstance(data, str):
@@ -70,10 +77,11 @@ def lookup(name):
 
 
 @contextlib.contextmanager
-def writing(path):
+def writing(path, lru=True):
     """Yield a temporary path next to `path`; on a clean exit it replaces
     `path`, otherwise it's removed. The suffix is kept so image writers can
-    tell the format from it."""
+    tell the format from it. With lru=False (pinned_dir() files) the write
+    isn't counted against the LRU folder's budget and doesn't prune it."""
     try:
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=_TMP, suffix=path.suffix)
     except FileNotFoundError:   # the folder was deleted since cache_dir() made it
@@ -87,7 +95,8 @@ def writing(path):
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
-    _after_write(path)
+    if lru:
+        _after_write(path)
 
 
 def _after_write(path):
@@ -121,6 +130,27 @@ def store(name, data):
         with writing(path) as tmp:
             tmp.write_bytes(data)
     return path
+
+
+def store_pinned(name, data):
+    """Like store(), but in pinned_dir(): only prune_pinned() removes it."""
+    path = pinned_dir() / name
+    if not path.is_file():
+        with writing(path, lru=False) as tmp:
+            tmp.write_bytes(data)
+    return path
+
+
+def prune_pinned(used):
+    """Delete the files in pinned_dir() that aren't in `used` (paths), and
+    temp files left by a crash."""
+    folder = pinned_dir()
+    drop_stale_temp(folder)
+    keep = {str(p) for p in used}
+    for f in folder.iterdir():
+        if not f.name.startswith(_TMP) and str(f) not in keep:
+            with contextlib.suppress(OSError):
+                f.unlink()
 
 
 def prune(keep=None, limit=None):

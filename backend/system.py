@@ -17,6 +17,7 @@ from pathlib import Path
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import FailureLog, errorlog, safe_emit
+from backend.routing import clock_synced
 from backend.updater import clear_clean_exit, mark_clean_exit
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -131,6 +132,7 @@ class SystemInfo(QObject):
     _read_done = pyqtSignal(dict)
     _power_done = pyqtSignal(str)
     _version_done = pyqtSignal(str)
+    _clock_done = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +141,7 @@ class SystemInfo(QObject):
                    "errors": 0}
         self._version = ""         # read in the first check: it can run git
         self._version_read = False
+        self._clock_ok = False     # chrony has set the clock; asked each check until it has
         self._busy = False
         self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
         self._logged = FailureLog("System: status check failed", "System: status check working again")
@@ -150,6 +153,7 @@ class SystemInfo(QObject):
         self._read_done.connect(self._apply)
         self._power_done.connect(self._powered)
         self._version_done.connect(self._got_version)
+        self._clock_done.connect(self._got_clock)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
@@ -162,6 +166,15 @@ class SystemInfo(QObject):
         self._busy = True
 
         def work():
+            if not self._clock_ok:
+                # First, and on this worker thread: the splash's greeting asks
+                # about the clock about a second after start-up.
+                try:
+                    ok = clock_synced()
+                except Exception:
+                    ok = False
+                if ok:
+                    safe_emit(self, "_clock_done", True)
             if not self._version_read:
                 self._version_read = True
                 try:
@@ -188,6 +201,11 @@ class SystemInfo(QObject):
             finally:
                 safe_emit(self, "_read_done", v)      # always, or _busy would never clear
         threading.Thread(target=work, daemon=True).start()
+
+    def _got_clock(self, ok):
+        if ok != self._clock_ok:
+            self._clock_ok = ok
+            self.changed.emit()
 
     def _got_version(self, version):
         if version != self._version:
@@ -242,6 +260,13 @@ class SystemInfo(QObject):
     @pyqtProperty(str, notify=changed)
     def version(self):
         return self._version
+
+    @pyqtProperty(bool, notify=changed)
+    def clockSynced(self):
+        """True once the clock has been set from the network or GPS. Until then
+        it is fake-hwclock's last save, the end of the previous drive, so
+        nothing should be said about today's date."""
+        return self._clock_ok
 
     @pyqtProperty(bool, notify=changed)
     def canPower(self):

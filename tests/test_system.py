@@ -169,6 +169,7 @@ class StatusCheckTest(unittest.TestCase):
         self.system = SystemInfo()
         mock.patch("backend.system.threading", SimpleNamespace(Thread=InlineThread)).start()
         self.printed = mock.patch("builtins.print").start()
+        mock.patch("backend.system.clock_synced", return_value=False).start()
         self.addCleanup(mock.patch.stopall)
 
     def check(self, used=1000, error=None):
@@ -207,6 +208,40 @@ class StatusCheckTest(unittest.TestCase):
         self.check()
         self.assertEqual(self.system.version, "")
         self.assertEqual(self.system.memUsed, 1000)
+
+    def clock(self, answers):
+        """Checks with timedatectl answering in turn; how often it was asked."""
+        mock.patch("backend.system.clock_synced", side_effect=answers).start()
+        with mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.can_power", return_value=False):
+            for _ in answers:
+                self.system._check()
+        return system_module.clock_synced.call_count
+
+    def test_the_clock_starts_unsynced_and_is_read_by_a_check_not_the_constructor(self):
+        self.assertFalse(self.system.clockSynced)
+        self.clock([False])
+        self.assertFalse(self.system.clockSynced)
+
+    def test_the_clock_is_asked_each_check_until_it_is_set_then_not_again(self):
+        seen = []
+        self.system.changed.connect(lambda: seen.append(self.system.clockSynced))
+        self.assertEqual(self.clock([False, False, True]), 3)
+        self.assertTrue(self.system.clockSynced)
+        self.assertTrue(True in seen)
+        with mock.patch("backend.system.clock_synced") as ask, \
+                mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.can_power", return_value=False):
+            self.system._check()
+        ask.assert_not_called()
+        self.assertTrue(self.system.clockSynced)
+
+    def test_a_crashing_clock_read_is_unsynced_and_checks_go_on(self):
+        self.clock([RuntimeError("timedatectl")])
+        self.assertFalse(self.system.clockSynced)
+        self.assertEqual(self.system.memUsed, 1)
 
     def test_logind_is_asked_once(self):
         self.assertEqual(self.asked([True]), 1)

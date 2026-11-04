@@ -32,6 +32,7 @@ from PyQt6.QtQml import QQmlComponent, QQmlEngine
 
 ROOT = Path(sys.argv[1])
 pairs = json.loads(sys.argv[2])
+synced = json.loads(sys.argv[3])
 app = QGuiApplication(sys.argv)
 engine = QQmlEngine()
 
@@ -40,9 +41,9 @@ source = (
     'Item {\n'
     '    Splash { id: splash; width: 800; height: 480 }\n'
     '    property string out: JSON.stringify(%s.map(function (p) {\n'
-    '        return splash.greeting(new Date(p[0], p[1] - 1, p[2], p[3]))\n'
+    '        return splash.greeting(new Date(p[0], p[1] - 1, p[2], p[3]), %s)\n'
     '    }))\n'
-    '}\n' % json.dumps(pairs)
+    '}\n' % (json.dumps(pairs), json.dumps(synced))
 )
 component = QQmlComponent(engine)
 component.setData(source.encode(), QUrl.fromLocalFile(str(ROOT / "x.qml")))
@@ -89,17 +90,54 @@ def sweep_pairs():
     return out
 
 
+def run_greetings(pairs, synced):
+    """splash.greeting(date, synced) for each (y, m, d, h) in pairs."""
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    result = subprocess.run([sys.executable, "-c", SCRIPT, str(ROOT), json.dumps(pairs),
+                             json.dumps(synced)],
+                            cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+class UnsyncedGreetingTest(unittest.TestCase):
+    """With no RTC battery the clock at boot is fake-hwclock's last save, so
+    until it is set the date and hour say nothing: one plain line."""
+
+    def test_nothing_is_said_about_the_date_or_hour(self):
+        pairs = list(NAMED.values()) + sweep_pairs()
+        for synced in (False, None, "yes"):
+            results = run_greetings(pairs, synced)
+            self.assertEqual(set(results), {"Welcome back"}, synced)
+
+    def test_synced_still_gets_the_dated_lines(self):
+        self.assertEqual(run_greetings([NAMED["christmas"]], True), ["Merry Christmas"])
+
+
+class SplashSourceTest(unittest.TestCase):
+    """The splash ground is fixed near-black, so its text must not follow the
+    day/night appearance (Theme.text is dark-on-light in daylight)."""
+
+    def setUp(self):
+        self.text = (ROOT / "qml" / "components" / "Splash.qml").read_text()
+
+    def test_text_colours_come_from_the_dark_set(self):
+        self.assertNotRegex(self.text, r"Theme\.(text|textDim|accent)\b")
+        self.assertIn("Theme.base.text", self.text)
+        self.assertIn("Theme.base.textDim", self.text)
+
+    def test_greeting_asks_whether_the_clock_is_set(self):
+        self.assertIn("system.clockSynced", self.text)
+        self.assertNotIn("greeting(new Date())", self.text)
+
+
 class SplashGreetingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.sweep = sweep_pairs()
         pairs = list(NAMED.values()) + cls.sweep
-        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-        result = subprocess.run([sys.executable, "-c", SCRIPT, str(ROOT), json.dumps(pairs)],
-                                cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
-        if result.returncode != 0:
-            raise AssertionError(result.stdout + result.stderr)
-        results = json.loads(result.stdout.strip().splitlines()[-1])
+        results = run_greetings(pairs, True)
         cls.named = dict(zip(NAMED.keys(), results[:len(NAMED)]))
         cls.sweep_results = results[len(NAMED):]
 

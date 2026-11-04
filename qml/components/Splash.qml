@@ -3,8 +3,10 @@ import QtQuick
 // Startup splash: the Baja's side profile sits in the dark, its headlight
 // comes on, then the name, then a short greeting that suits the time of day,
 // the weekday and the date (a holiday, a weekend line, or one of three
-// phrasings for the time slot, picked by day), then the whole thing fades into
-// the dashboard. Tap to skip. At boot the
+// phrasings for the time slot, picked by day; a plain line until the clock is
+// known to be set), then the whole thing fades into the dashboard. The text
+// uses the dark colour set whatever the day or night appearance, since the
+// ground is fixed. Tap to skip. At boot the
 // Plymouth theme in deploy/plymouth has already been showing the same truck
 // at the same spot on the same background, so this picks up seamlessly; keep
 // the two in sync if either moves. Only opacity animates, which the Pi 2's GPU
@@ -25,11 +27,15 @@ Rectangle {
         if (!fadeOut.running && visible) fadeOut.start()
     }
 
-    // Plain JS on a Date, no backend calls, so it cannot fail at start-up.
-    // Read once when the splash is created. Fixed dates win, then the weekend
-    // lines, then the time slot; each slot has three phrasings, and the day of
-    // the year picks one, so it changes daily and holds all day.
-    function greeting(d) {
+    // Plain JS on a Date, so it cannot fail at start-up. Fixed dates win, then
+    // the weekend lines, then the time slot; each slot has three phrasings, and
+    // the day of the year picks one, so it changes daily and holds all day.
+    // `synced` is whether the clock has been set: with no RTC battery the
+    // clock at boot is fake-hwclock's last save, the end of the previous
+    // drive, so until chrony has set it the date and hour mean nothing and
+    // the line is a plain one.
+    function greeting(d, synced) {
+        if (synced !== true) return "Welcome back"
         if (d === undefined) d = new Date()
         var m = d.getMonth() + 1, day = d.getDate(), h = d.getHours(), wd = d.getDay()
         if (m === 1 && day === 1) return "Happy New Year"
@@ -45,7 +51,12 @@ Rectangle {
         if (h >= 17 && h <= 21) return ["Good evening", "Evening cruise", "Golden hour"][v]
         return ["Late night run", "Night drive", "Quiet roads tonight"][v]
     }
-    readonly property string greetingText: greeting(new Date())
+    // Read when the greeting fades in, not at creation, so the clock has had
+    // the first second of the splash to be asked about.
+    property string greetingText: ""
+    function readGreeting() {
+        greetingText = greeting(new Date(), typeof system !== "undefined" && system.clockSynced)
+    }
 
     Item {
         id: stage
@@ -116,6 +127,7 @@ Rectangle {
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "BAJA OS"
+            color: Theme.base.text   // always the dark set: the ground is fixed near-black
             numeric: true
             font.pixelSize: 44
             font.weight: Theme.numWeight
@@ -124,14 +136,14 @@ Rectangle {
         Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             width: 120; height: 3; radius: 1.5
-            color: Theme.accent
+            color: Theme.base.accent
         }
         // Caption under the name: sentence case, no tracking, dimmed.
         Label {
             id: greetingLabel
             anchors.horizontalCenter: parent.horizontalCenter
             text: splash.greetingText
-            color: Theme.textDim
+            color: Theme.base.textDim
             font.pixelSize: Theme.fontBody
             opacity: 0
         }
@@ -145,6 +157,7 @@ Rectangle {
         NumberAnimation { target: glow; property: "opacity"; to: 0.15; duration: 110 }
         NumberAnimation { target: glow; property: "opacity"; to: 1; duration: 260; easing.type: Easing.OutQuad }
         NumberAnimation { target: title; property: "opacity"; to: 1; duration: 500 }
+        ScriptAction { script: splash.readGreeting() }
         NumberAnimation { target: greetingLabel; property: "opacity"; to: 1; duration: 400 }
         // Shortened by the greeting's fade so the splash runs no longer overall.
         PauseAnimation { duration: 700 }

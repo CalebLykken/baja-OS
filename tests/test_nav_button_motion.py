@@ -76,6 +76,52 @@ print(json.dumps(r))
 sys.stdout.flush()
 '''
 
+PRESS_SCRIPT = r'''
+import json, sys, time
+from pathlib import Path
+from PyQt6.QtCore import QPoint, Qt, QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQuick import QQuickView
+from PyQt6.QtTest import QTest
+
+app = QGuiApplication(sys.argv[:1])
+ROOT = Path.cwd()
+view = QQuickView()
+view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+view.setSource(QUrl.fromLocalFile(str(ROOT / "qml" / "components" / "NavButton.qml")))
+view.resize(112, 96)
+view.show()
+deadline = time.monotonic() + 10
+while not view.isExposed() and time.monotonic() < deadline:
+    app.processEvents()
+    time.sleep(0.01)
+nb = view.rootObject()
+if nb is None:
+    print(json.dumps({"error": "NavButton did not load"}))
+    sys.exit(0)
+centre = QPoint(56, 48)
+
+
+def sample(ms):
+    values = []
+    end = time.monotonic() + ms / 1000.0
+    while time.monotonic() < end:
+        app.processEvents()
+        values.append(float(nb.property("cardScale")))
+        time.sleep(0.002)
+    return values
+
+
+press, release = [], []
+for _ in range(2):
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+    press += sample(250)
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+    release += sample(250)
+print(json.dumps({"press_min": min(press), "release_max": max(release)}))
+sys.stdout.flush()
+'''
+
 
 class NavButtonMotionTest(unittest.TestCase):
     @classmethod
@@ -106,6 +152,25 @@ class NavButtonMotionTest(unittest.TestCase):
         self.assertAlmostEqual(self.r["on400_scale"], 1.0, delta=1e-3)
         self.assertAlmostEqual(self.r["on400_marker"], self.r["on400_card"] * 0.5, places=3)
         self.assertFalse(self.r["on400_pop"])
+
+    def test_press_dips_shallowly_and_release_springs_past_rest(self):
+        result = subprocess.run([sys.executable, "-c", PRESS_SCRIPT], cwd=ROOT,
+                                capture_output=True, text=True, timeout=120,
+                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertNotIn("error", data, data.get("error"))
+        # The press runs the 70 ms OutQuad dip: it moves and never undershoots 0.97.
+        self.assertLess(data["press_min"], 1.0)
+        self.assertGreaterEqual(data["press_min"], 0.97 - 1e-3)
+        # The release runs the 180 ms OutBack spring, which crosses 1.0.
+        self.assertGreater(data["release_max"], 1.001)
+
+    def test_press_timing_is_keyed_on_the_behaviors_target(self):
+        source = (ROOT / "qml" / "components" / "NavButton.qml").read_text()
+        self.assertIn("id: pressSpring", source)
+        self.assertIn("pressSpring.targetValue < 1 ? 70 : 180", source)
+        self.assertIn("easing.overshoot: 2.5", source)
 
     def test_no_idle_cost_constructs(self):
         source = (ROOT / "qml" / "components" / "NavButton.qml").read_text()

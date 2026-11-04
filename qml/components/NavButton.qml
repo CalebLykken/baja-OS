@@ -20,6 +20,7 @@ Item {
     readonly property alias glyphScale: glyph.scale
     readonly property alias markerHeight: marker.height
     readonly property alias cardHeight: card.height
+    readonly property alias cardScale: card.scale
 
     onActiveChanged: {
         if (active && ready && visible)
@@ -46,10 +47,14 @@ Item {
         color: btn.active ? Theme.panelHi : (tap.pressed ? Theme.panel : "transparent")
         Behavior on color { ColorAnimation { duration: 150 } }
         scale: tap.pressed ? 0.97 : 1
+        // Press dips in 70 ms, release springs back in 180 ms (OutBack). The timing is
+        // keyed on the Behavior's own target: tap.pressed is not yet re-evaluated
+        // for this change when the animation starts, so it would pick the wrong curve.
         Behavior on scale {
+            id: pressSpring
             NumberAnimation {
-                duration: tap.pressed ? 70 : 180
-                easing.type: tap.pressed ? Easing.OutQuad : Easing.OutBack
+                duration: pressSpring.targetValue < 1 ? 70 : 180
+                easing.type: pressSpring.targetValue < 1 ? Easing.OutQuad : Easing.OutBack
                 easing.overshoot: 2.5
             }
         }

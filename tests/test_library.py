@@ -5,6 +5,7 @@ Also where it picks up after a restart.
     python3 -m unittest tests.test_library
 """
 
+import json
 import os
 import tempfile
 import time
@@ -385,7 +386,9 @@ class ResumePointTest(unittest.TestCase):
     """Finding the saved album and song again, with nothing playing."""
 
     def setUp(self):
-        self.tracks = [track(f"/m/{a}-{n}.wav", a, n) for a in ("Blue", "Red") for n in (1, 2, 3)]
+        # Long enough that the saved positions below are inside the song.
+        self.tracks = [dict(track(f"/m/{a}-{n}.wav", a, n), duration=200)
+                       for a in ("Blue", "Red") for n in (1, 2, 3)]
         self.albums = group_albums(self.tracks)
         self.red = next(i for i, a in enumerate(self.albums) if a["title"] == "Red")
 
@@ -420,6 +423,40 @@ class ResumePointTest(unittest.TestCase):
         for state in (None, {}, [], {"album": "Red", "index": 99, "position": "x"},
                       {"album": [1], "index": -1, "position": None}):
             self.assertEqual(resume_point(self.albums, self.tracks, state), (-1, 0, 0), state)
+
+    def test_a_damaged_position_is_zero_and_never_raises(self):
+        # json.loads turns NaN, Infinity and 1e999 into floats; a bool is not a number.
+        for position in (float("nan"), float("inf"), float("-inf"), json.loads("1e999"),
+                         json.loads("NaN"), json.loads("Infinity"), True, False, -5, -0.5):
+            state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": position}
+            self.assertEqual(resume_point(self.albums, self.tracks, state), (self.red, 1, 0), position)
+
+    def test_a_position_past_the_end_is_clamped_to_the_last_second(self):
+        # The test songs are 200 s long, so the last second they can start at is 199.
+        for position in (10 ** 9, 200, 199.9, json.loads("1" + "0" * 400)):
+            state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": position}
+            self.assertEqual(resume_point(self.albums, self.tracks, state), (self.red, 1, 199), position)
+
+    def test_a_song_with_no_known_length_keeps_its_saved_position(self):
+        # mutagen reports 0 for some playable files; that must not force 0:00.
+        tracks = [dict(t, duration=0) for t in self.tracks]
+        albums = group_albums(tracks)
+        red = next(i for i, a in enumerate(albums) if a["title"] == "Red")
+        for position, want in ((125, 125), (125.9, 125), (10 ** 6, 10 ** 6), (-3, 0),
+                               (float("nan"), 0), (float("inf"), 0)):
+            state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": position}
+            self.assertEqual(resume_point(albums, tracks, state), (red, 1, want), position)
+
+    def test_a_position_within_the_song_is_kept(self):
+        state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": 1.9}
+        self.assertEqual(resume_point(self.albums, self.tracks, state), (self.red, 1, 1))
+
+    def test_index_true_is_treated_as_a_missing_index(self):
+        missing = {"album": ["Band", "Red"], "index": None}
+        as_true = {"album": ["Band", "Red"], "index": True}
+        self.assertEqual(resume_point(self.albums, self.tracks, as_true),
+                         resume_point(self.albums, self.tracks, missing))
+        self.assertEqual(resume_point(self.albums, self.tracks, as_true), (self.red, 0, 0))
 
 
 class RestoreTest(unittest.TestCase):

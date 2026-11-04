@@ -19,6 +19,7 @@ it was given is kept for the next run that has music.
 
 import functools
 import json
+import math
 import os
 import random
 import re
@@ -378,7 +379,9 @@ def resume_point(albums, tracks, state):
     songs, song index in that queue, seconds in). The album is found by
     name and the song by its file, so songs added since don't shift them;
     a song that's gone falls back to its place in the queue, then to the
-    first song."""
+    first song. A damaged position (not a finite number, negative, a bool)
+    counts as 0, and a position past a known song end is clamped to its last
+    second, so a bad saved value can't stop startup or skip the song."""
     if not tracks:
         return -1, 0, 0
     state = state if isinstance(state, dict) else {}
@@ -394,12 +397,20 @@ def resume_point(albums, tracks, state):
     index = state.get("index")
     if state.get("path") in paths:
         index = paths.index(state["path"])
-    elif not (same_queue and isinstance(index, int) and 0 <= index < len(paths)):
+    elif not (same_queue and isinstance(index, int) and not isinstance(index, bool)
+              and 0 <= index < len(paths)):
         index = 0
     position = state.get("position")
-    if paths[index] != state.get("path") or not isinstance(position, (int, float)):
+    if type(position) is float and not math.isfinite(position):
+        position = 0                         # NaN or infinity from a damaged value
+    if (paths[index] != state.get("path") or isinstance(position, bool)
+            or not isinstance(position, (int, float)) or position < 0):
         position = 0                         # not the same song: from its start
-    return album, index, max(0, int(position))
+    position = int(position)
+    dur = tracks[queue[index]]["duration"]
+    if dur > 0:                              # a tag with no length can't bound it
+        position = min(position, dur - 1 if dur > 1 else 0)
+    return album, index, position
 
 
 def play_order(count, first, shuffle):

@@ -64,10 +64,14 @@ Item {
 
     MouseArea {
         id: drag
+        objectName: "eqDrag"
         anchors { fill: parent; leftMargin: -10; rightMargin: -10 }
         preventStealing: true          // don't let a scrolling page take the drag
         function apply(y) {
-            var v = Math.round(s.limit - y / height * s.steps)
+            // The segment under the finger lights: round away from zero,
+            // with a small dead zone so the zero setting is still reachable.
+            var raw = s.limit - y / height * s.steps
+            var v = Math.abs(raw) < 0.5 ? 0 : (raw > 0 ? Math.ceil(raw) : Math.floor(raw))
             s.moved(Math.max(-s.limit, Math.min(s.limit, v)))
         }
         onPressed: (mouse) => apply(mouse.y)

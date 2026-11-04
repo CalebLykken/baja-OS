@@ -63,7 +63,7 @@ Rectangle {
         spacing: 2
         Icon {
             anchors.horizontalCenter: parent.horizontalCenter
-            name: chip.shown === "coolant" ? "thermostat" : chip.shown === "voltage" ? "battery_alert" : chip.shown === "mil" ? "car" : "speed"
+            name: chip.shown === "coolant" ? "thermostat" : chip.shown === "voltage" ? "battery_alert" : chip.shown === "mil" ? "engine_check" : "speed"
             size: 28
             color: Theme.bg
         }

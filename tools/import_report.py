@@ -57,7 +57,9 @@ def build_parents(records):
 
 
 def _is_backend(name, prefix):
-    return name.startswith(prefix) or name == "main"
+    # the bare package record ("backend") is the backend too, not a heavy package
+    return (name.startswith(prefix) or name == prefix.rstrip(".")
+            or name == "main")
 
 
 def attribute(records, prefix="backend."):
@@ -104,7 +106,7 @@ def heavy_packages(records, min_ms=2.0, prefix="backend."):
 
 
 def report(records, top=15, min_ms=2.0, importers=None):
-    """Report lines. importers optionally maps a package's top-level name to
+    """Report lines. importers optionally maps a heavy module's full name to
     the backend modules that import it at the top of their file."""
     lines = []
     outer = sum(r[2] for r in records if r[3] == 0)
@@ -123,18 +125,40 @@ def report(records, top=15, min_ms=2.0, importers=None):
         name, _, cum, _ = records[i]
         lines.append("  %8s ms  %s  <- %s" % (_ms(cum), name, who.get(i, "main")))
         if importers:
-            found = importers.get(name.split(".")[0])
+            found = importers.get(name)
             if found:
                 lines.append("               also imported by: " + ", ".join(found))
     return lines
 
 
-_IMPORT = re.compile(r"^(?:import|from)\s+([A-Za-z_][\w.]*)", re.M)
+_IMPORT = re.compile(r"^import\s+([^#\n]+)", re.M)
+_FROM = re.compile(r"^from\s+([A-Za-z_][\w.]*)\s+import\s+([^#\n]+)", re.M)
+
+
+def _imported_modules(text):
+    """Every dotted module name a top-of-line import statement in text loads.
+
+    `import a.b, c` -> a.b, c. `from a import b` -> a and a.b (b may be a
+    submodule)."""
+    mods = set()
+    for m in _IMPORT.finditer(text):
+        for part in m.group(1).split(","):
+            words = part.split()
+            if words and re.match(r"[A-Za-z_][\w.]*$", words[0]):
+                mods.add(words[0])
+    for m in _FROM.finditer(text):
+        mods.add(m.group(1))
+        for part in m.group(2).strip("() \\").split(","):
+            words = part.split()
+            if words and re.match(r"\w+$", words[0]):
+                mods.add(m.group(1) + "." + words[0])
+    return mods
 
 
 def scan_importers(directory, names):
-    """{top-level package: sorted backend.<module> names} for every top-of-line
-    `import X` / `from X import` of those packages in directory/*.py."""
+    """{heavy module name: sorted backend.<module> names} for every top-of-line
+    import in directory/*.py that loads that exact module (`import a.b.c`
+    counts for a.b, but `import a.b` does not count for a.c)."""
     out = {}
     try:
         files = sorted(f for f in os.listdir(directory) if f.endswith(".py"))
@@ -147,10 +171,11 @@ def scan_importers(directory, names):
         except (OSError, UnicodeDecodeError):
             continue
         mod = "backend." + fname[:-3]
-        for m in _IMPORT.finditer(text):
-            top = m.group(1).split(".")[0]
-            if top in names and mod not in out.setdefault(top, []):
-                out[top].append(mod)
+        mods = _imported_modules(text)
+        for h in names:
+            if any(m == h or m.startswith(h + ".") for m in mods):
+                if mod not in out.setdefault(h, []):
+                    out[h].append(mod)
     return {k: sorted(v) for k, v in out.items() if v}
 
 
@@ -190,8 +215,7 @@ def main(argv=None):
     if not records:
         print("No importtime lines found.")
         return 1
-    heavy = {records[i][0].split(".")[0]
-             for i in heavy_packages(records, args.min_ms)}
+    heavy = {records[i][0] for i in heavy_packages(records, args.min_ms)}
     importers = scan_importers(os.path.join(_ROOT, "backend"), heavy)
     print("\n".join(report(records, args.top, args.min_ms, importers)))
     return 0

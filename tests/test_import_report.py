@@ -74,8 +74,19 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("urllib.request  <-", text)
 
     def test_importers_hint(self):
-        lines = ir.report(ir.parse(FIXTURE), importers={"urllib": ["backend.hub"]})
+        lines = ir.report(ir.parse(FIXTURE), importers={"urllib.request": ["backend.hub"]})
         self.assertIn("also imported by: backend.hub", "\n".join(lines))
+
+
+class BackendPackageTests(unittest.TestCase):
+    def test_bare_backend_record_not_heavy(self):
+        text = ("import time: self [us] | cumulative | imported package\n"
+                "import time:       100 |      50000 | backend\n"
+                "import time:       100 |      60000 | backend.hub\n")
+        recs = ir.parse(text)
+        self.assertEqual(ir.heavy_packages(recs, 2.0), [])
+        self.assertNotIn("<- backend.startup", "\n".join(ir.report(recs)))
+        self.assertNotIn("backend  <-", "\n".join(ir.report(recs)))
 
 
 class ScanTests(unittest.TestCase):
@@ -91,6 +102,20 @@ class ScanTests(unittest.TestCase):
                     f.write(body)
             found = ir.scan_importers(d, {"urllib"})
         self.assertEqual(found, {"urllib": ["backend.a", "backend.b"]})
+
+    def test_full_name_matching(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (
+                ("a.py", "import urllib.parse\n"),
+                ("b.py", "from urllib import request\n"),
+                ("c.py", "import os, urllib.request as r\n"),
+                ("d.py", "from urllib import (parse,\n    error)\n"),
+            ):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(body)
+            found = ir.scan_importers(d, {"urllib.request", "urllib.parse"})
+        self.assertEqual(found["urllib.request"], ["backend.b", "backend.c"])
+        self.assertEqual(found["urllib.parse"], ["backend.a", "backend.d"])
 
     def test_missing_dir(self):
         self.assertEqual(ir.scan_importers("/no/such/dir", {"x"}), {})

@@ -22,6 +22,7 @@ simulation) drives the warning on every page and the red readouts.
 
 import math
 import random
+import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
@@ -31,6 +32,7 @@ from backend.obd import describe
 from backend.prefs import as_bool
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
+LAUNCH_MAX_S = 30  # a run from a standstill to 60 mph taking longer than this isn't a launch
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
 VOLTS_MS = 180000  # a battery reading is current this long after the latest one
 ENGINE = ("rpm", "speed", "boost", "coolant", "intake")  # what only the car can answer
@@ -83,6 +85,7 @@ class VehicleData(QObject):
     speedKnownChanged = pyqtSignal()
     voltageKnownChanged = pyqtSignal()
     codesChanged = pyqtSignal()
+    launchChanged = pyqtSignal()
 
     def __init__(self, settings=None, demo=None, parent=None):
         """`demo` is main.py's --demo (True), --no-demo (False) or neither
@@ -106,6 +109,11 @@ class VehicleData(QObject):
         self._gps = None
         self._gps_mph = None      # the GPS's speed while its fix is real and fresh
         self._gps_real = False    # the receiver has given a real position (fresh or held)
+        self._clock = time.monotonic   # injectable for tests
+        self._launch_at = None    # when the truck last stood still (or None: not armed)
+        self._launch_six = False  # ... and has already passed 60 mph
+        self._zero_sixty = 0.0    # seconds, the last 0-60 mph (0 = none yet); memory only
+        self._zero_hundred = 0.0  # likewise 0-100 km/h
         self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._volts_stale = QTimer(self, singleShot=True, interval=VOLTS_MS, timeout=self._volts_aged)
         self._timer = QTimer(self)
@@ -143,7 +151,33 @@ class VehicleData(QObject):
         for was, now, signal in zip(before, self._flags(), signals):
             if was != now:
                 signal.emit()
+        self._watch_launch()
         self.changed.emit()
+
+    def _watch_launch(self):
+        """Time a 0-60 mph (and 0-100 km/h) run from the speeds already
+        arriving. Only real speeds count, and only runs that start from under
+        1 mph; a stop, a long crawl or a lost speed abandons the run."""
+        mph = None if self.simulated else self._speed_now()
+        if mph is None or mph < 1:
+            # armed: the start is refreshed until the moment it rolls
+            self._launch_at = None if mph is None else self._clock()
+            self._launch_six = False
+            return
+        if self._launch_at is None:
+            return                                  # a rolling start, or this run is done
+        took = self._clock() - self._launch_at
+        if took > LAUNCH_MAX_S:
+            self._launch_at = None
+            return
+        found = False
+        if mph >= 60 and not self._launch_six:
+            self._launch_six, self._zero_sixty, found = True, round(took, 1), True
+        if mph >= 100 / 1.609344:
+            self._zero_hundred, found = round(took, 1), True
+            self._launch_at = None
+        if found:
+            self.launchChanged.emit()
 
     # ---- the real thing ---------------------------------------------------
     def apply_obd(self, values):
@@ -318,6 +352,16 @@ class VehicleData(QObject):
     def _engine(self, value):
         """What the UI reads: 0 for an engine value that isn't known."""
         return value if self.engineKnown else 0.0
+
+    @pyqtProperty(float, notify=launchChanged)
+    def zeroToSixty(self):
+        """Seconds the last 0-60 mph run took (0 = none yet)."""
+        return self._zero_sixty
+
+    @pyqtProperty(float, notify=launchChanged)
+    def zeroToHundred(self):
+        """Seconds the last 0-100 km/h run took (0 = none yet)."""
+        return self._zero_hundred
 
     @pyqtProperty(float, notify=changed)
     def rpm(self):

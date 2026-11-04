@@ -13,6 +13,9 @@ Item {
     id: page
     signal navigate(int index)
 
+    // The last launch to 60 mph (100 km/h), 0 until the truck has done one.
+    readonly property real launch: Units.metric ? vehicle.zeroToHundred : vehicle.zeroToSixty
+
     // The gauges sweep once, the first time this page is shown.
     property bool testedOnce: false
     function maybeTest() {
@@ -95,7 +98,9 @@ Item {
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
-            label: "Speed  ·  gear " + (vehicle.engineKnown ? vehicle.gear || "N" : "—"); unit: Units.speedUnit
+            label: "Speed  ·  gear " + (vehicle.engineKnown ? vehicle.gear || "N" : "—")
+                   + (page.launch > 0 ? "  ·  0-" + (Units.metric ? "100 " : "60 ") + page.launch.toFixed(1) + " s" : "")
+            unit: Units.speedUnit
             known: vehicle.speedKnown
             value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
             peakHold: true

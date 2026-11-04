@@ -14,7 +14,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import Gps
-from backend.roadinfo import GAP_S, TRACE_EVERY_S, RoadInfo
+from backend.roadinfo import GAP_S, TRACE_EVERY_S, RoadInfo, parse_match
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -139,12 +139,62 @@ class MatchTest(unittest.TestCase):
         self.match(json.dumps({"edges": [{"speed_limit": 50, "names": ["Main St"]}]}).encode())
         for body in (b"[1]", b'"x"', b"null", b'{"edges": [5]}', b'{"edges": {"a": 1}}',
                      b'{"edges": [{"speed_limit": "fast"}]}', b'{"edges": [{"names": {"a": 1}}]}',
+                     b'{"edges": [{"speed_limit": Infinity}]}', b'{"edges": [{"speed_limit": NaN}]}',
+                     b'{"edges": [{"speed_limit": 1e400}]}', b'{"edges": [{"speed_limit": true}]}',
+                     b'{"edges": [{"speed_limit": -5}]}', b'{"edges": [{"speed_limit": 1000000000000}]}',
                      b"<html>", OSError("refused")):
             with self.subTest(body=body):
                 self.assertEqual(self.match(body), (50, "Main St"))
 
+    def test_an_infinite_limit_does_not_reach_the_error_log(self):
+        self.match(json.dumps({"edges": [{"speed_limit": 50, "names": ["Main St"]}]}).encode())
+        with mock.patch("threading.excepthook") as excepthook:
+            self.assertEqual(self.match(b'{"edges": [{"speed_limit": Infinity}]}'), (50, "Main St"))
+        excepthook.assert_not_called()
+
     def test_a_name_that_isnt_text(self):
-        self.assertEqual(self.match(b'{"edges": [{"speed_limit": 30, "names": [null]}]}'), (30, "None"))
+        self.assertEqual(self.match(b'{"edges": [{"speed_limit": 30, "names": [null]}]}'), (30, ""))
+
+    def test_an_empty_name_list(self):
+        self.assertEqual(self.match(b'{"edges": [{"speed_limit": 30, "names": []}]}'), (30, ""))
+
+    def test_a_fractional_limit_is_rounded(self):
+        self.assertEqual(self.match(b'{"edges": [{"speed_limit": 49.6}]}'), (50, ""))
+
+    def test_a_numeric_string_limit(self):
+        self.assertEqual(self.match(b'{"edges": [{"speed_limit": "50"}]}'), (50, ""))
+
+
+class ParseMatchTest(unittest.TestCase):
+    def edge(self, **fields):
+        return {"edges": [fields]}
+
+    def test_the_usual_shape(self):
+        self.assertEqual(parse_match(self.edge(speed_limit=50, names=["Main St", "Route 9"])), (50, "Main St"))
+
+    def test_the_last_edge_is_the_road_now(self):
+        answer = {"edges": [{"speed_limit": 30, "names": ["Old"]}, {"speed_limit": 80, "names": ["New"]}]}
+        self.assertEqual(parse_match(answer), (80, "New"))
+
+    def test_no_limit_or_no_name_is_zero_or_empty(self):
+        self.assertEqual(parse_match(self.edge()), (0, ""))
+        self.assertEqual(parse_match(self.edge(speed_limit=None, names=None)), (0, ""))
+        self.assertEqual(parse_match(self.edge(speed_limit=0, names=[])), (0, ""))
+
+    def test_limits_that_are_not_sane_are_no_match(self):
+        for value in (float("nan"), float("inf"), -1, 201, 10 ** 400, True, False, "fast", "inf", "nan", "", [50]):
+            with self.subTest(value=value):
+                self.assertIsNone(parse_match(self.edge(speed_limit=value)))
+
+    def test_names_that_are_not_a_list_of_text_are_no_match_or_empty(self):
+        self.assertIsNone(parse_match(self.edge(speed_limit=30, names={"a": 1})))
+        self.assertEqual(parse_match(self.edge(speed_limit=30, names=[None])), (30, ""))
+        self.assertEqual(parse_match(self.edge(speed_limit=30, names=[7, "Main St"])), (30, ""))
+
+    def test_answers_that_are_not_the_usual_shape(self):
+        for answer in ([1], "x", None, {}, {"edges": []}, {"edges": {"a": 1}}, {"edges": [5]}, {"edges": [None]}):
+            with self.subTest(answer=answer):
+                self.assertIsNone(parse_match(answer))
 
 
 if __name__ == "__main__":

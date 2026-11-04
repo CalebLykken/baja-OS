@@ -27,7 +27,7 @@ clock = StartupClock()
 # set before Qt loads, so it lives above the PyQt imports.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
-from PyQt6.QtCore import QTimer, QUrl
+from PyQt6.QtCore import QCoreApplication, QTimer, QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -185,6 +185,21 @@ def main():
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
     settings = Settings()
+    # Changes are written a moment after they're made, on a thread of their
+    # own; write what's waiting, and wait until it's on disk, when the app
+    # quits or when systemd stops it (SIGTERM would otherwise end the process
+    # on the spot). Python only sees the signal when it gets to run, so a
+    # timer gives it a turn.
+    app.aboutToQuit.connect(settings.flush_and_wait)
+
+    def on_sigterm(*_):
+        settings.flush_and_wait()
+        # Posted, not called: quit() before app.exec() is running does nothing,
+        # and a stop during start-up must still end the dashboard.
+        QTimer.singleShot(0, QCoreApplication.quit)
+    signal.signal(signal.SIGTERM, on_sigterm)
+    sigterm_poll = QTimer(interval=250, timeout=lambda: None)
+    sigterm_poll.start()
     vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
     obd = ObdReader(baro=settings.get("baro"))
@@ -251,6 +266,7 @@ def main():
     road = RoadInfo(gps)
     updater = Updater(vehicle, gps, routing, system.restartDashboard)
     system.hold_power_while(lambda: updater.updating)
+    system.before_power(settings.flush_before_power)   # on disk before systemctl is asked
     voice = Voice(settings)
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops
@@ -325,6 +341,7 @@ def main():
     clock.mark("started")
     code = app.exec()
     errorlog.log.flush()          # repeats still being counted go to the journal now
+    settings.close()              # everything on disk, writer thread stopped
     if scanner:
         scanner.stop()
     # Background threads (Spotify, Bluetooth, art) can still signal while

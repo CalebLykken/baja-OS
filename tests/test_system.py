@@ -83,6 +83,23 @@ class HoldTest(unittest.TestCase):
         self.sys.powerOff()
         self.assertEqual(self.asked, ["poweroff"])
 
+    def test_settings_are_written_before_systemctl_is_asked(self):
+        self.busy = False
+        order = []
+        self.sys.before_power(lambda: order.append("flush"))
+        self.asked = order
+        self.sys.powerOff()
+        self.assertEqual(order, ["flush", "poweroff"])
+
+    def test_a_failing_flush_doesnt_stop_the_shutdown(self):
+        self.busy = False
+        def broken():
+            raise OSError("disk full")
+        self.sys.before_power(broken)
+        with mock.patch("builtins.print"):
+            self.sys.powerOff()
+        self.assertEqual(self.asked, ["poweroff"])
+
     def test_waits_for_the_merge(self):
         self.sys.reboot()
         self.tick()

@@ -170,6 +170,16 @@ class DemoAlbumsTest(unittest.TestCase):
         p.restore({"index": 40, "position": 5})
         self.assertLess(p.index, len(p.queue))
 
+    def test_an_album_resumes_on_the_same_song_in_the_all_songs_queue(self):
+        for album, start in ((0, 0), (1, 3), (2, 2)):
+            p = self.make()
+            p.playAlbum(album, start)
+            p._position = 50
+            title = p.title
+            fresh = self.make()
+            fresh.restore(p.state())
+            self.assertEqual((fresh.title, fresh.position), (title, 50), (album, start))
+
     def test_explicit_queues_have_no_albums(self):
         custom = [{"title": "X", "artist": "Y", "duration": 100}]
         for q in ([], custom):

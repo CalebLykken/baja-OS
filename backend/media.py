@@ -80,7 +80,10 @@ class MediaPlayer(QObject):
         queue, what restore() was given)."""
         if not self._queue:
             return dict(NO_STATE if self._saved is None else self._saved)
-        return {"album": None, "path": "", "index": self._index, "position": self._position}
+        index = self._index
+        if self._album != -1:           # restore() reads index against the all-songs queue
+            index += sum(len(a["tracks"]) for a in self._albums[:self._album])
+        return {"album": None, "path": "", "index": index, "position": self._position}
 
     def start(self):
         if self._queue:

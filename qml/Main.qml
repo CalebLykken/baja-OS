@@ -249,6 +249,53 @@ Window {
         }
     }
 
+    // Trip milestone toast: shown for a few seconds by one short animation
+    // that ends by itself; invisible (not drawn) the rest of the time. No
+    // MouseArea, so it never takes a tap. Above the pages, below the dimming,
+    // screen-off and prompt layers.
+    Rectangle {
+        id: milestonePill
+        property string text: ""
+        anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter
+                  horizontalCenterOffset: rail.width / 2 }
+        width: milestoneLabel.implicitWidth + 56
+        height: milestoneLabel.implicitHeight + 24
+        radius: Theme.radius
+        color: Theme.panel
+        border { width: Theme.border; color: Theme.line }
+        opacity: 0
+        visible: opacity > 0
+
+        Label {
+            id: milestoneLabel
+            anchors.centerIn: parent
+            text: milestonePill.text
+            color: Theme.text
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.DemiBold
+        }
+
+        transform: Translate { id: milestoneSlide; y: 0 }
+
+        SequentialAnimation {
+            id: milestoneShow
+            ParallelAnimation {
+                NumberAnimation { target: milestonePill; property: "opacity"; to: 1; duration: 250; easing.type: Easing.OutCubic }
+                NumberAnimation { target: milestoneSlide; property: "y"; from: -20; to: 0; duration: 250; easing.type: Easing.OutCubic }
+            }
+            PauseAnimation { duration: 4000 }
+            NumberAnimation { target: milestonePill; property: "opacity"; to: 0; duration: 400 }
+        }
+    }
+    Connections {
+        target: tripCounter
+        function onMilestone(text) {
+            if (typeof showSplash !== "undefined" && showSplash) return
+            milestonePill.text = text
+            milestoneShow.restart()
+        }
+    }
+
     // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
     // Never fully black, and it lets touches through to the UI below.
     Rectangle {

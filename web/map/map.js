@@ -198,6 +198,8 @@ function styleFor(m) {
 function applyPageColours(m) {
     const look = LOOKS[m], css = document.documentElement.style;
     document.body.style.background = look.page;
+    // index.html's day ground rule (html.day) must follow the look too.
+    document.documentElement.classList.toggle("day", m === "day");
     css.setProperty("--pin", look.pin);
     css.setProperty("--pin-edge", look.pinEdge);
     css.setProperty("--shadow", look.shadow);

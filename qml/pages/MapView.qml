@@ -74,7 +74,9 @@ WebEngineView {
     Component.onCompleted: Qt.callLater(() => { url = maps.pageUrl + "?mode=" + mode })
     onModeChanged: call("setMode('" + mode + "')")
     onInsetLeftChanged: sendInsets()
-    backgroundColor: mode === "day" ? "#d9d5cc" : "#14160f"
+    // The map's own ground, shown while the page loads: must match LOOKS[...].page
+    // in web/map/map.js and the ground Rectangle in MapsPage.qml.
+    backgroundColor: mode === "day" ? "#ebe7df" : "#1a1b1d"
     settings.showScrollBars: false
     settings.focusOnNavigationEnabled: false
     settings.javascriptCanAccessClipboard: false

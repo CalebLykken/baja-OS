@@ -6,7 +6,13 @@
 <title>Baja OS map</title>
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
 <style>
-  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1b1d; }
+  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  /* Night ground until the page knows the look; #map is transparent so the
+     body colour (set by map.js applyPageColours) shows through. */
+  html, body { background: #1a1b1d; }
+  #map { background: transparent; }
+  /* Day ground from the first paint: the script below adds class "day". */
+  html.day, html.day body { background: #ebe7df; }
   /* The dashboard draws its own keys and attribution over the map. */
   .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { display: none; }
   /* A picked place: a red pin, like Apple Maps. */
@@ -24,6 +30,11 @@
   .pin.dropping svg { animation: pin-drop 420ms cubic-bezier(.3, .7, .4, 1) both; transform-origin: 50% 100%; }
   @media (prefers-reduced-motion: reduce) { .pin.dropping svg { animation: none; } }
 </style>
+<script>
+  // MapView loads this page with ?mode=day or ?mode=night (MapView.qml, mode
+  // binding), so the day ground is set before the module script runs.
+  if (new URLSearchParams(location.search).get("mode") === "day") document.documentElement.classList.add("day");
+</script>
 <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.min.js" } }</script>
 <script src="vendor/pmtiles.js"></script>
 <script type="module" src="map.js"></script>

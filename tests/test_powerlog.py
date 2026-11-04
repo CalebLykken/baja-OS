@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 from backend.powerlog import (KERNEL_BACKOFF_FIRST, KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S,
-                              KERNEL_WORTH_KEEPING, flag_names, kernel_cmd, next_backoff,
+                              KERNEL_WORTH_KEEPING, flag_names, kernel_cmd,
+                              logged_kernel_events, new_kernel_events, next_backoff,
                               parse_pmic, prune)
 
 PMIC = """\
@@ -57,6 +58,32 @@ class KernelTest(unittest.TestCase):
         self.assertFalse(KERNEL_WORTH_KEEPING.search("EXT4-fs (mmcblk0p2): re-mounted"))
 
 
+class RestartReplayTest(unittest.TestCase):
+    LINES = ["[   12.5] kernel: hwmon hwmon2: Undervoltage detected!\n",
+             "[   13.0] kernel: some chatter\n",
+             "[   40.1] kernel: usb 3-1: USB disconnect, device number 4\n"]
+
+    def test_first_run_records_the_boot(self):
+        got = list(new_kernel_events(self.LINES, set()))
+        self.assertEqual(len(got), 2)
+        self.assertTrue(got[0].startswith("kernel: [   12.5]"))
+
+    def test_restart_skips_what_the_file_holds(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "abcd.log"
+            first = list(new_kernel_events(self.LINES[:1], set()))
+            log.write_text("# SAMPLE|x\nEVENT|10:00:00|5.0|app started\n"
+                           + "".join(f"EVENT|10:00:01|6.0|{t}\n" for t in first))
+            seen = logged_kernel_events(log)
+            self.assertEqual(seen, set(first))
+            new = list(new_kernel_events(self.LINES, seen))
+            self.assertEqual(len(new), 1)
+            self.assertIn("USB disconnect", new[0])
+
+    def test_missing_file(self):
+        self.assertEqual(logged_kernel_events("/nonexistent/x.log"), set())
+
+
 class PruneTest(unittest.TestCase):
     def test_keeps_the_newest(self):
         with tempfile.TemporaryDirectory() as d:
@@ -93,16 +120,22 @@ class PruneTest(unittest.TestCase):
 
 
 class KernelFollowerTest(unittest.TestCase):
-    def test_first_run_reads_the_whole_boot(self):
-        cmd = kernel_cmd(first=True)
+    def test_every_run_reads_the_whole_boot(self):
+        # A restart reads from the start too, so lines logged while the follower
+        # was down are not lost; the seen set keeps them from being recorded twice.
+        cmd = kernel_cmd()
         self.assertEqual(cmd[cmd.index("-n") + 1], "all")
         self.assertNotIn("--since", cmd)
-
-    def test_restart_only_wants_new_lines(self):
-        cmd = kernel_cmd(first=False)
-        self.assertNotIn("all", cmd)
-        self.assertEqual(cmd[cmd.index("--since") + 1], "now")
         self.assertIn("-f", cmd)
+
+    def test_a_follower_restart_records_only_what_is_new(self):
+        seen = set()
+        before = ["[   12.5] kernel: hwmon hwmon2: Undervoltage detected!\n"]
+        during_gap = ["[   80.0] kernel: usb 3-1: USB disconnect, device number 4\n"]
+        self.assertEqual(len(list(new_kernel_events(before, seen))), 1)
+        again = list(new_kernel_events(before + during_gap, seen))
+        self.assertEqual(len(again), 1)
+        self.assertIn("USB disconnect", again[0])
 
     def test_backoff_doubles_to_the_cap(self):
         wait, seen = KERNEL_BACKOFF_FIRST, []

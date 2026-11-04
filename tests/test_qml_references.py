@@ -32,11 +32,17 @@ class MainMilestoneToast(unittest.TestCase):
         self.assertIn("splash.visible", body)
         self.assertRegex(src, r"Splash\s*\{\s*id:\s*splash\b")
 
-    def test_milestone_never_shows_on_maps(self):
-        # The pill would cover the next-turn card and the outside-map banner.
+    def test_milestone_never_shows_on_maps_or_while_routing(self):
+        # The pill would cover the next-turn card (Maps, Home and Music) and
+        # the outside-map banner.
         src = (QML.parent.parent / "Main.qml").read_text()
         body = src.split("function onMilestone", 1)[1].split("}", 1)[0]
         self.assertIn("root.onMaps", body)
+        self.assertIn("root.routeActive", body)
+        self.assertRegex(src, r"routeActive:\s*typeof routing !== \"undefined\" && routing\.active")
+        cut2 = src.split("function onRouteActiveChanged", 1)[1].split("}", 1)[0]
+        self.assertIn("milestoneShow.stop()", cut2)
+        self.assertIn("milestonePill.opacity = 0", cut2)
         cut = src.split("function onOnMapsChanged", 1)[1].split("}", 1)[0]
         self.assertIn("milestoneShow.stop()", cut)
         self.assertIn("milestonePill.opacity = 0", cut)

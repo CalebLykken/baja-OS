@@ -255,6 +255,8 @@ Window {
     // screen-off and prompt layers. Never on Maps: the next-turn card, the
     // "Outside the offline map" banner and the Home/Work keys fill that top
     // row, and the toast would cover them while the driver is reading them.
+    // Likewise never while a route is active: Home and Music also carry the
+    // next-turn card at the top right, which the toast would sit on.
     Rectangle {
         id: milestonePill
         property string text: ""
@@ -289,7 +291,8 @@ Window {
             NumberAnimation { target: milestonePill; property: "opacity"; to: 0; duration: 400 }
         }
     }
-    // Opening Maps while the toast is up cuts it short.
+    readonly property bool routeActive: typeof routing !== "undefined" && routing.active
+    // Opening Maps, or starting a route, while the toast is up cuts it short.
     Connections {
         target: root
         function onOnMapsChanged() {
@@ -297,11 +300,16 @@ Window {
             milestoneShow.stop()
             milestonePill.opacity = 0
         }
+        function onRouteActiveChanged() {
+            if (!root.routeActive) return
+            milestoneShow.stop()
+            milestonePill.opacity = 0
+        }
     }
     Connections {
         target: tripCounter
         function onMilestone(text) {
-            if (splash.visible || root.onMaps) return
+            if (splash.visible || root.onMaps || root.routeActive) return
             milestonePill.text = text
             milestoneShow.restart()
         }

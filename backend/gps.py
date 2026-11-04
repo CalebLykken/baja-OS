@@ -13,6 +13,7 @@ follow) only runs while no receiver has been seen since start and the
 vehicle data is simulated: on a Mac, or a Pi on the bench.
 """
 
+import bisect
 import glob
 import json
 import math
@@ -242,32 +243,35 @@ class DemoRoute:
         for a, b in zip(pts, pts[1:]):
             self.cum.append(self.cum[-1] + _metres(a, b))
         self.length = self.cum[-1]
+        if len(pts) < 2 or self.length <= 0:       # nothing to drive (and loop would divide by 0)
+            raise ValueError("a demo route needs at least two distinct points")
 
     def at(self, distance):
         """(lon, lat, heading) at `distance` metres along the path."""
         d = distance % self.length if self.loop else min(distance, self.length - 0.01)
-        lo, hi = 0, len(self.cum) - 1
-        while lo < hi - 1:                         # binary search for the segment
-            mid = (lo + hi) // 2
-            if self.cum[mid] <= d:
-                lo = mid
-            else:
-                hi = mid
+        lo = min(max(bisect.bisect_right(self.cum, d) - 1, 0), len(self.cum) - 2)
         a, b = self.points[lo], self.points[lo + 1]
         seg = self.cum[lo + 1] - self.cum[lo] or 1.0
         f = (d - self.cum[lo]) / seg
         # Head toward a point ~25 m ahead so corners turn smoothly.
         ahead = self._point(d + 25)
         here = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+        if _metres(here, ahead) < 1.0:             # at the end of a one-way route
+            behind = self._point(max(0.0, d - 25))
+            if _metres(behind, here) < 1.0:        # route shorter than that: last real segment
+                behind, here = next(((p, q) for p, q in zip(reversed(self.points[:-1]), reversed(self.points[1:]))
+                                     if _metres(p, q) >= 0.01), (behind, here))
+            return here[0], here[1], _bearing(behind, here)
         return here[0], here[1], _bearing(here, ahead)
 
     def _point(self, distance):
         d = distance % self.length if self.loop else min(distance, self.length)
-        for i in range(len(self.cum) - 1):
-            if self.cum[i + 1] >= d:
-                a, b = self.points[i], self.points[i + 1]
-                f = (d - self.cum[i]) / ((self.cum[i + 1] - self.cum[i]) or 1.0)
-                return a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f
+        i = bisect.bisect_left(self.cum, d)         # first point at or past d
+        if i < len(self.cum):
+            i = min(max(i - 1, 0), len(self.cum) - 2)
+            a, b = self.points[i], self.points[i + 1]
+            f = (d - self.cum[i]) / ((self.cum[i + 1] - self.cum[i]) or 1.0)
+            return a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f
         return self.points[-1]
 
 
@@ -647,7 +651,11 @@ class Gps(QObject):
     def followPath(self, points):
         """In demo mode, drive this route (from its start) instead of the loop."""
         if len(points) >= 2:
-            self._path = DemoRoute(points=points, loop=False)
+            try:
+                route = DemoRoute(points=points, loop=False)
+            except (TypeError, ValueError, IndexError):
+                return                              # zero-length or malformed: keep the loop
+            self._path = route
             self._path_travelled = 0.0
 
     def clearPath(self):

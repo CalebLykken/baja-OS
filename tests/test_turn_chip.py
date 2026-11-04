@@ -25,7 +25,7 @@ SCRIPT = r'''
 import json, sys
 from pathlib import Path
 from PyQt6.QtCore import QEventLoop, QObject, QTimer, QUrl, pyqtProperty, pyqtSignal
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtGui import QFont, QFontMetricsF, QGuiApplication
 from PyQt6.QtQml import QQmlComponent, QQmlEngine
 
 app = QGuiApplication(sys.argv)
@@ -108,6 +108,16 @@ def label():
     return obj.findChild(QObject, "turnLabel").property("text")
 
 
+def content_fits():
+    # contentWidth only shows the already-shrunk text, so measure the current text at the
+    # smallest size the label may shrink to. Linux (CI and the Pi) falls back to DejaVu
+    # Sans Bold, much wider than macOS's font; leave a few pixels of margin.
+    lab = obj.findChild(QObject, "turnLabel")
+    font = QFont(lab.property("font"))
+    font.setPixelSize(int(lab.property("minimumPixelSize")))
+    return QFontMetricsF(font).horizontalAdvance(lab.property("text")) <= lab.property("width") - 4
+
+
 def truncated():
     return obj.findChild(QObject, "turnLabel").property("truncated")
 
@@ -123,6 +133,7 @@ wait(50)
 results["computing_icon"] = icon()
 results["computing_label"] = label()
 results["computing_truncated"] = truncated()
+results["computing_fits"] = content_fits()
 
 routing.setIcon("turn_right")
 wait(400)
@@ -138,6 +149,18 @@ routing.setArrived(True)
 wait(50)
 results["arrived_label"] = label()
 results["arrived_truncated"] = truncated()
+results["arrived_fits"] = content_fits()
+
+# A turn swap already running when a reroute starts must not put the arrow back.
+routing.setArrived(False)
+routing.setIcon("turn_left")
+wait(30)
+routing.setComputing(True)
+wait(400)
+results["race_icon"] = icon()
+routing.setComputing(False)
+wait(400)
+results["race_done_icon"] = icon()
 
 print(json.dumps(results))
 sys.stdout.flush()
@@ -180,6 +203,12 @@ class TurnChipTest(unittest.TestCase):
     def test_rerouting_and_arrived_labels_fit(self):
         self.assertIs(self.results["computing_truncated"], False)
         self.assertIs(self.results["arrived_truncated"], False)
+        self.assertIs(self.results["computing_fits"], True)
+        self.assertIs(self.results["arrived_fits"], True)
+
+    def test_reroute_during_turn_swap_keeps_refresh_icon(self):
+        self.assertEqual(self.results["race_icon"], "refresh")
+        self.assertEqual(self.results["race_done_icon"], "turn_left")
 
     def test_arrival_reads_arrived(self):
         self.assertEqual(self.results["arrived_label"], "Arrived")

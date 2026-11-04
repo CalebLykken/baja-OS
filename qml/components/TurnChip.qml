@@ -13,7 +13,8 @@ Rectangle {
     // the Maps turn card shows until the new route lands.
     readonly property bool rerouting: active && routing.computing
     // The refresh icon stays up until the swap's bottom, so the new arrow never
-    // shows for a frame before fading out and back in.
+    // shows for a frame before fading out and back in. A swap that is already running
+    // when a reroute starts ends on the live state, so it never puts the arrow back.
     property bool showRefresh: false
     onReroutingChanged: {
         if (rerouting) showRefresh = true
@@ -78,7 +79,7 @@ Rectangle {
             NumberAnimation { target: turnIcon; property: "opacity"; to: 0; duration: 100; easing.type: Easing.InQuad }
             NumberAnimation { target: shift; property: "y"; to: -6; duration: 100; easing.type: Easing.InQuad }
         }
-        ScriptAction { script: { chip.icon = chip.seenIcon; chip.showRefresh = false; shift.y = 6 } }
+        ScriptAction { script: { chip.icon = chip.seenIcon; chip.showRefresh = chip.rerouting; shift.y = 6 } }
         ParallelAnimation {
             NumberAnimation { target: turnIcon; property: "opacity"; to: 1; duration: 150; easing.type: Easing.OutCubic }
             NumberAnimation { target: shift; property: "y"; to: 0; duration: 150; easing.type: Easing.OutCubic }
@@ -102,10 +103,10 @@ Rectangle {
             objectName: "turnLabel"
             anchors.horizontalCenter: parent.horizontalCenter
             elide: Text.ElideRight          // backstop; the text shrinks to fit first
-            width: chip.width - 12
+            width: chip.width - 8           // the chip's border and padding leave room for 88 px of text
             horizontalAlignment: Text.AlignHCenter
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 16
+            minimumPixelSize: 14
             numeric: true
             font.pixelSize: Theme.fontSmall
             font.weight: Font.DemiBold

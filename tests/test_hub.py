@@ -308,7 +308,11 @@ class SwitchTest(unittest.TestCase):
                 mock.patch("subprocess.run"):
             self.local = MediaPlayer()
             self.spotify = FakeSource()
-            self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
+            # The hub's real volume-writer thread drains _pending_level as
+            # soon as it is woken, racing any test that reads it. Start it as
+            # a no-op so _pending_level holds what _apply_volume set.
+            with mock.patch.object(MediaHub, "_level_writer", lambda self: None):
+                self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
         self.levels = []
         real_apply = self.hub._apply_volume
 
@@ -347,6 +351,15 @@ class SwitchTest(unittest.TestCase):
         while self.hub._fade_timer.isActive():
             self.hub._fade_tick()
         self.assertEqual(self.hub._fade, 1.0)
+
+    def test_output_returns_to_local_volume_when_the_phone_loses_absolute_volume(self):
+        phone = self.hub._sources["phone"]
+        self.hub._source = "phone"
+        self.hub._apply_volume()
+        self.assertEqual(self.hub._pending_level, 1.0)      # held at the ceiling
+        phone.hasVolume = False
+        phone.volumeChanged.emit()
+        self.assertAlmostEqual(self.hub._pending_level, 0.2)
 
     def test_no_hush_without_a_switch(self):
         self.hub._pause_others(keep="local")

@@ -348,8 +348,10 @@ class MediaHub(QObject):
             self._sources["spotify"].resume(self._resume_uri)
 
     def _remote_volume_changed(self, name):
-        if name == self._source and self._remote_volume:
-            self._apply_volume()      # the Pi's output goes to 100% once known
+        if name == self._source:
+            # The Pi's output goes to 100% once the volume is known, and back
+            # to the local level when the phone stops sharing it.
+            self._apply_volume()
             self.volumeChanged.emit()
 
     def _forward(self, origin, signal):

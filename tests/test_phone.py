@@ -64,6 +64,21 @@ class TokenFileTest(TempTokenFile):
         self.assertGreaterEqual(len(token), 32)
         self.assertEqual(self.file.read_text().strip(), token)
 
+    def test_a_file_of_junk_bytes_gets_a_new_token(self):
+        self.file.parent.mkdir(parents=True)
+        self.file.write_bytes(b"\xff\xfe\x80" * 20)           # not UTF-8
+        token = phone.load_token()
+        self.assertGreaterEqual(len(token), 32)
+        self.assertEqual(self.file.read_text().strip(), token)
+
+    def test_an_unwritable_folder_still_gives_a_token(self):
+        with mock.patch.object(phone.tempfile, "mkstemp", side_effect=PermissionError("read-only")):
+            token = phone.load_token()
+            svc = self.service()
+        self.assertGreaterEqual(len(token), 32)
+        self.assertGreaterEqual(len(svc.token), 32)
+        self.assertFalse(self.file.exists())
+
     def test_a_new_token_replaces_the_file_whole(self):
         old = phone.load_token()
         new = phone.new_token()

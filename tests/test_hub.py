@@ -233,12 +233,16 @@ class SpotifyResumeTest(unittest.TestCase):
 
 
 class HubTest(unittest.TestCase):
+    def setUp(self):
+        self.kept = []
+
     def make(self, **values):
         self.settings = FakeSettings(**values)
         self.local, self.phone, self.spotify = MediaPlayer(), FakeSource(), FakeSource()
         with mock.patch("backend.hub.shutil.which", return_value=None):   # never the Pi's real volume
             hub = MediaHub(self.local, self.phone, self.spotify, settings=self.settings)
         hub.start()
+        self.kept.append((self.local, hub))      # a dropped player would delete its timer
         self.addCleanup(self.local._timer.stop)
         return hub
 
@@ -285,6 +289,15 @@ class HubTest(unittest.TestCase):
     def test_local_music_that_was_paused_stays_paused(self):
         self.make(music=saved("local", False))
         self.assertFalse(self.local.playing)
+
+    def test_a_damaged_local_position_still_starts_the_hub(self):
+        # The hub builds (and so the dashboard starts) with a non-finite saved position.
+        # The demo local player ignores floats; the real position clamp is in ResumePointTest.
+        for position in ("Infinity", "NaN", "1e999", "-Infinity"):
+            music = ('{"source":"local","playing":false,"local":{"album":null,"path":"",'
+                     '"index":3,"position":%s}}' % position)
+            hub = self.make(music=music)
+            self.assertEqual(hub.source, "local", position)
 
     def test_saves_the_source_and_where_local_music_is(self):
         hub = self.make(music=saved("local", False, index=2, position=10))

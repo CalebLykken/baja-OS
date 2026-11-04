@@ -1,6 +1,7 @@
 """Off-Pi tests for the source badge's change animation (qml/components/
 SourceBadge.qml): a real change of source swaps the text and icon through a
-short fade and slide, and nothing animates at load or on a repeat.
+short fade and slide, with a small pop of the icon, and nothing animates at
+load or on a repeat.
 
 The QML runs in its own process, like tests/test_errors.py, so the QCoreApplication
 other test modules create at import time doesn't get in the way.
@@ -76,36 +77,63 @@ if obj is None:
         print(error.toString(), file=sys.stderr)
     sys.exit(1)
 
+icon = obj.findChild(QObject, "badgeIcon")
+swap = obj.findChild(QObject, "badgeSwap")
+
 results = {}
 results["initial_text"] = obj.property("shownText")
 results["initial_opacity"] = obj.property("opacity")
+results["initial_scale"] = icon.property("scale")
 wait(50)
 results["initial_opacity_50ms"] = obj.property("opacity")
+results["initial_scale_50ms"] = icon.property("scale")
 
 # Case 2: a real change to the phone. Nothing swaps until the swap runs.
 media.set("phone", "Caleb's iPhone")
 results["change_immediate_text"] = obj.property("shownText")
 wait(60)
 results["change_mid_opacity"] = obj.property("opacity")
-wait(390)
+# The icon pops from about 290 ms to 560 ms after the change.
+wait(270)
+results["pop_330_scale"] = icon.property("scale")
+wait(50)
+results["pop_380_scale"] = icon.property("scale")
+wait(70)
 results["change_done_text"] = obj.property("shownText")
 results["change_done_icon"] = obj.property("shownIcon")
 results["change_done_opacity"] = obj.property("opacity")
+wait(350)
+results["pop_800_scale"] = icon.property("scale")
+results["pop_800_running"] = swap.property("running")
 
 # Case 3: the same source again, a status refresh with identical values.
 media.set("phone", "Caleb's iPhone")
 wait(60)
 results["repeat_opacity"] = obj.property("opacity")
 results["repeat_text"] = obj.property("shownText")
+results["repeat_scale"] = icon.property("scale")
 
 # Case 4: two changes 30 ms apart must land on the latest one.
 media.set("spotify", "Spotify")
 wait(30)
 media.set("local", "")
-wait(500)
+wait(800)
 results["double_text"] = obj.property("shownText")
 results["double_icon"] = obj.property("shownIcon")
 results["double_opacity"] = obj.property("opacity")
+results["double_scale"] = icon.property("scale")
+results["double_running"] = swap.property("running")
+
+# Case 5: a change that lands while the icon is mid-pop restarts the swap
+# and the icon must come back to full size.
+media.set("phone", "Pixel")
+wait(330)
+results["mid_pop_scale"] = icon.property("scale")
+media.set("spotify", "Spotify")
+wait(800)
+results["restart_text"] = obj.property("shownText")
+results["restart_scale"] = icon.property("scale")
+results["restart_running"] = swap.property("running")
 
 print(json.dumps(results))
 sys.stdout.flush()
@@ -152,6 +180,31 @@ class SourceBadgeTest(unittest.TestCase):
         self.assertEqual(self.results["double_text"], "On this Pi")
         self.assertEqual(self.results["double_icon"], "music")
         self.assertEqual(self.results["double_opacity"], 1.0)
+
+    def test_icon_pops_once_on_a_real_change(self):
+        # Partway through the pop the icon is bigger than its resting size.
+        self.assertGreater(self.results["pop_330_scale"], 1.0)
+        self.assertGreater(self.results["pop_380_scale"], 1.0)
+        # Once the swap has run out, the icon is back to exactly 1.0 and
+        # nothing is animating any more.
+        self.assertEqual(self.results["pop_800_scale"], 1.0)
+        self.assertFalse(self.results["pop_800_running"])
+
+    def test_icon_does_not_pop_at_load_or_on_a_repeat(self):
+        self.assertEqual(self.results["initial_scale"], 1.0)
+        self.assertEqual(self.results["initial_scale_50ms"], 1.0)
+        self.assertEqual(self.results["repeat_scale"], 1.0)
+
+    def test_quick_changes_leave_the_icon_at_full_size(self):
+        self.assertEqual(self.results["double_scale"], 1.0)
+        self.assertFalse(self.results["double_running"])
+
+    def test_change_mid_pop_resets_the_icon(self):
+        # The pop was under way when the next change came in.
+        self.assertGreater(self.results["mid_pop_scale"], 1.0)
+        self.assertEqual(self.results["restart_text"], "Spotify")
+        self.assertEqual(self.results["restart_scale"], 1.0)
+        self.assertFalse(self.results["restart_running"])
 
 
 if __name__ == "__main__":

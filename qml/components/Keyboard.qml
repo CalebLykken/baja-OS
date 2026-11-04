@@ -36,12 +36,17 @@ Rectangle {
         if (kb.shift === 1) kb.shift = 0
     }
 
+    // The character key under the finger, if any; its label shows in the bubble.
+    property var previewKey: null
+    onVisibleChanged: if (!visible) previewKey = null
+
     component Key: Rectangle {
         id: key
         property string label
         property string icon: ""
         property bool primary: false
         property bool lit: false
+        property bool preview: false     // character keys pop up a bubble while held
         readonly property alias down: area.pressed
         signal hit()
         width: kb.keyW
@@ -52,6 +57,14 @@ Rectangle {
         color: primary ? (area.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent)
                        : (area.pressed ? Theme.line : (lit ? Theme.line : Theme.panelHi))
         opacity: enabled ? 1 : 0.5
+        scale: area.pressed ? 0.96 : 1
+        Behavior on scale { NumberAnimation { duration: 70 } }
+        onDownChanged: {
+            if (key.preview) {
+                if (key.down) kb.previewKey = key
+                else if (kb.previewKey === key) kb.previewKey = null
+            }
+        }
         Label {
             visible: key.icon === ""
             anchors.centerIn: parent
@@ -77,12 +90,12 @@ Rectangle {
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: kb.gap
-            Repeater { model: kb.rows[0]; Key { label: kb.shown(modelData); onHit: kb.press(modelData) } }
+            Repeater { model: kb.rows[0]; Key { preview: true; label: kb.shown(modelData); onHit: kb.press(modelData) } }
         }
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: kb.gap
-            Repeater { model: kb.rows[1]; Key { label: kb.shown(modelData); onHit: kb.press(modelData) } }
+            Repeater { model: kb.rows[1]; Key { preview: true; label: kb.shown(modelData); onHit: kb.press(modelData) } }
         }
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
@@ -97,7 +110,7 @@ Rectangle {
                     else kb.mode = kb.mode === 1 ? 2 : 1
                 }
             }
-            Repeater { model: kb.rows[2]; Key { label: kb.shown(modelData); onHit: kb.press(modelData) } }
+            Repeater { model: kb.rows[2]; Key { preview: true; label: kb.shown(modelData); onHit: kb.press(modelData) } }
             Key {
                 id: del
                 width: kb.keyW * 1.5
@@ -133,6 +146,30 @@ Rectangle {
                 enabled: kb.doneEnabled
                 onHit: kb.done()
             }
+        }
+    }
+
+    // One shared bubble for every character key, not one per key. It sits
+    // above the held key and is not clipped, so top-row keys can overhang.
+    Rectangle {
+        id: bubble
+        z: 10
+        visible: kb.previewKey !== null
+        width: kb.keyW * 1.4
+        height: kb.keyH * 1.3
+        radius: Theme.radius
+        color: Theme.panelHi
+        border.width: 2
+        border.color: Theme.accent
+        x: kb.previewKey ? Math.max(0, Math.min(kb.width - width,
+               kb.previewKey.mapToItem(kb, 0, 0).x + (kb.previewKey.width - width) / 2)) : 0
+        y: kb.previewKey ? kb.previewKey.mapToItem(kb, 0, 0).y - height - 4 : 0
+        scale: visible ? 1 : 0.8
+        Behavior on scale { NumberAnimation { duration: 80 } }
+        Label {
+            anchors.centerIn: parent
+            text: kb.previewKey ? kb.previewKey.label : ""
+            font.pixelSize: Theme.fontHero
         }
     }
 }

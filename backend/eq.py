@@ -33,7 +33,8 @@ PRESETS = {
     "Vocal": [-2, -1, 2, 4, 1],
     "Bright": [0, 0, 0, 3, 6],
 }
-CHECK_EVERY_MS = 5000
+CHECK_EVERY_MS = 5000       # filter missing: look for it
+FOUND_CHECK_MS = 30000      # filter running: only a PipeWire restart can change it
 
 
 def _pw_cli(*args, timeout=3):
@@ -120,6 +121,9 @@ class Equalizer(QObject):
             self._push()              # (re)started, even under the same id: give it our gains
         if (info is None) != (was is None):
             self.changed.emit()
+        wanted = FOUND_CHECK_MS if info is not None else CHECK_EVERY_MS
+        if self._timer.interval() != wanted:
+            self._timer.setInterval(wanted)   # restarts the countdown, so only when it changes
 
     def _push(self):
         """Queue the current gains for the writer thread (latest wins)."""

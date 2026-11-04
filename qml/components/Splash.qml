@@ -2,7 +2,9 @@ import QtQuick
 
 // Startup splash: the Baja's side profile sits in the dark, its headlight
 // comes on, then the name, then a short greeting that suits the time of day,
-// then the whole thing fades into the dashboard. Tap to skip. At boot the
+// the weekday and the date (a holiday, a weekend line, or one of three
+// phrasings for the time slot, picked by day), then the whole thing fades into
+// the dashboard. Tap to skip. At boot the
 // Plymouth theme in deploy/plymouth has already been showing the same truck
 // at the same spot on the same background, so this picks up seamlessly; keep
 // the two in sync if either moves. Only opacity animates, which the Pi 2's GPU
@@ -23,16 +25,27 @@ Rectangle {
         if (!fadeOut.running && visible) fadeOut.start()
     }
 
-    // Plain JS, no backend calls, so it cannot fail at start-up. Read once
-    // when the splash is created.
-    function greeting() {
-        var h = new Date().getHours()
-        if (h >= 5 && h <= 11) return "Good morning"
-        if (h >= 12 && h <= 16) return "Good afternoon"
-        if (h >= 17 && h <= 21) return "Good evening"
-        return "Late night run"
+    // Plain JS on a Date, no backend calls, so it cannot fail at start-up.
+    // Read once when the splash is created. Fixed dates win, then the weekend
+    // lines, then the time slot; each slot has three phrasings, and the day of
+    // the year picks one, so it changes daily and holds all day.
+    function greeting(d) {
+        if (d === undefined) d = new Date()
+        var m = d.getMonth() + 1, day = d.getDate(), h = d.getHours(), wd = d.getDay()
+        if (m === 1 && day === 1) return "Happy New Year"
+        if (m === 12 && (day === 24 || day === 25)) return "Merry Christmas"
+        if (m === 10 && day === 31) return "Happy Halloween"
+        if (m === 7 && day === 4) return "Happy Fourth"
+        if (wd === 5 && h >= 17) return "Weekend starts here"
+        if ((wd === 6 || wd === 0) && h >= 5 && h <= 11) return "Weekend morning"
+        var dayOfYear = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 86400000)
+        var v = dayOfYear % 3
+        if (h >= 5 && h <= 11) return ["Good morning", "Morning, let's roll", "Coffee and the open road"][v]
+        if (h >= 12 && h <= 16) return ["Good afternoon", "Afternoon drive", "Plenty of daylight left"][v]
+        if (h >= 17 && h <= 21) return ["Good evening", "Evening cruise", "Golden hour"][v]
+        return ["Late night run", "Night drive", "Quiet roads tonight"][v]
     }
-    readonly property string greetingText: greeting()
+    readonly property string greetingText: greeting(new Date())
 
     Item {
         id: stage

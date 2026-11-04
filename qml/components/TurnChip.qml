@@ -9,6 +9,10 @@ Rectangle {
     readonly property bool active: typeof routing !== "undefined" && routing.active
     property string icon: "straight"          // the turn shown; changes at the bottom of a swap
     property string seenIcon: ""              // the latest turn while routing, "" when not
+    // A reroute keeps the route active, but the old turn no longer exists; show what
+    // the Maps turn card shows until the new route lands.
+    readonly property bool rerouting: active && routing.computing
+    onReroutingChanged: if (!rerouting && active) turnSwap.restart()
 
     // A new route or turn is a moment, not a loop: one nudge when the chip appears.
     // A route that restarts mid-swap must not leave the icon half-faded or offset.
@@ -38,7 +42,7 @@ Rectangle {
             if (next === "" || next === chip.seenIcon) return
             const first = chip.seenIcon === ""
             chip.seenIcon = next
-            if (first) chip.icon = next
+            if (first || chip.rerouting) chip.icon = next   // behind the refresh icon, swap on its return
             else turnSwap.restart()
         }
     }
@@ -51,7 +55,7 @@ Rectangle {
     border.color: Theme.accent
     opacity: active ? 1 : 0
     visible: opacity > 0
-    Behavior on opacity { NumberAnimation { duration: 200 } }
+    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
     SequentialAnimation {
         id: pop
@@ -79,18 +83,22 @@ Rectangle {
         spacing: 2
         Icon {
             id: turnIcon
+            objectName: "turnIcon"
             anchors.horizontalCenter: parent.horizontalCenter
-            name: chip.icon
+            name: chip.rerouting ? "refresh" : chip.icon
             size: 36
             color: Theme.accent
             transform: Translate { id: shift; y: 0 }
         }
         Label {
+            objectName: "turnLabel"
             anchors.horizontalCenter: parent.horizontalCenter
+            elide: Text.ElideRight
+            width: Math.min(implicitWidth, chip.width - 12)
             numeric: true
             font.pixelSize: Theme.fontSmall
             font.weight: Font.DemiBold
-            text: !chip.active ? "" : routing.arrived ? "Here" : Units.distanceText(routing.distanceToTurn)
+            text: !chip.active ? "" : chip.rerouting ? "Rerouting" : routing.arrived ? "Arrived" : Units.distanceText(routing.distanceToTurn)
         }
     }
 

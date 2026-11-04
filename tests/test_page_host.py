@@ -89,6 +89,25 @@ out["end_a"] = state(root, "a")
 out["end_b"] = state(root, "b")
 out["min_x"] = min(xs)
 
+# Reverse transition (1 -> 0): a comes in from -40, b leaves toward +40.
+def sample(inc, outg, key):
+    xi, xo = [], []
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 0.45:
+        wait(10)
+        xi.append(state(root, inc)["x"])
+        xo.append(state(root, outg)["x"])
+        if key + "_out" not in out and time.monotonic() - t0 >= 0.2:
+            out[key + "_out"] = state(root, outg)
+    out[key + "_in_x"] = xi
+    out[key + "_out_x"] = xo
+
+root.setProperty("cur", 0)
+sample("a", "b", "rev")
+# Second forward transition (0 -> 1).
+root.setProperty("cur", 1)
+sample("b", "a", "fwd2")
+
 # Switch back mid-animation.
 root.setProperty("cur", 0)
 wait(100)
@@ -140,6 +159,24 @@ class PageHostTest(unittest.TestCase):
 
     def test_overshoot_is_small(self):
         self.assertGreaterEqual(self.out["min_x"], -8)
+
+    def test_reverse_and_second_forward_transitions_keep_timing(self):
+        for key, sign in (("rev", 1), ("fwd2", -1)):
+            outgoing = self.out[key + "_out"]
+            self.assertEqual(outgoing["opacity"], 0, key)
+            self.assertFalse(outgoing["visible"], key)
+            xi = self.out[key + "_in_x"]
+            self.assertEqual(xi[-1], 0, key)
+            # Overshoot goes past 0 in the direction of travel, by under 8 px.
+            # rev: from -40, so positive; fwd2: from +40, so negative.
+            past = max(sign * x for x in xi)
+            self.assertGreater(past, 0, key)
+            self.assertLess(past, 8, key)
+
+    def test_outgoing_page_never_overshoots(self):
+        for key in ("rev", "fwd2"):
+            for x in self.out[key + "_out_x"]:
+                self.assertLessEqual(abs(x), 40, key)
 
     def test_switching_back_mid_animation_restores_first_page(self):
         a, b = self.out["back_a"], self.out["back_b"]

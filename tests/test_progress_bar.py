@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = r'''
 import json, sys
 from pathlib import Path
-from PyQt6.QtCore import QEventLoop, QObject, QTimer, QUrl
+from PyQt6.QtCore import QEventLoop, QMetaObject, QObject, QTimer, QUrl
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlComponent, QQmlEngine
 
@@ -97,31 +97,42 @@ def flash(obj):
 obj = make(0.4)
 out["fresh_flash"] = flash(obj).property("opacity")
 
+# Value changes alone never flash, however big or small.
 obj = make(0.2)
 obj.setProperty("value", 0.6)
-f = flash(obj)
-out["fwd_flash_now"] = f.property("opacity")
-out["fwd_flash_vis_now"] = f.property("visible")
-out["fwd_flash_shown"] = shown(obj)
-wait(500)
-out["fwd_flash_later"] = f.property("opacity")
-out["fwd_flash_vis_later"] = f.property("visible")
+out["fwd_value_flash"] = flash(obj).property("opacity")
 
 obj = make(0.9)
 obj.setProperty("value", 0.4)
-out["back_flash"] = flash(obj).property("opacity")
+out["back_value_flash"] = flash(obj).property("opacity")
 
-obj = make(0.30)
-obj.setProperty("value", 0.31)
-out["small_flash"] = flash(obj).property("opacity")
+obj = make(0.3)
+obj.setProperty("value", 0.0)
+out["restart_value_flash"] = flash(obj).property("opacity")
+
+obj = make(0.0)
+for i in range(1, 11):
+    obj.setProperty("value", i / 10.0)
+    out["tick_flash_%d" % i] = flash(obj).property("opacity")
 
 obj = make(0.95)
 obj.setProperty("value", 0.0)
 out["sweep_flash"] = flash(obj).property("opacity")
 
+# flashSeek() flashes once without moving the fill, then clears.
+obj = make(0.6)
+f = flash(obj)
+QMetaObject.invokeMethod(obj, "flashSeek")
+out["seek_flash_now"] = f.property("opacity")
+out["seek_flash_vis_now"] = f.property("visible")
+out["seek_flash_shown"] = shown(obj)
+wait(500)
+out["seek_flash_later"] = f.property("opacity")
+out["seek_flash_vis_later"] = f.property("visible")
+
 obj = make(0.2)
 obj.setProperty("visible", False)
-obj.setProperty("value", 0.6)
+QMetaObject.invokeMethod(obj, "flashSeek")
 out["hidden_flash"] = flash(obj).property("opacity")
 
 print(json.dumps(out))
@@ -165,24 +176,33 @@ class ProgressBarTest(unittest.TestCase):
     def test_fresh_bar_has_no_flash(self):
         self.assertEqual(self.out["fresh_flash"], 0)
 
-    def test_forward_jump_flashes_without_moving_then_clears(self):
-        self.assertGreater(self.out["fwd_flash_now"], 0)
-        self.assertTrue(self.out["fwd_flash_vis_now"])
-        self.assertAlmostEqual(self.out["fwd_flash_shown"], 0.6)
-        self.assertEqual(self.out["fwd_flash_later"], 0)
-        self.assertFalse(self.out["fwd_flash_vis_later"])
+    def test_value_changes_never_flash(self):
+        self.assertEqual(self.out["fwd_value_flash"], 0)
+        self.assertEqual(self.out["back_value_flash"], 0)
+        self.assertEqual(self.out["restart_value_flash"], 0)
 
-    def test_backward_jump_flashes(self):
-        self.assertGreater(self.out["back_flash"], 0)
-
-    def test_small_step_does_not_flash(self):
-        self.assertEqual(self.out["small_flash"], 0)
+    def test_one_second_ticks_on_a_short_track_do_not_flash(self):
+        for i in range(1, 11):
+            self.assertEqual(self.out["tick_flash_%d" % i], 0)
 
     def test_new_track_sweep_does_not_flash(self):
         self.assertEqual(self.out["sweep_flash"], 0)
 
+    def test_flash_seek_flashes_without_moving_then_clears(self):
+        self.assertGreater(self.out["seek_flash_now"], 0)
+        self.assertTrue(self.out["seek_flash_vis_now"])
+        self.assertAlmostEqual(self.out["seek_flash_shown"], 0.6)
+        self.assertEqual(self.out["seek_flash_later"], 0)
+        self.assertFalse(self.out["seek_flash_vis_later"])
+
     def test_invisible_bar_does_not_flash(self):
         self.assertEqual(self.out["hidden_flash"], 0)
+
+    def test_music_page_flashes_only_on_seek_release(self):
+        src = (ROOT / "qml" / "pages" / "MusicPage.qml").read_text()
+        self.assertEqual(src.count("flashSeek()"), 1)
+        released = src[src.index("onReleased"):]
+        self.assertIn("seekBar.flashSeek()", released[:300])
 
 
 if __name__ == "__main__":

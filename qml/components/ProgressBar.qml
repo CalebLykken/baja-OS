@@ -13,8 +13,14 @@ Rectangle {
     property real shown: 0
     // Last clamped value, to tell a new track from an ordinary change.
     property real _prev: 0
-    // False until the starting value is in, so creation never flashes.
-    property bool _ready: false
+
+    // Call when the user has just seeked (tap or drag release): brightens the
+    // fill once. Never triggered by value changes, so 1 s ticks, drags and
+    // track changes cannot flash.
+    function flashSeek() {
+        if (bar.visible)
+            flash.restart()
+    }
 
     height: 6
     radius: 3
@@ -29,7 +35,7 @@ Rectangle {
 
     // Seek acknowledgement: a lighter copy of the fill laid over it that
     // brightens once and fades. Invisible (not drawn) except for 280 ms after
-    // a seek jump; the bar's position is untouched.
+    // flashSeek(); the bar's position is untouched.
     Rectangle {
         id: seekFlash
         objectName: "seekFlash"
@@ -65,7 +71,6 @@ Rectangle {
         var v = Math.max(0, Math.min(1, value))
         shown = v
         _prev = v
-        _ready = true
     }
 
     onValueChanged: {
@@ -75,11 +80,6 @@ Rectangle {
         // 1 s position ticks and forward jumps must not animate, and drags
         // must follow the finger. A tick arriving mid-sweep stops it and snaps,
         // so the bar always ends on the true position.
-        // A jump of more than 0.08 either way that is not the sweep case also
-        // flashes the fill once. 1 s ticks and small drag steps stay below it.
-        var sweeps = _prev >= 0.5 && v <= 0.05 && bar.visible
-        if (_ready && !sweeps && bar.visible && Math.abs(v - _prev) > 0.08)
-            flash.restart()
         if (_prev >= 0.5 && v <= 0.05 && bar.visible) {
             sweep.from = shown
             sweep.to = v

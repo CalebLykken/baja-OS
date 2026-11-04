@@ -142,9 +142,11 @@ class KeyOff(QObject):
     work (`error`)."""
     changed = pyqtSignal()
 
-    def __init__(self, obd, gps, settings, power_off, parent=None):
+    def __init__(self, obd, gps, settings, power_off, cancel_power=None, parent=None):
         super().__init__(parent)
         self._obd, self._gps, self._settings, self._power_off = obd, gps, settings, power_off
+        self._cancel_power = cancel_power or (lambda: None)  # drops a power_off still waiting
+        self._asked = False                 # power_off was called, and not withdrawn since
         self._held = False                  # the OBD reader is told to keep quiet
         self._logic = KeyOffLogic()
         self._enabled = str(settings.get(SETTING, "false")) == "true"
@@ -197,7 +199,18 @@ class KeyOff(QObject):
         if self._logic.power_off_now(left):
             print("Key off: the car has been quiet; shutting down", flush=True)
             self._hold(True)                # the adapter stays quiet while the Pi powers off
+            self._asked = True
             self._power_off()
+        elif self._asked and left is None:
+            self._withdraw()                # the key came back (or it's moving) first
+
+    def _withdraw(self):
+        """Take back a power_off that's still waiting (for an update to
+        finish): the reason for it is gone."""
+        if self._asked:
+            self._asked = False
+            self._cancel_power()
+            self._hold(False)
 
     def _hold(self, on):
         """Tell the OBD reader to stop sending, or carry on. Only once each way."""
@@ -210,6 +223,7 @@ class KeyOff(QObject):
         if not self._held and self._countdown < 0 and not self._logic.done:
             return                          # not from here (Settings > Shut down)
         print(f"Key off: couldn't shut down: {why}", flush=True)
+        self._asked = False
         self._logic.failed()
         self._hold(False)
         self._error = why
@@ -249,6 +263,7 @@ class KeyOff(QObject):
     @pyqtSlot()
     def keepOn(self):
         self._logic.keep_on()
+        self._withdraw()
         self._hold(False)
         print("Key off: kept on", flush=True)
         self._tick()

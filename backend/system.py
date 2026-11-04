@@ -270,6 +270,14 @@ class SystemInfo(QObject):
             self._held = None
             self._run_power(action)
 
+    def cancel_power(self):
+        """Drop a reboot or shut down that's waiting for the update, e.g. the
+        key came back on. Does nothing once systemctl has been asked."""
+        if self._held is not None:
+            print(f"System: {self._held[0]} cancelled", flush=True)
+        self._hold_timer.stop()
+        self._held = None
+
     def _power(self, action):
         if self._power_error:
             self._power_error = ""

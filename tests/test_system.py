@@ -115,6 +115,17 @@ class HoldTest(unittest.TestCase):
         self.tick()                         # still merging: shuts down anyway
         self.assertEqual(self.asked, ["poweroff"])
 
+    def test_cancelling_drops_the_wait(self):
+        self.sys.powerOff()
+        self.sys.cancel_power()
+        self.assertFalse(self.sys._hold_timer.isActive())
+        self.assertIsNone(self.sys._held)
+        self.assertEqual(self.asked, [])
+
+    def test_cancelling_with_nothing_waiting_is_harmless(self):
+        self.sys.cancel_power()
+        self.assertIsNone(self.sys._held)
+
     def test_asking_again_does_not_extend_the_wait(self):
         self.sys.powerOff()
         until = self.sys._held[1]

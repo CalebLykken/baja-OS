@@ -271,7 +271,7 @@ def main():
     routing.speak.connect(voice.say)
     # Shut down cleanly once the truck is turned off (the car stops
     # answering the OBD adapter), inside the power relay's hold time.
-    key_off = KeyOff(obd, gps, settings, power_off=system.powerOff)
+    key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power)
     system.powerFailed.connect(key_off.power_failed)
 
     clock.mark("backends")

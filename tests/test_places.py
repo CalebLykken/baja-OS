@@ -332,5 +332,15 @@ class ReadRegionTest(unittest.TestCase):
         self.assertTrue(all(isinstance(v, float) for v in info["bbox"]))
 
 
+class DecompressTest(unittest.TestCase):
+    def test_gzip_tiles_are_inflated_and_others_pass_through(self):
+        import gzip
+        from backend.places import _decompress
+        self.assertEqual(_decompress(gzip.compress(b"tile"), 2), b"tile")
+        self.assertEqual(_decompress(b"raw", 1), b"raw")
+        with self.assertRaises(ValueError):
+            _decompress(b"x", 9)
+
+
 if __name__ == "__main__":
     unittest.main()

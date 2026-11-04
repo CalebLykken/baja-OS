@@ -44,7 +44,6 @@ from PyQt6.QtGui import QColor, QImage, QPainter
 from backend import errorlog, safe_emit
 
 from backend import places, retry
-from backend.vendor.qrcodegen import QrCode
 
 PORT = 8780
 TOKEN_FILE = Path("~/.config/baja-os/send-token").expanduser()
@@ -627,6 +626,8 @@ class PhoneSend(QObject):
         if not url:
             return ""
         if url != self._qr_for:
+            # Imported here, only when a code is drawn, to keep it off the startup path.
+            from backend.vendor.qrcodegen import QrCode
             # A new file name per address and reset: image links can't carry
             # a query to defeat caching.
             self._qr_path = self._qr_dir / f"baja-send-qr-{self._revision}-{abs(hash(url)) % 100000}.png"

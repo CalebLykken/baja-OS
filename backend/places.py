@@ -12,7 +12,6 @@ Python (gzip, sqlite3): a minimal PMTiles v3 reader and Mapbox Vector Tile
 decoder, enough to pull out names and positions.
 """
 
-import gzip
 import json
 import math
 import sqlite3
@@ -88,6 +87,7 @@ def _decompress(data, kind):
     if kind in (0, 1):            # unknown / none
         return data
     if kind == 2:
+        import gzip                  # only for gzip tiles, keeps it off the startup path
         return gzip.decompress(data)
     raise ValueError(f"unsupported PMTiles compression {kind}")
 

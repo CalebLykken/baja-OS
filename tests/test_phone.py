@@ -13,6 +13,8 @@ import json
 import os
 import socket
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -486,6 +488,29 @@ class ResolveTest(unittest.TestCase):
             phone.resolve({"text": "see you soon"}, self.maps)
         with self.assertRaises(ValueError):
             phone.resolve({}, self.maps)
+
+
+class QrForTest(TempTokenFile):
+    def test_a_code_is_drawn_to_a_png_file(self):
+        svc = self.service()
+        self.assertEqual(svc.qrFor(""), "")
+        url = svc.qrFor("http://192.168.1.2:8765/send?k=x")
+        self.assertTrue(url.startswith("file://"))
+        path = Path(QUrl(url).toLocalFile())
+        self.assertEqual(path.suffix, ".png")
+        self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+
+class StartupImportTest(unittest.TestCase):
+    def test_qr_code_and_gzip_stay_off_the_startup_path(self):
+        # A subprocess, so other tests' imports don't show up in sys.modules.
+        code = ('import sys, backend.phone; '
+                'print("backend.vendor.qrcodegen" in sys.modules, "gzip" in sys.modules)')
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        repo = Path(__file__).resolve().parent.parent
+        out = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env,
+                             capture_output=True, text=True, check=True).stdout
+        self.assertEqual(out.split(), ["False", "False"])
 
 
 if __name__ == "__main__":

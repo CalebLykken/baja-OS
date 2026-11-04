@@ -20,6 +20,45 @@ MOVING_MS = 2.0           # below this the fixes are too close together to match
 KEEP_S = 20               # a limit older than this (no match since) is dropped
 GAP_S = 5.0               # a few missed fixes is still one drive; longer and the old points can't be trusted to join up
 TRACE_EVERY_S = 0.8       # the trace keeps about one fix a second, however often they come
+MAX_KMH = 200             # no posted limit is above this; a bigger number is a bad answer
+
+
+def _limit_of(value):
+    """A limit in km/h: 0 when the road has none, None when the value isn't a sane limit."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)):
+        return None
+    if value == 0:
+        return 0
+    # NaN and infinity fail this comparison too, so they never get past it
+    if not 0 < value <= MAX_KMH:
+        return None
+    return round(value)
+
+
+def parse_match(answer):
+    """The (limit, name) of the road the truck is on, from Valhalla's answer,
+    or None when the answer isn't the usual shape (the caller keeps the last match)."""
+    if not isinstance(answer, dict):
+        return None
+    edges = answer.get("edges")
+    if not isinstance(edges, list) or not edges or not isinstance(edges[-1], dict):
+        return None
+    last = edges[-1]                             # the road the truck is on now
+    limit = _limit_of(last.get("speed_limit"))
+    names = last.get("names")
+    if limit is None or not (names is None or isinstance(names, list)):
+        return None
+    name = names[0] if names and isinstance(names[0], str) else ""
+    return limit, name
 
 
 class RoadInfo(QObject):
@@ -69,12 +108,12 @@ class RoadInfo(QObject):
                 req = urllib.request.Request(ROUTER + "/trace_attributes", data=body,
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=5) as r:
-                    edges = json.loads(r.read()).get("edges") or []
-                if edges:
-                    last = edges[-1]                 # the road the truck is on now
-                    limit, name = int(last.get("speed_limit") or 0), str((last.get("names") or [""])[0])
-            except (OSError, ValueError, AttributeError, TypeError, KeyError, IndexError):
-                pass          # no match this time, or an answer that isn't the usual shape: keep the last one
+                    match = parse_match(json.loads(r.read()))
+                if match is not None:
+                    limit, name = match
+            except Exception:
+                # a worker must never leak an error: no match this time, keep the last one
+                pass
             finally:
                 safe_emit(self, "_matched", limit, name)    # always, or _busy would never clear
         threading.Thread(target=work, name="road-match", daemon=True).start()

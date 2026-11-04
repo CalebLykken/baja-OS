@@ -110,7 +110,7 @@ class SoloistEventsTest(unittest.TestCase):
 
     def test_a_soloist_error_shows_a_short_message_until_playback_moves(self):
         self.send(type="error", message="429 too many requests")
-        self.assertEqual(self.sp.error, "Spotify isn't answering right now")
+        self.assertEqual(self.sp.error, "Can't reach Spotify right now")
         self.send(type="playback_state", status="playing")
         self.assertEqual(self.sp.error, "")
 

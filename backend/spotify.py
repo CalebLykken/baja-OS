@@ -238,7 +238,7 @@ class SpotifyPlayer(QObject):
         elif kind == "error":
             print(f"Spotify: {ev.get('message')}")
             signing_in = "authentication" in _get(ev, "message", want=str).lower()
-            self._error = "Spotify is still connecting" if signing_in else "Spotify isn't answering right now"
+            self._error = "Spotify is still connecting" if signing_in else "Can't reach Spotify right now"
             self.changed.emit()
 
     def _set_item(self, item):

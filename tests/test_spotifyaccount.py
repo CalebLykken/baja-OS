@@ -224,7 +224,7 @@ class StayingLinkedTest(AccountCase):
         self.assertTrue(a.linked)
         self.assertTrue(self.login.exists())
         self.assertEqual(len(a.songs), 1)
-        self.assertEqual(a.message, "Can't reach Spotify right now")
+        self.assertEqual(a.message, "Can't reach Spotify right now. Is the phone's hotspot on?")
 
     def test_a_server_error_never_loses_the_login(self):
         a = self.linked_account()
@@ -240,7 +240,7 @@ class StayingLinkedTest(AccountCase):
         a.refresh()
         self.assertFalse(a.linked)
         self.assertFalse(self.login.exists())
-        self.assertIn("scan the code", a.message)
+        self.assertIn("Scan the code", a.message)
 
     def test_signing_out_forgets_everything(self):
         a = self.linked_account()
@@ -343,7 +343,7 @@ class LibraryTest(AccountCase):
         self.answers["playlists"] = TypeError("odd shape")
         a.refresh()
         self.assertFalse(a.loading)
-        self.assertEqual(a.message, "Can't reach Spotify right now")
+        self.assertEqual(a.message, "Spotify sent something unexpected. It tries again by itself")
         self.assertEqual((len(a.playlists), len(a.albums), len(a.songs)), (1, 1, 1))
         self.assertTrue(a.linked)
         self.assertTrue(self.login.exists())
@@ -367,7 +367,7 @@ class LibraryTest(AccountCase):
         a = self.linked_account()
         self.answers["playlists"] = http_error(503)
         a.refresh()
-        self.assertEqual(a.message, "Can't reach Spotify right now")
+        self.assertEqual(a.message, "Can't reach Spotify right now. Is the phone's hotspot on?")
         waits = []
         for _ in range(8):
             self.assertTrue(a._retry.isActive())

@@ -78,7 +78,7 @@ Rectangle {
                     // (OutBack). The same numbers are used in Card, TextButton,
                     // IconButton, NavButton, Keyboard and SegmentedControl. Runs
                     // only on a touch, so there is no idle cost.
-                    Behavior on scale { NumberAnimation { duration: tap.pressed ? 70 : 180; easing.type: tap.pressed ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
+                    Behavior on scale { id: pressSpring; NumberAnimation { duration: pressSpring.targetValue < 1 ? 70 : 180; easing.type: pressSpring.targetValue < 1 ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
                     Behavior on color { ColorAnimation { duration: 150 } }
                     font.pixelSize: Theme.fontBody - 2
                     font.weight: parent.selected ? Font.DemiBold : Font.Normal

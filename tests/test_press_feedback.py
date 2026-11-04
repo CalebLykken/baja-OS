@@ -4,7 +4,8 @@ with OutQuad, a release springs back in 180 ms with OutBack, and nothing
 runs while idle: no loops, layer effects or new timers. The static checks
 read the QML text; the load check creates each component in a child process,
 like tests/test_source_badge.py, and checks it loads with no QML warnings and
-rests at scale 1.
+rests at scale 1. The behaviour check presses a real TextButton in a
+QQuickView and samples its scale while the animations run.
 
     python3 -m unittest tests.test_press_feedback
 """
@@ -107,7 +108,8 @@ class PressFeedbackStaticTest(unittest.TestCase):
         for name in FILES:
             with self.subTest(file=name):
                 text = read(name)
-                self.assertIn("? 70 : 180", text)
+                self.assertIn("pressSpring.targetValue < 1 ? 70 : 180", text)
+                self.assertIn("id: pressSpring", text)
                 self.assertIn("easing.overshoot: 2.5", text)
 
     def test_segmented_label_dips_only_when_pressed_and_not_selected(self):
@@ -120,6 +122,89 @@ class PressFeedbackStaticTest(unittest.TestCase):
                 self.assertNotIn("loops:", text)
                 self.assertNotIn("layer.enabled", text)
                 self.assertEqual(text.count("Timer"), TIMERS_ALLOWED.get(name, 0))
+
+
+BEHAVIOUR_SCRIPT = r'''
+import sys, time, json
+from pathlib import Path
+from PyQt6.QtCore import QPoint, Qt, QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQuick import QQuickView
+from PyQt6.QtTest import QTest
+
+app = QGuiApplication(sys.argv[:1])
+ROOT = Path(sys.argv[1])
+
+view = QQuickView()
+view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+view.setSource(QUrl.fromLocalFile(str(ROOT / "qml" / "components" / "TextButton.qml")))
+view.resize(320, 120)
+view.show()
+deadline = time.monotonic() + 10
+while not view.isExposed() and time.monotonic() < deadline:
+    app.processEvents()
+    time.sleep(0.01)
+button = view.rootObject()
+if button is None:
+    print(json.dumps({"error": "TextButton did not load"}))
+    sys.exit(0)
+button.setProperty("text", "Go")
+centre = QPoint(160, 60)
+
+
+def sample(ms):
+    values = []
+    end = time.monotonic() + ms / 1000.0
+    while time.monotonic() < end:
+        app.processEvents()
+        values.append(float(button.property("scale")))
+        time.sleep(0.002)
+    return values
+
+
+press, release = [], []
+rest = float(button.property("scale"))
+for _ in range(2):
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+    press += sample(250)
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+    release += sample(250)
+
+print(json.dumps({
+    "rest": rest,
+    "press_min": min(press),
+    "release_max": max(release),
+    "press_samples": len(press),
+    "release_samples": len(release),
+}))
+sys.stdout.flush()
+'''
+
+
+class PressFeedbackBehaviourTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        result = subprocess.run([sys.executable, "-c", BEHAVIOUR_SCRIPT, str(ROOT)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=120,
+                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        cls.stderr = result.stderr
+        cls.returncode = result.returncode
+        lines = result.stdout.strip().splitlines()
+        cls.data = json.loads(lines[-1]) if result.returncode == 0 and lines else {}
+
+    def setUp(self):
+        self.assertEqual(self.returncode, 0, self.stderr)
+        self.assertNotIn("error", self.data, self.data.get("error"))
+
+    def test_a_press_dips_shallowly(self):
+        self.assertGreaterEqual(self.data["press_min"], 0.97 - 1e-3)
+
+    def test_a_press_really_moves_the_button(self):
+        # Guards against the press check passing because nothing animated.
+        self.assertLess(self.data["press_min"], 1.0)
+
+    def test_a_release_springs_past_rest(self):
+        self.assertGreater(self.data["release_max"], 1.001)
 
 
 class PressFeedbackLoadTest(unittest.TestCase):

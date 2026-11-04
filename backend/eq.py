@@ -12,6 +12,7 @@ import subprocess
 import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtMultimedia import QMediaDevices
 
 from backend import errorlog, safe_emit
 
@@ -33,7 +34,8 @@ PRESETS = {
     "Vocal": [-2, -1, 2, 4, 1],
     "Bright": [0, 0, 0, 3, 6],
 }
-CHECK_EVERY_MS = 5000
+CHECK_EVERY_MS = 5000       # filter missing: look for it
+FOUND_CHECK_MS = 30000      # filter running: only a PipeWire restart can change it
 
 
 def _pw_cli(*args, timeout=3):
@@ -76,6 +78,7 @@ class Equalizer(QObject):
         self._pw = bool(shutil.which("pw-cli"))
         self._node = None
         self._pending = None
+        self._devices = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._found.connect(self._on_found)
@@ -87,6 +90,10 @@ class Equalizer(QObject):
         if not self._pw:
             return
         threading.Thread(target=self._writer, name="eq-writer", daemon=True).start()
+        # The slow 30 s check would leave a crashed-and-restarted filter flat
+        # for a while; its sink coming back shows up here at once.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._check)
         self._check()
         self._timer.start()
 
@@ -120,6 +127,9 @@ class Equalizer(QObject):
             self._push()              # (re)started, even under the same id: give it our gains
         if (info is None) != (was is None):
             self.changed.emit()
+        wanted = FOUND_CHECK_MS if info is not None else CHECK_EVERY_MS
+        if self._timer.interval() != wanted:
+            self._timer.setInterval(wanted)   # restarts the countdown, so only when it changes
 
     def _push(self):
         """Queue the current gains for the writer thread (latest wins)."""

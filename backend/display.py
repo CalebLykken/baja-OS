@@ -58,7 +58,17 @@ class DdcBrightness:
 
     def __init__(self, path):
         self._fd = os.open(path, os.O_RDWR)
-        fcntl.ioctl(self._fd, I2C_SLAVE, DDC_ADDR)
+        try:
+            fcntl.ioctl(self._fd, I2C_SLAVE, DDC_ADDR)
+        except BaseException:
+            os.close(self._fd)
+            raise
+
+    def close(self):
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
 
     def _send(self, payload):
         msg = bytes([0x51, 0x80 | len(payload)]) + bytes(payload)
@@ -156,15 +166,26 @@ class Display(QObject):
                 try:
                     self._ddc = DdcBrightness(path)
                     current, self._max = self._ddc.get()
+                    if self._max <= 0:
+                        # A zeroed reply would scale every write to 0: a black screen.
+                        raise OSError(f"panel reports a maximum of {self._max}")
+                    current = max(0, min(self._max, current))
                 except OSError as e:
                     print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
-                    self._ddc = None
+                    self._give_up()
         except Exception as e:
             print(f"Brightness: DDC probe failed ({e}); dimming in software")
-            self._ddc = None
+            self._give_up()
         finally:
             ok = self._ddc is not None
             safe_emit(self, "_probe_done", ok, current if ok else 0, self._max if ok else 100)
+
+    def _give_up(self):
+        """Drop a device the probe opened but can't use."""
+        if self._ddc is not None:
+            self._ddc.close()
+        self._ddc = None
+        self._max = 100
 
     def _probed(self, ok, current, maximum):
         self._probing = False
@@ -199,7 +220,7 @@ class Display(QObject):
                 self._ddc.set(round(value * self._max / 100))
                 self._written = value
                 return
-            except OSError as e:
+            except Exception as e:
                 print(f"Brightness: DDC/CI write failed ({e})")
                 if attempt + 1 < DDC_TRIES:
                     time.sleep(DDC_RETRY_S)

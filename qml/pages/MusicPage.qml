@@ -888,7 +888,16 @@ Item {
         height: 92
         radius: Theme.radius
         color: resultTap.pressed ? Theme.panelHi : "transparent"
-        TapHandler { id: resultTap; onTapped: result.hit() }
+        // The + key sits inside the row, and TapHandler's passive grab lets
+        // both handlers see one tap, so the row ignores taps that land on it.
+        TapHandler {
+            id: resultTap
+            onTapped: (point) => {
+                const p = queueKey.mapFromItem(result, point.position.x, point.position.y)
+                if (!(queueKey.visible && queueKey.contains(p)))
+                    result.hit()
+            }
+        }
         RowLayout {
             anchors { fill: parent; leftMargin: 6; rightMargin: 6 }
             spacing: 14
@@ -916,6 +925,7 @@ Item {
                 }
             }
             IconButton {
+                id: queueKey
                 visible: result.kind === "track"
                 icon: "add"
                 size: 84

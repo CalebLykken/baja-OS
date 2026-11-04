@@ -396,7 +396,8 @@ Card {
                                legend.y - 4 - height))
         spacing: 0
         Label {
-            objectName: "gaugeValue"
+            id: num
+            objectName: "gaugeNumber"
             anchors.horizontalCenter: parent.horizontalCenter
             numeric: true
             text: g.known ? g.value.toFixed(g.decimals) : "—"

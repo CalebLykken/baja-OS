@@ -116,7 +116,7 @@ out = {"card": {"x": 0, "y": 0, "w": speed.width(), "h": speed.height()},
        "note_visible": note.isVisible(), "note_text": note.property("text"),
        "note_implicit": note.implicitWidth(),
        "note_worst": QFontMetricsF(wide).horizontalAdvance("0-100  12.4 s"),
-       "legend": rect(named("gaugeLegend")), "value": rect(named("gaugeValue")),
+       "legend": rect(named("gaugeLegend")), "value": rect(named("gaugeNumber")),
        "unit": rect(named("gaugeUnit")), "note": rect(note),
        "hub_bottom": speed.height() / 2 + 8 + 13,
        "other_card_widths": [g.width() for g in gauges if g is not speed]}

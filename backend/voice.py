@@ -21,12 +21,14 @@ end for good.
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
@@ -122,6 +124,41 @@ def clamp_level(value):
     except (TypeError, ValueError, OverflowError):
         value = VOICE_LEVEL_DEFAULT
     return max(VOICE_LEVEL[0], min(VOICE_LEVEL[1], value))
+
+
+_ARRIVED = re.compile(r"^You have arrived at (.+)\.$")
+_ARRIVAL_MORNING = ("Made it to {n}. Have a good morning.",)
+_ARRIVAL_EVENING = ("Here we are, {n}. Enjoy your evening.",)
+_ARRIVAL_NIGHT = ("{n}. Made it, drive safe getting in.",)
+_ARRIVAL_ANY = ("You have arrived at {n}.", "You've arrived at {n}.",
+                "And that's {n}. Nice driving.")
+_ARRIVAL_HOME = ("Home sweet home.", "Welcome home.",
+                 "You have arrived at {n}.")
+
+
+def arrival_line(text, now=None, pick=random.choice):
+    """The spoken destination line with a little variety; anything else, and
+    any failure, comes back unchanged."""
+    try:
+        m = _ARRIVED.match(text)
+        if not m or ". Continuing to " in m.group(1):
+            return text
+        name = m.group(1)
+        if name.strip().lower() == "home":
+            options = _ARRIVAL_HOME
+        else:
+            hour = (now or datetime.now()).hour
+            if 5 <= hour < 11:
+                options = _ARRIVAL_MORNING + _ARRIVAL_ANY
+            elif 17 <= hour < 22:
+                options = _ARRIVAL_EVENING + _ARRIVAL_ANY
+            elif hour >= 22 or hour < 5:
+                options = _ARRIVAL_NIGHT + _ARRIVAL_ANY
+            else:
+                options = _ARRIVAL_ANY
+        return pick(options).replace("{n}", name)
+    except Exception:
+        return text
 
 
 def _state_file():

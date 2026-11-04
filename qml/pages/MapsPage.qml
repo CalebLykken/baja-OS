@@ -880,6 +880,16 @@ Item {
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }
+                    MapLabel {                           // "23 min · 3 min early", set once at arrival
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        visible: page.hasRouting && routing.arrived && routing.arrivalSummary !== ""
+                        numeric: true
+                        text: visible ? routing.arrivalSummary : ""
+                        color: page.cOnBanner
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
                 }
             }
 

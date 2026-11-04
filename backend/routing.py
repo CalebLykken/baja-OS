@@ -585,6 +585,9 @@ class Router(QObject):
         self._clock = time.monotonic  # for off-route timing (tests use a fake one)
         self._last_reroute = 0.0
         self._arrived = False
+        self._go_at = None            # clock when guidance began, and the ETA it promised (s)
+        self._go_eta = None
+        self._arrival_summary = ""    # "23 min · 3 min early", worked out once at arrival
         # Ends the trip a little after arriving; cancelled by anything new.
         self._arrive_timer = QTimer(self, singleShot=True, interval=20000, timeout=self.stop)
         # The route from before a restart, until it can be asked for again,
@@ -770,6 +773,7 @@ class Router(QObject):
         self._stops_failed = ""
         self._route = route
         self._arrived = False
+        self._arrival_summary = ""
         self._arrive_timer.stop()
         self._off_count = 0
         self._spoken = set()
@@ -778,6 +782,7 @@ class Router(QObject):
             self._begin("Rerouting. ")
         if resumed and resumed["started"]:
             self._go(f"Continuing to {self._stops[0][0] if self._stops else name}. ")
+            self._go_at = self._go_eta = None       # no honest start time after a restart
         elif resumed:
             self.resumed.emit(name, resumed["lon"], resumed["lat"])
         self.changed.emit()
@@ -799,6 +804,7 @@ class Router(QObject):
     def _go(self, prefix=""):
         if self._route and not self._started:
             self._started = True
+            self._go_at, self._go_eta = self._clock(), self._route.time
             self._route.locate(self._gps.lon, self._gps.lat)
             self._begin(prefix)
             self._save()
@@ -950,6 +956,8 @@ class Router(QObject):
             self._gps.clearPath()
         self._started = False
         self._arrived = False       # a new place ends the arrival's wait to stop
+        self._arrival_summary = ""
+        self._go_at = self._go_eta = None
         self._arrive_timer.stop()
         self._route = None
         self._last_said = ""
@@ -963,6 +971,8 @@ class Router(QObject):
         self._arrive_timer.stop()
         self._gps.clearPath()
         self._started = False
+        self._go_at = self._go_eta = None
+        self._arrival_summary = ""
         self._route = None
         self._last_said = ""
         self._dest = None
@@ -1002,6 +1012,7 @@ class Router(QObject):
         r.locate(self._gps.lon, self._gps.lat, self._gps.heading, self._gps.speed, now)
         if r.remaining < ARRIVED_M and r.to_end < ARRIVED_M and not self._arrived:
             self._arrived = True
+            self._arrival_summary = self._summarise(now)
             self._forget()                          # shown a little longer, but done
             self._say(f"You have arrived at {r.name}.")
             self._arrive_timer.start()
@@ -1088,6 +1099,24 @@ class Router(QObject):
     @pyqtProperty(bool, notify=progressChanged)
     def arrived(self):
         return self._arrived
+
+    @pyqtProperty(str, notify=progressChanged)
+    def arrivalSummary(self):
+        return self._arrival_summary if self._arrived else ""
+
+    def _summarise(self, now):
+        """How the drive went against the first ETA, once, at arrival."""
+        if self._go_at is None or self._go_eta is None:
+            return ""
+        elapsed = max(0.0, now - self._go_at)
+        diff = elapsed - self._go_eta
+        mins = round(abs(diff) / 60)
+        if abs(diff) < 90 or mins < 1:
+            verdict = "right on time"
+        else:
+            verdict = f"{mins} min {'late' if diff > 0 else 'early'}"
+        took = f"{round(elapsed / 60)} min" if elapsed >= 60 else "under a minute"
+        return f"{took} · {verdict}"
 
     @pyqtProperty(str, notify=progressChanged)
     def instruction(self):

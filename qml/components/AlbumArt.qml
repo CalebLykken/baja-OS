@@ -10,7 +10,11 @@ import QtQuick
 // A track change crossfades: the new cover loads into the hidden one of two
 // Images and fades in over the old one (which stays opaque underneath, so
 // there is no dip), then the old one is emptied to free its texture. The
-// tile only shows when there is genuinely no cover.
+// tile only shows when there is genuinely no cover. The incoming cover also
+// settles like a print dropped onto the card: it grows from 94% to full size
+// (a small overshoot) during the same 250 ms. That is a one-shot transform on
+// an existing texture, skipped when the card isn't visible, and nothing runs
+// once it ends.
 Item {
     id: root
     property string source                 // rounded cover (media.artCard)
@@ -26,6 +30,8 @@ Item {
     property string target: ""        // newest source asked for
     property bool pending: false      // back is loading the target
     property bool wantTile: false     // no cover (or it failed): show the tile
+    readonly property real frontScale: front.scale
+    readonly property bool fadeRunning: fadeIn.running
     readonly property bool frontShown: front.status === Image.Ready && front.opacity > 0
 
     function apply(src) {
@@ -35,6 +41,8 @@ Item {
         pending = false
         fadeIn.stop()
         fadeOut.stop()
+        imgA.scale = 1
+        imgB.scale = 1
         back.opacity = 0
         back.source = ""
         if (src === "") {
@@ -50,6 +58,7 @@ Item {
         if (front.source == src) {
             // Back to the cover that is still showing (or just fading out).
             front.opacity = 1
+            front.scale = 1
             return
         }
         pending = true
@@ -63,7 +72,14 @@ Item {
             return
         if (back.status === Image.Ready) {
             pending = false
-            fadeIn.target = back
+            if (!root.visible) {
+                // Nobody can see it: swap at once.
+                back.opacity = 1
+                back.scale = 1
+                retire()
+                return
+            }
+            fadeIn.incoming = back
             fadeIn.start()
         } else if (back.status === Image.Error) {
             // Honest fallback: no cover, show the tile.
@@ -80,17 +96,28 @@ Item {
     onSourceChanged: apply(source)
     Component.onCompleted: apply(source)
 
-    NumberAnimation {
+    // The new cover is fully opaque and full size: retire the old one.
+    function retire() {
+        var old = root.front
+        root.aFront = !root.aFront
+        old.source = ""
+        old.opacity = 0
+        old.scale = 1
+        root.front.scale = 1
+    }
+
+    ParallelAnimation {
         id: fadeIn
-        property: "opacity"; from: 0; to: 1
-        duration: 250; easing.type: Easing.InOutQuad
-        onFinished: {
-            // The new cover is fully opaque: retire the old one.
-            var old = root.front
-            root.aFront = !root.aFront
-            old.source = ""
-            old.opacity = 0
+        property var incoming: null
+        NumberAnimation {
+            target: fadeIn.incoming; property: "opacity"; from: 0; to: 1
+            duration: 250; easing.type: Easing.InOutQuad
         }
+        NumberAnimation {
+            target: fadeIn.incoming; property: "scale"; from: 0.94; to: 1.0
+            duration: 250; easing.type: Easing.OutBack
+        }
+        onFinished: root.retire()
     }
 
     NumberAnimation {

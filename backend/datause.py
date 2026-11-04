@@ -7,7 +7,7 @@ the change since the last one (or the whole reading, if it went down). The
 last readings are saved too, so a restart doesn't lose or double count.
 
 When a month ends, its total is kept and shown as a small fact next to the
-new month's ("120 MB (Oct: 2.1 GB)"), but only while it is the month just
+new month's ("120 MB (2.1 GB last month)"), but only while it is the month just
 before the current one.
 
 It doesn't tell the phone's hotspot from home Wi-Fi, so it counts all Wi-Fi
@@ -24,7 +24,6 @@ SAMPLE_EVERY_MS = 60000
 FIRST_SAMPLE_MS = 5000     # keeps the settings write off the startup path; well under SAMPLE_EVERY_MS
 SYS_NET = "/sys/class/net"
 SETTING = "dataUse"
-MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 MAX_PREV_BYTES = 10 ** 15     # anything bigger in the saved setting is garbage
 
 
@@ -149,5 +148,4 @@ class DataUse(QObject):
         prev = self._last_month()
         if not prev:
             return format_bytes(self._bytes)
-        # The short month name, not "last month": that wouldn't fit the Settings card in DejaVu Sans Bold.
-        return f"{format_bytes(self._bytes)} ({MONTHS[int(self._prev_month[5:7]) - 1]}: {format_bytes(prev)})"
+        return f"{format_bytes(self._bytes)} ({format_bytes(prev)} last month)"

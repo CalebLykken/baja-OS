@@ -148,13 +148,13 @@ class DataUseTests(unittest.TestCase):
 
     def test_rollover_keeps_last_month(self):
         du = self.roll(stamp(2026, 11, 2))
-        self.assertEqual(du.text, "0 KB (Oct: 2.1 GB)")
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
         self.assertEqual(du.lastMonthBytes, 2_100_000_000)
 
     def test_rollover_across_new_year(self):
         self.now = stamp(2026, 12, 20)
         du = self.roll(stamp(2027, 1, 3))
-        self.assertEqual(du.text, "0 KB (Dec: 2.1 GB)")
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
         self.assertEqual(du.lastMonthBytes, 2_100_000_000)
 
     def test_skipped_month_shows_no_last_month(self):
@@ -174,7 +174,7 @@ class DataUseTests(unittest.TestCase):
         self.roll(stamp(2026, 11, 2))
         du = self.make()
         self.assertEqual(du.lastMonthBytes, 2_100_000_000)
-        self.assertEqual(du.text, "0 KB (Oct: 2.1 GB)")
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
 
     def test_stale_last_month_is_not_shown(self):
         self.roll(stamp(2026, 11, 2))

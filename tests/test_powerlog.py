@@ -8,8 +8,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from backend.powerlog import KERNEL_WORTH_KEEPING, flag_names, parse_pmic, prune
+from backend.powerlog import (KERNEL_BACKOFF_FIRST, KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S,
+                              KERNEL_WORTH_KEEPING, flag_names, kernel_cmd, next_backoff,
+                              parse_pmic, prune)
 
 PMIC = """\
      3V7_WL_SW_A current(0)=0.10000000A
@@ -63,6 +66,55 @@ class PruneTest(unittest.TestCase):
                 os.utime(f, (i, i))
             prune(d, keep=2)
             self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["2.log", "3.log"])
+
+    def test_a_file_vanishing_midway_is_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(4):
+                f = Path(d, f"{i}.log")
+                f.write_text("x")
+                os.utime(f, (i, i))
+            real = Path.stat
+
+            def flaky(self, *a, **k):
+                if self.name == "1.log":
+                    raise FileNotFoundError(self.name)
+                return real(self, *a, **k)
+
+            with mock.patch.object(Path, "stat", flaky):
+                prune(d, keep=2)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["1.log", "2.log", "3.log"])
+
+    def test_a_failed_delete_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(3):
+                Path(d, f"{i}.log").write_text("x")
+            with mock.patch.object(Path, "unlink", side_effect=PermissionError):
+                prune(d, keep=1)
+
+
+class KernelFollowerTest(unittest.TestCase):
+    def test_first_run_reads_the_whole_boot(self):
+        cmd = kernel_cmd(first=True)
+        self.assertEqual(cmd[cmd.index("-n") + 1], "all")
+        self.assertNotIn("--since", cmd)
+
+    def test_restart_only_wants_new_lines(self):
+        cmd = kernel_cmd(first=False)
+        self.assertNotIn("all", cmd)
+        self.assertEqual(cmd[cmd.index("--since") + 1], "now")
+        self.assertIn("-f", cmd)
+
+    def test_backoff_doubles_to_the_cap(self):
+        wait, seen = KERNEL_BACKOFF_FIRST, []
+        for _ in range(10):
+            wait = next_backoff(wait, 1)
+            seen.append(wait)
+        self.assertEqual(seen[:3], [10, 20, 40])
+        self.assertEqual(seen[-1], KERNEL_BACKOFF_MAX)
+        self.assertLessEqual(max(seen), KERNEL_BACKOFF_MAX)
+
+    def test_backoff_resets_after_a_long_run(self):
+        self.assertEqual(next_backoff(KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S + 1), KERNEL_BACKOFF_FIRST)
 
 
 if __name__ == "__main__":

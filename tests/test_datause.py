@@ -137,6 +137,73 @@ class DataUseTests(unittest.TestCase):
         du.sample()
         self.assertEqual(du.bytesThisMonth, 150)
 
+    def roll(self, to):
+        self.iface("wlan0", 2_100_000_000, 0)
+        du = self.make()
+        du.sample()
+        self.now = to
+        self.iface("wlan0", 2_100_000_100, 0)
+        du.sample()
+        return du
+
+    def test_rollover_keeps_last_month(self):
+        du = self.roll(stamp(2026, 11, 2))
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+        self.assertEqual(du.lastMonthBytes, 2_100_000_000)
+
+    def test_rollover_across_new_year(self):
+        self.now = stamp(2026, 12, 20)
+        du = self.roll(stamp(2027, 1, 3))
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+        self.assertEqual(du.lastMonthBytes, 2_100_000_000)
+
+    def test_skipped_month_shows_no_last_month(self):
+        du = self.roll(stamp(2026, 12, 2))
+        self.assertEqual(du.lastMonthBytes, 0)
+        self.assertNotIn("(", du.text)
+
+    def test_empty_old_month_shows_no_last_month(self):
+        self.iface("eth0", 1, 1)
+        du = self.make()
+        du.sample()
+        self.now = stamp(2026, 11, 2)
+        du.sample()
+        self.assertEqual(du.lastMonthBytes, 0)
+
+    def test_last_month_survives_restart(self):
+        self.roll(stamp(2026, 11, 2))
+        du = self.make()
+        self.assertEqual(du.lastMonthBytes, 2_100_000_000)
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+
+    def test_stale_last_month_is_not_shown(self):
+        self.roll(stamp(2026, 11, 2))
+        self.now = stamp(2027, 1, 5)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.lastMonthBytes, 0)
+        self.assertNotIn("(", du.text)
+        self.assertNotIn("prev", self.settings.d["dataUse"])
+
+    def test_malformed_prev_keeps_this_months_bytes(self):
+        for prev in ('"x"', '{"month": "2026-10", "bytes": -5}', '{"month": "2026-10", "bytes": Infinity}',
+                     '{"month": "2026-10", "bytes": "9"}', '{"month": "2026-10", "bytes": 1e400}',
+                     '{"month": 7, "bytes": 5}', '{"month": "2026-13", "bytes": 5}', '{"bytes": 5}', 'null'):
+            self.settings.d["dataUse"] = '{"month": "2026-11", "bytes": 500, "last": {}, "prev": %s}' % prev
+            du = self.make()
+            self.assertEqual(du.bytesThisMonth, 500, prev)
+            self.assertEqual(du.lastMonthBytes, 0, prev)
+            self.assertEqual(du.text, "0 KB", prev)
+
+    def test_earlier_month_clock_does_not_create_last_month(self):
+        self.iface("wlan0", 100, 0)
+        self.make().sample()
+        self.now = stamp(2026, 9, 1)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.lastMonthBytes, 0)
+        self.assertNotIn("prev", self.settings.d["dataUse"])
+
     def test_infinite_saved_bytes_starts_over(self):
         self.settings.d["dataUse"] = '{"month": "2026-11", "bytes": Infinity, "last": {}}'
         self.iface("wlan0", 7, 3)

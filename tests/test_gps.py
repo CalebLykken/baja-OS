@@ -844,3 +844,57 @@ class GpsdSetupTimingTest(unittest.TestCase):
         sent, out = self.run_messages([dev, err, dev])
         self.assertIn("refused", out)
         self.assertEqual(len([x for x in sent if b"?DEVICE" in x]), 2)
+
+
+class GpsdWithoutReceiverTest(unittest.TestCase):
+    """gpsd running with nothing plugged in is not a connected receiver."""
+
+    def run_gpsd(self, lines, then=None):
+        got = []
+        g = Gps(None)
+        g._report.disconnect()
+        g._report.connect(got.append)
+
+        class Sock(FakeGpsd):
+            def makefile(self, *args, **kwargs):
+                yield from super().makefile()
+                if then is not None:
+                    raise then
+
+        with mock.patch("backend.gps.socket.create_connection", lambda *a, **k: Sock(lines)), \
+                redirect_stdout(io.StringIO()):
+            used = g._read_gpsd()
+        return used, got
+
+    def test_gpsd_alone_is_not_a_receiver(self):
+        msgs = [{"class": "VERSION"}, {"class": "DEVICES", "devices": []}, {"class": "WATCH"}]
+        used, got = self.run_gpsd(msgs)
+        self.assertTrue(used)
+        self.assertEqual(got, [])
+
+    def test_a_quiet_gpsd_does_not_fail_or_flap(self):
+        used, got = self.run_gpsd([{"class": "DEVICES", "devices": []}], then=TimeoutError("timed out"))
+        self.assertTrue(used)                                  # gpsd is up: don't go looking for the port
+        self.assertEqual(got, [])
+
+    def test_a_listed_device_is_a_connected_receiver(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox"}
+        _, got = self.run_gpsd([{"class": "DEVICES", "devices": []}, {"class": "DEVICES", "devices": [dev]}, dev])
+        self.assertEqual(got, [{"gpsd": True}, {"receiver": True}])
+
+    def test_unplugging_the_receiver_is_disconnected(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox"}
+        _, got = self.run_gpsd([dev, dict(dev, activated=0)])
+        self.assertEqual(got, [{"gpsd": True}, {"receiver": True}, {"gpsd": False}])
+        _, got = self.run_gpsd([dev, {"class": "DEVICES", "devices": []}, dev])
+        self.assertEqual([r for r in got if "gpsd" in r], [{"gpsd": True}, {"gpsd": False}, {"gpsd": True}])
+
+    def test_a_receiver_gone_silent_still_raises(self):
+        dev = {"class": "DEVICE", "path": "/dev/ttyACM0", "driver": "u-blox"}
+        with self.assertRaises(TimeoutError):
+            self.run_gpsd([dev], then=TimeoutError("timed out"))
+
+    def test_a_fix_means_a_receiver(self):
+        tpv = {"class": "TPV", "mode": 3, "lat": 47.0, "lon": -122.0}
+        _, got = self.run_gpsd([tpv])
+        self.assertEqual(got[:2], [{"gpsd": True}, {"receiver": True}])

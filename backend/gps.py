@@ -447,11 +447,22 @@ class Gps(QObject):
         with s:
             s.sendall(b'?WATCH={"enable":true,"json":true}\n')
             s.settimeout(30)
-            safe_emit(self, "_report", {"gpsd": True})
+            # gpsd being up isn't a receiver being connected: "connected" waits
+            # for gpsd to report a device (or a fix or satellites from one).
             talking = False
+            active = set()                # paths of the devices gpsd has open
             configured = set()            # device paths already sent the setup
             last_sent = None              # the path an ERROR reply would be about
-            for line in s.makefile("r", encoding="utf-8", errors="replace"):
+
+            def reports():
+                try:
+                    yield from s.makefile("r", encoding="utf-8", errors="replace")
+                except TimeoutError:
+                    if talking:
+                        raise                 # a receiver gone quiet: reconnect
+                    # gpsd with nothing attached has nothing to say: not a failure
+
+            for line in reports():
                 try:
                     msg = json.loads(line)
                 except ValueError:
@@ -459,12 +470,25 @@ class Gps(QObject):
                 if not isinstance(msg, dict):
                     continue                      # null, a number, a list: not a report
                 kind = msg.get("class")
-                if not talking and (kind == "TPV" or kind == "DEVICES" and msg.get("devices")):
+                if kind in ("DEVICES", "DEVICE"):
+                    listed = msg.get("devices") if kind == "DEVICES" else [msg]
+                    if kind == "DEVICES":
+                        active.clear()            # the full list
+                    for device in listed if isinstance(listed, list) else []:
+                        if isinstance(device, dict):
+                            if "activated" in device and not device["activated"]:
+                                active.discard(device.get("path"))
+                            else:
+                                active.add(device.get("path"))
+                    if talking and not active:
+                        talking = False           # unplugged: gpsd is on its own again
+                        safe_emit(self, "_report", {"gpsd": False})
+                if not talking and (kind in ("TPV", "SKY") or active):
                     talking = True                # a receiver, not just gpsd on its own
+                    safe_emit(self, "_report", {"gpsd": True})
                     safe_emit(self, "_report", {"receiver": True})
                 if kind in ("DEVICES", "DEVICE"):
-                    devices = msg.get("devices") if kind == "DEVICES" else [msg]
-                    for device in devices if isinstance(devices, list) else []:
+                    for device in listed if isinstance(listed, list) else []:
                         if isinstance(device, dict) and "activated" in device and not device["activated"]:
                             configured.discard(device.get("path"))   # closed: send again when it's back
                             continue

@@ -169,6 +169,17 @@ class ServerTest(TempTokenFile):
         headers["Content-Type"] = "application/json"
         return self.request("POST", "/api/v1/destination", headers, json.dumps(PLACE))[0]
 
+    def test_an_unexpected_error_in_resolve_gets_a_json_500(self):
+        with mock.patch.object(phone, "resolve", side_effect=TypeError("odd")), \
+                mock.patch.object(phone.errorlog.log, "report") as report:
+            status, _, body = self.request(
+                "POST", "/api/v1/destination",
+                {"Authorization": "Bearer " + self.svc.token, "Content-Type": "application/json"},
+                json.dumps(PLACE))
+        self.assertEqual(status, 500)
+        self.assertEqual(json.loads(body), {"ok": False, "message": "Something went wrong reading that"})
+        report.assert_called_once()
+
     def test_after_a_reset_only_the_new_code_works(self):
         old = self.svc.token
         status, old_cookie = self.scan(old)
@@ -371,6 +382,18 @@ class ResolveTest(unittest.TestCase):
         (self.maps / "region.json").unlink()
         place = phone.resolve({"urls": ["geo:40.7128,-74.0060"]}, self.maps)
         self.assertEqual(place["lon"], -74.006)
+
+    def test_a_region_file_of_the_wrong_shape_is_like_none(self):
+        (self.maps / "region.json").write_text("[1, 2]")
+        place = phone.resolve({"urls": ["geo:40.7128,-74.0060"]}, self.maps)
+        self.assertEqual(place["lon"], -74.006)
+        (self.maps / "region.json").write_text(json.dumps({"region": 5, "bbox": [1, 2, 3]}))
+        self.assertEqual(phone.resolve({"lat": 40.7, "lon": -74.0}, self.maps)["lon"], -74.0)
+
+    def test_urls_that_are_not_strings_are_ignored(self):
+        for urls in ([123, None], {"a": 1}, 5):
+            place = phone.resolve({"urls": urls, "lat": 47.6, "lon": -122.3, "name": "Here"}, self.maps)
+            self.assertEqual((place["name"], place["lat"]), ("Here", 47.6), urls)
 
     def test_a_link_inside_the_shared_text(self):
         place = phone.resolve({"text": f"Look at this: {self.PIKE} nice place"}, self.maps)

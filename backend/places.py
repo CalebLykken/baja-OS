@@ -13,6 +13,7 @@ decoder, enough to pull out names and positions.
 """
 
 import gzip
+import json
 import math
 import sqlite3
 import struct
@@ -43,6 +44,31 @@ def distance_m(lon, lat, lon0, lat0):
     """Metres from (lon0, lat0) to (lon, lat) on a flat map, near enough
     for a city; the longitude scale is taken at `lat`."""
     return math.hypot((lon - lon0) * 111320 * math.cos(math.radians(lat)), (lat - lat0) * 110540)
+
+
+def read_region(maps_dir):
+    """region.json of the installed map as a dict: {} if it is missing,
+    unreadable or not a JSON object. `region` and `build` are kept only
+    if strings, `bbox` only as a valid [w, s, e, n] list of floats."""
+    try:
+        info = json.loads((Path(maps_dir) / "region.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(info, dict):
+        return {}
+    for key in ("region", "build"):
+        if key in info and not isinstance(info[key], str):
+            del info[key]
+    if "bbox" in info:
+        box = info["bbox"]
+        ok = (isinstance(box, (list, tuple)) and len(box) == 4
+              and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                      and math.isfinite(v) for v in box))
+        if ok and box[0] < box[2] and box[1] < box[3]:
+            info["bbox"] = [float(v) for v in box]
+        else:
+            del info["bbox"]
+    return info
 
 
 # ---- PMTiles v3 ---------------------------------------------------------------

@@ -5,12 +5,15 @@ come back in, on a tiny in-memory index with the real table layout.
     python3 -m unittest tests.test_places
 """
 
+import json
 import math
 import sqlite3
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
-from backend.places import _fts_query, along_route, distance_m, looks_like_address, nearby, search, search_addresses, street_part
+from backend.places import _fts_query, along_route, distance_m, looks_like_address, nearby, read_region, search, search_addresses, street_part
 
 SEATTLE = (-122.3321, 47.6062)
 
@@ -287,6 +290,46 @@ class AddressSearchTest(unittest.TestCase):
 
     def test_distance_m_to_itself_is_zero(self):
         self.assertEqual(distance_m(SEATTLE[0], SEATTLE[1], SEATTLE[0], SEATTLE[1]), 0)
+
+
+class ReadRegionTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def read(self, content):
+        text = content if isinstance(content, str) else json.dumps(content)
+        (self.dir / "region.json").write_text(text)
+        return read_region(self.dir)
+
+    def test_missing_or_damaged_file_is_empty(self):
+        self.assertEqual(read_region(self.dir), {})
+        self.assertEqual(self.read("{not json"), {})
+
+    def test_not_an_object_is_empty(self):
+        for value in ([1, 2], "x", 5, None):
+            self.assertEqual(self.read(value), {}, value)
+
+    def test_region_and_build_must_be_strings(self):
+        self.assertEqual(self.read({"region": 5, "build": ["x"], "other": 1}), {"other": 1})
+
+    def test_bad_boxes_are_dropped(self):
+        for box in ([1, 2, 3], "abcd", [1, 2, 3, 4, 5], ["a", "b", "c", "d"], [None, 0, 1, 1],
+                    [-122, 47, -123, 48], [-122, 48, -121, 47], [-122, 47, -122, 48],
+                    [True, False, 2, 2], {"w": 1}, 7):
+            self.assertEqual(self.read({"region": "R", "bbox": box}), {"region": "R"}, box)
+        self.assertEqual(self.read('{"bbox": [-122, 47, NaN, 48]}'), {})
+        self.assertEqual(self.read('{"bbox": [-122, 47, Infinity, 48]}'), {})
+
+    def test_a_good_file_passes_through(self):
+        good = {"region": "Washington", "build": "20260101", "bbox": [-125.0, 45.5, -116.9, 49.1], "x": 1}
+        self.assertEqual(self.read(good), good)
+
+    def test_integer_boxes_become_floats(self):
+        info = self.read({"bbox": [-125, 45, -116, 49]})
+        self.assertEqual(info["bbox"], [-125.0, 45.0, -116.0, 49.0])
+        self.assertTrue(all(isinstance(v, float) for v in info["bbox"]))
 
 
 if __name__ == "__main__":

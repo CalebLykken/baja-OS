@@ -13,6 +13,7 @@ Run it on its own to work on the map in a desktop browser:
     python3 -m backend.maps --port 8765    # then open http://127.0.0.1:8765/
 """
 
+import contextlib
 import json
 import os
 import re
@@ -212,10 +213,7 @@ class MapService(QObject):
     @pyqtSlot()
     def refresh(self):
         """Re-read region.json, e.g. after install-map.sh ran."""
-        try:
-            info = json.loads((self._data_dir / "region.json").read_text())
-        except (OSError, ValueError):
-            info = {}
+        info = places.read_region(self._data_dir)
         if not (self._data_dir / "basemap.pmtiles").is_file():
             info = {}
         if info != self._info:
@@ -229,12 +227,18 @@ class MapService(QObject):
             return
         self._updating = True
         safe_emit(self, "_progress", "Starting", True)
-        bbox = ",".join(str(v) for v in self._info.get("bbox", [])) or None
+        try:
+            bbox = ",".join(str(v) for v in self._info.get("bbox", [])) or None
+        except Exception:
+            bbox = None
+        region = self._info.get("region")
+        if not isinstance(region, str):
+            region = "Seattle area"
 
         def work():
             env = dict(os.environ, BAJA_MAPS_DIR=str(self._data_dir))
             if bbox:
-                env.update(BBOX=bbox, REGION=self._info.get("region", "Seattle area"))
+                env.update(BBOX=bbox, REGION=region)
             steps = {"Getting the pmtiles": "Getting the download tool",
                      "Cutting": "Downloading the map", "Getting fonts": "Getting fonts and icons",
                      "Indexing places": "Indexing places for search",
@@ -286,25 +290,28 @@ class MapService(QObject):
 
         def work():
             rows = []
-            # "123 Main St": street addresses first, then any places too.
-            if places.looks_like_address(text) and addresses.is_file():
+            try:
+                # "123 Main St": street addresses first, then any places too.
+                if places.looks_like_address(text) and addresses.is_file():
+                    try:
+                        with contextlib.closing(sqlite3.connect(f"file:{addresses}?mode=ro", uri=True)) as db:
+                            rows += places.search_addresses(db, text, near=near)
+                    except sqlite3.Error:
+                        pass
                 try:
-                    db = sqlite3.connect(f"file:{addresses}?mode=ro", uri=True)
-                    rows += places.search_addresses(db, text, near=near)
-                    db.close()
+                    with contextlib.closing(sqlite3.connect(f"file:{index}?mode=ro", uri=True)) as db:
+                        rows += places.search(db, text, near=near)
+                        if not rows and places.looks_like_address(text):
+                            # The house number isn't mapped: offer the street itself.
+                            rows += [r for r in places.search(db, places.street_part(text), near=near)
+                                     if r["kind"] == "street"]
                 except sqlite3.Error:
                     pass
-            try:
-                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
-                rows += places.search(db, text, near=near)
-                if not rows and places.looks_like_address(text):
-                    # The house number isn't mapped: offer the street itself.
-                    rows += [r for r in places.search(db, places.street_part(text), near=near)
-                             if r["kind"] == "street"]
-                db.close()
-            except sqlite3.Error:
-                pass
-            safe_emit(self, "_found", text, rows[:12])
+            except Exception as e:
+                print(f"Place search failed ({type(e).__name__})", flush=True)
+                rows = []
+            finally:
+                safe_emit(self, "_found", text, rows[:12])
         threading.Thread(target=work, name="place-search", daemon=True).start()
 
     @pyqtSlot(str, float, float)
@@ -315,13 +322,17 @@ class MapService(QObject):
         index = self._data_dir / places.INDEX_NAME
 
         def work():
+            rows = []
             try:
-                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
-                rows = places.nearby(db, category, (lon, lat))
-                db.close()
+                with contextlib.closing(sqlite3.connect(f"file:{index}?mode=ro", uri=True)) as db:
+                    rows = places.nearby(db, category, (lon, lat))
             except sqlite3.Error:
                 rows = []
-            safe_emit(self, "_found", key, rows)
+            except Exception as e:
+                print(f"Nearby search failed ({type(e).__name__})", flush=True)
+                rows = []
+            finally:
+                safe_emit(self, "_found", key, rows)
         threading.Thread(target=work, name="place-nearby", daemon=True).start()
 
     @pyqtSlot(str, "QVariantList", int, float)
@@ -337,13 +348,17 @@ class MapService(QObject):
             line = []
 
         def work():
+            rows = []
             try:
-                db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
-                rows = places.along_route(db, category, line, start_seg, into_seg)
-                db.close()
+                with contextlib.closing(sqlite3.connect(f"file:{index}?mode=ro", uri=True)) as db:
+                    rows = places.along_route(db, category, line, start_seg, into_seg)
             except sqlite3.Error:
                 rows = []
-            safe_emit(self, "_found", key, rows)
+            except Exception as e:
+                print(f"Along-route search failed ({type(e).__name__})", flush=True)
+                rows = []
+            finally:
+                safe_emit(self, "_found", key, rows)
         threading.Thread(target=work, name="place-along", daemon=True).start()
 
     def _on_found(self, text, rows):
@@ -393,12 +408,14 @@ class MapService(QObject):
     @pyqtProperty(str, notify=changed)
     def region(self):
         """What the installed map covers, e.g. 'Seattle area'."""
-        return self._info.get("region", "")
+        value = self._info.get("region", "")
+        return value if isinstance(value, str) else ""
 
     @pyqtProperty(str, notify=changed)
     def build(self):
         """The OpenStreetMap data date as YYYYMMDD."""
-        return self._info.get("build", "")
+        value = self._info.get("build", "")
+        return value if isinstance(value, str) else ""
 
     @pyqtProperty(str, constant=True)
     def dataDir(self):

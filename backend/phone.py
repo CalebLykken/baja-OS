@@ -41,7 +41,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QImage, QPainter
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 from backend import places, retry
 from backend.vendor.qrcodegen import QrCode
@@ -208,10 +208,14 @@ def resolve(payload, maps_dir):
     """A place dict {name, label, lon, lat} from what the phone sent, or
     raise ValueError with a message the phone can show."""
     text = str(payload.get("text") or "")
-    urls = payload.get("urls") or []
+    urls = payload.get("urls")
     if isinstance(urls, str):
         urls = urls.split()
-    urls = [u for u in list(urls) + URL_RE.findall(text) if u]
+    elif isinstance(urls, (list, tuple)):
+        urls = [u for u in urls if isinstance(u, str)]
+    else:
+        urls = []
+    urls = [u for u in urls + URL_RE.findall(text) if u]
     if any("/guides/" in u or "/lists/" in u for u in urls):
         raise ValueError("That's a list, not a place")
 
@@ -235,11 +239,7 @@ def resolve(payload, maps_dir):
         if m:
             ll = (float(m[1]), float(m[2]))
 
-    region = {}
-    try:
-        region = json.loads((Path(maps_dir) / "region.json").read_text())
-    except (OSError, ValueError):
-        pass
+    region = places.read_region(maps_dir)
 
     if not ll:
         # No position in it: look the words up in the offline map.
@@ -483,6 +483,9 @@ class _Handler(BaseHTTPRequestHandler):
             place = resolve(payload, self.server.service.maps_dir)
         except ValueError as e:
             return self._json(422, False, str(e))
+        except Exception as e:
+            errorlog.log.report(type(e), e, e.__traceback__, label="Send to Baja: couldn't read a request:")
+            return self._json(500, False, "Something went wrong reading that")
         self.server.service.deliver(place, self.client_address[0])
         return self._json(200, True, f"Sent to Baja: {place['name']}")
 

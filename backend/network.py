@@ -36,6 +36,24 @@ def local_ip():
         return ""
 
 
+def nmcli_unescape(field):
+    """Undo nmcli's terse-mode escaping: '\\:' is ':' and '\\\\' is '\\'.
+    A name like 'Cafe: Guest' comes out of nmcli as 'Cafe\\: Guest'."""
+    out = []
+    escaped = False
+    for ch in field:
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        else:
+            out.append(ch)
+    if escaped:
+        out.append("\\")                # a lone trailing backslash is kept as-is
+    return "".join(out)
+
+
 def wifi_name():
     """Name of the connected Wi-Fi network via NetworkManager, or ''."""
     if not shutil.which("nmcli"):
@@ -43,13 +61,15 @@ def wifi_name():
     try:
         # --rescan no: a bare `dev wifi` scans whenever its list is over 30 s old,
         # which pulls the radio off the hotspot's channel every few seconds.
+        # errors="replace": the list has every nearby network, and one whose name
+        # isn't valid UTF-8 must not raise out of the check.
         out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi", "list", "--rescan", "no"],
-                             capture_output=True, text=True, timeout=3).stdout
-    except (OSError, subprocess.SubprocessError):
+                             capture_output=True, text=True, errors="replace", timeout=3).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
         return ""
     for line in out.splitlines():
         if line.startswith("yes:"):
-            return line[4:]
+            return nmcli_unescape(line[4:])
     return ""
 
 
@@ -60,8 +80,8 @@ def nm_connectivity():
         return None
     try:
         r = subprocess.run(["nmcli", "-t", "networking", "connectivity"],
-                           capture_output=True, text=True, timeout=3)
-    except (OSError, subprocess.SubprocessError):
+                           capture_output=True, text=True, errors="replace", timeout=3)
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
     state = r.stdout.strip()
     if r.returncode != 0 or state not in ("full", "limited", "portal", "none"):

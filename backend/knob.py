@@ -111,14 +111,23 @@ class Knob(QObject):
 
     def _request(self):
         lines = (KNOB_A, KNOB_B, BUTTON)
+        error = None
         for debounce in (timedelta(milliseconds=1), None):
             kwargs = {"debounce_period": debounce} if debounce else {}
             try:
-                return gpiod.request_lines(CHIP, consumer="baja-knob", config={
+                req = gpiod.request_lines(CHIP, consumer="baja-knob", config={
                     lines: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP,
                                               edge_detection=Edge.BOTH, **kwargs)})
-            except (OSError, ValueError):
-                continue                 # no debounce support: try without
+            except Exception as e:       # any libgpiod error, not just OSError: no debounce support, or a half-torn-down chip
+                error = e
+                continue                 # try without debounce, or give up below
+            self._last_request_error = None
+            return req
+        # Each retry from _reopen fails the same way: name the error once, not every time.
+        text = f"{type(error).__name__}: {error}"
+        if text != getattr(self, "_last_request_error", None):
+            self._last_request_error = text
+            print(f"Knob: couldn't request the pins: {text}", flush=True)
         return None
 
     def _reopen(self):

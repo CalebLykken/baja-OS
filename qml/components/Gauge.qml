@@ -27,6 +27,7 @@ Card {
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
     property bool peakHold: false   // remember and mark the highest reading
     property real peak: Number.NEGATIVE_INFINITY
+    property string note: ""        // an optional small line under the unit ("0-60 7.3 s")
 
     readonly property bool warning: known && (value > warnAbove || value < warnBelow)
     // Same one-shot cue as the Home readouts (Readout.qml): on the false-to-true
@@ -407,10 +408,18 @@ Card {
     }
 
     // Digital value: centred for arc/segments, below the hub for the needle.
+    // The optional note is a third line of the same column, so it can't draw
+    // over the value or unit in any look. Under the hub the column would run
+    // into the legend with three lines, so it is lifted to sit just above the
+    // legend, but never up onto the hub.
     Column {
+        id: readout
+        objectName: "gaugeReadout"
         anchors.horizontalCenter: dial.horizontalCenter
-        anchors.verticalCenter: dial.verticalCenter
-        anchors.verticalCenterOffset: g.look === "needle" ? dial.height * 0.24 : 0
+        y: g.look !== "needle" ? dial.y + (dial.height - height) / 2
+           : Math.max(dial.y + dial.cx + 16,
+                      Math.min(dial.y + dial.cx + dial.height * 0.24 - height / 2,
+                               legend.y - 4 - height))
         spacing: 0
         Label {
             id: num
@@ -426,14 +435,25 @@ Card {
             font.weight: Theme.numWeight
         }
         Label {
+            objectName: "gaugeUnit"
             anchors.horizontalCenter: parent.horizontalCenter
             text: g.unit
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+        }
+        Label {
+            objectName: "gaugeNote"
+            visible: g.note !== ""
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: g.note
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall
         }
     }
 
     Legend {
+        id: legend
+        objectName: "gaugeLegend"
         anchors { horizontalCenter: dial.horizontalCenter; bottom: dial.bottom; bottomMargin: 4 }
         text: g.label
     }

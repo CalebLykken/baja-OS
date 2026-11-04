@@ -30,6 +30,8 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend.prefs import as_bool
+
 try:
     from PyQt6.QtWebSockets import QWebSocket
 except ImportError:          # python3-pyqt6.qtwebsockets not installed
@@ -126,7 +128,7 @@ class SpotifyPlayer(QObject):
         self._address = ""
         self._moved_at = 0.0        # when the connection last came back or changed
         self._connected_at = 0.0    # when the socket to Soloist last opened
-        self._paired = str(settings.get(PAIRED_SETTING, "false")) == "true" if settings else False
+        self._paired = as_bool(settings.get(PAIRED_SETTING)) if settings else False
         self._next_revive = 0.0
         self._revive_gap = REVIVE_MIN_S
 
@@ -280,6 +282,8 @@ class SpotifyPlayer(QObject):
 
     def load_recents(self, recents):
         """Recently played, as saved last time (a list of dicts)."""
+        if not isinstance(recents, list):
+            return
         keep = ("uri", "kind", "title", "subtitle", "art")
         self._recents = [{k: str(r.get(k, "")) for k in keep} for r in recents
                          if isinstance(r, dict) and r.get("uri")][:RECENTS_MAX]

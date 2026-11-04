@@ -31,6 +31,8 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
 
+from backend.prefs import as_bool
+
 ROOT = Path(__file__).resolve().parent.parent
 VOICE_DIR = Path(os.environ.get("BAJA_VOICE_DIR", "~/.local/share/baja-os/voice")).expanduser()
 MODEL = VOICE_DIR / "en_US-kristin-medium.onnx"
@@ -117,7 +119,7 @@ def clamp_level(value):
     """A saved spoken-directions level as a whole % within VOICE_LEVEL."""
     try:
         value = int(float(str(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         value = VOICE_LEVEL_DEFAULT
     return max(VOICE_LEVEL[0], min(VOICE_LEVEL[1], value))
 
@@ -346,7 +348,7 @@ class Voice(QObject):
         super().__init__(parent)
         self._settings = settings
         # Off unless turned on (Settings > Sound, or the speaker key while navigating).
-        self._enabled = str(settings.get("voice", "false")) == "true"
+        self._enabled = as_bool(settings.get("voice"))
         self._available = MODEL.is_file() and PYTHON.is_file() and bool(shutil.which("pw-play"))
         self._jobs = queue.Queue()
         self._stuck = None              # (raised, scale) of an output that wouldn't come down
@@ -401,7 +403,7 @@ class Voice(QObject):
         on the main thread: the settings object isn't for the voice thread."""
         try:
             return max(30, min(100, int(float(str(self._settings.get("maxVolume", 100)))))) / 100
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 1.0
 
     def _plan_levels(self, ceiling):

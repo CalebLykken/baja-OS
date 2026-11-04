@@ -33,6 +33,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 from backend import safe_emit
 from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
+from backend.prefs import as_bool
 
 SCAN_EVERY_MS = 15000
 WATCH_EVERY_MS = 10000
@@ -158,7 +159,7 @@ class Wifi(QObject):
         self._polling = False
         self._again = False          # a signal came during a poll, which may have read too early
         self._tether_due = None      # monotonic time the backup has something to decide, if any
-        self._tether = str(settings.get("tethering", "true")) == "true"
+        self._tether = as_bool(settings.get("tethering"), True)
         self._no_wifi_since = None
         self._wifi_since = None
         self._last_tether_try = 0

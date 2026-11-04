@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -179,6 +181,46 @@ class ProbeTests(unittest.TestCase):
         run_probe(d, bus=None)
         self.assertEqual(d.brightness, 55)
 
+    def test_zero_maximum_is_software_dim(self):
+        made = []
+
+        def ddc(path):
+            made.append(FakeDdc(path, current=50, maximum=0))
+            made[0].closed = False
+            made[0].close = lambda: setattr(made[0], "closed", True)
+            return made[0]
+
+        d = display_mod.Display()
+        run_probe(d, ddc=ddc)
+        self.assertFalse(d.hardware)
+        self.assertIsNone(d._ddc)
+        self.assertTrue(made[0].closed)
+        self.assertEqual(d.brightness, 100)
+        d.setBrightness(50)
+        self.assertEqual(d.brightness, 50)
+        self.assertEqual(made[0].sets, [])
+
+    def test_current_above_maximum_is_clamped(self):
+        d = display_mod.Display()
+        run_probe(d, ddc=lambda path: FakeDdc(path, current=0xFFFF, maximum=100))
+        self.assertTrue(d.hardware)
+        self.assertEqual(d.brightness, 100)
+
+    def test_ioctl_failure_closes_the_fd(self):
+        with mock.patch.object(display_mod.os, "open", return_value=7), \
+                mock.patch.object(display_mod.os, "close") as close, \
+                mock.patch.object(display_mod.fcntl, "ioctl", side_effect=OSError("no")):
+            with self.assertRaises(OSError):
+                display_mod.DdcBrightness("/dev/i2c-9")
+        close.assert_called_once_with(7)
+
+    def test_close_ignores_oserror(self):
+        with mock.patch.object(display_mod.os, "open", return_value=7), \
+                mock.patch.object(display_mod.fcntl, "ioctl"):
+            ddc = display_mod.DdcBrightness("/dev/i2c-9")
+        with mock.patch.object(display_mod.os, "close", side_effect=OSError("bad")):
+            ddc.close()
+
 
 class WriteFailureTests(unittest.TestCase):
     def hw_display(self):
@@ -230,6 +272,37 @@ class WriteFailureTests(unittest.TestCase):
         d._brightness = 40  # UI says 40, the panel never took it
         d._check_sun()
         self.assertEqual(d._pending, 40)
+
+    def test_odd_exception_is_retried_and_writer_survives(self):
+        d = self.hw_display()
+        calls = []
+
+        def odd(value):
+            calls.append(value)
+            if len(calls) == 1:
+                raise RuntimeError("odd")
+
+        d._ddc.set = odd
+        d._probe = lambda: None  # the thread under test starts at the write loop
+        with mock.patch.object(display_mod.time, "sleep"):
+            d._write(40)
+        self.assertEqual(calls, [40, 40])
+        self.assertEqual(d._written, 40)
+        t = threading.Thread(target=d._writer, daemon=True)
+        t.start()
+        d._apply(60)
+        for _ in range(200):
+            if 60 in calls:
+                break
+            time.sleep(0.01)
+        self.assertTrue(t.is_alive())
+        self.assertEqual(calls[-1], 60)
+        d._apply(70)
+        for _ in range(200):
+            if 70 in calls:
+                break
+            time.sleep(0.01)
+        self.assertEqual(calls[-1], 70)
 
 
 if __name__ == "__main__":

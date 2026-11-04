@@ -104,22 +104,10 @@ Item {
             value: Units.speed(vehicle.speed); minValue: 0; maxValue: Units.metric ? 200 : 120
             peakHold: true
 
-            // The last launch time, on its own line in the open gap under the
-            // unit (between the ends of the arc, above the legend). In the
-            // legend it made the text wider than the card.
-            Label {
-                objectName: "launchTime"
-                visible: page.launch > 0
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.verticalCenterOffset: 8 + Math.min(parent.width - 24, parent.height - 24) * 0.26
-                width: Math.min(implicitWidth, parent.width * 0.5)
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-                text: "0-" + (Units.metric ? "100" : "60") + "  " + page.launch.toFixed(1) + " s"
-                color: Theme.textDim
-                font.pixelSize: Theme.fontSmall
-            }
+            // The last launch time, as the gauge's own third line under the
+            // unit. In the legend it made the text wider than the card.
+            note: page.launch > 0 ? "0-" + (Units.metric ? "100" : "60") + "  "
+                                    + page.launch.toFixed(1) + " s" : ""
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

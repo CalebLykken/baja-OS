@@ -73,6 +73,21 @@ class NotifyTest(EnvTest):
         systemd.notify("READY=1")          # must not raise
         sock.sendall.assert_not_called()
 
+    def test_socket_is_non_blocking(self):
+        # a full systemd queue must drop the ping, not freeze the UI thread
+        m, sock = self.fake_socket()
+        os.environ["NOTIFY_SOCKET"] = "@baja-test"
+        systemd.notify("WATCHDOG=1")
+        sock.setblocking.assert_called_once_with(False)
+        self.assertEqual(sock.mock_calls[0], mock.call.setblocking(False))
+
+    def test_full_queue_is_dropped_quietly(self):
+        m, sock = self.fake_socket()
+        os.environ["NOTIFY_SOCKET"] = "@baja-test"
+        sock.sendall.side_effect = BlockingIOError(11, "Resource temporarily unavailable")
+        systemd.notify("WATCHDOG=1")       # must not raise
+        sock.sendall.assert_called_once_with(b"WATCHDOG=1")
+
     def test_round_trip_over_a_real_socket(self):
         # macOS limits socket paths to 104 bytes, so keep the directory short
         tmp = tempfile.mkdtemp(dir="/tmp")
@@ -93,8 +108,8 @@ class NotifyTest(EnvTest):
 
 class WatchdogTest(EnvTest):
     """Watchdog() reads WATCHDOG_USEC when it is built. Its timer is at
-    w._timer. A non-numeric WATCHDOG_USEC would raise in Watchdog(); systemd
-    never sets one, so that isn't tested."""
+    w._timer. A malformed WATCHDOG_USEC must not stop the dashboard starting:
+    it is treated as no watchdog."""
 
     def make(self, usec=None):
         if usec is not None:
@@ -104,6 +119,24 @@ class WatchdogTest(EnvTest):
     def test_interval_is_half_the_timeout_in_ms(self):
         w = self.make("10000000")          # 10 s -> ping every 5 s
         self.assertEqual(w._timer.interval(), 5000)
+
+    def test_default_timeout_of_20_seconds_pings_every_10(self):
+        w = self.make("20000000")          # WatchdogSec=20 -> ping every 10 s
+        self.assertEqual(w._timer.interval(), 10000)
+
+    def test_huge_timeout_is_clamped_to_a_qtimer_int(self):
+        w = self.make(str(10 ** 13))       # half would be 5e9 ms, past a C int
+        self.assertEqual(w._timer.interval(), 2 ** 31 - 1)
+
+    def test_malformed_or_non_positive_watchdog_is_no_watchdog(self):
+        for usec in ("abc", "", " ", "20s", "1.5", "-5", "0"):
+            with self.subTest(WATCHDOG_USEC=usec):
+                os.environ["WATCHDOG_USEC"] = usec
+                w = systemd.Watchdog()     # must not raise
+                with mock.patch("backend.systemd.notify") as notify:
+                    w.start()
+                notify.assert_called_once_with("READY=1")
+                self.assertFalse(w._timer.isActive())
 
     def test_interval_is_clamped_to_one_second(self):
         w = self.make("1000000")           # 1 s -> half is 500 ms, clamped

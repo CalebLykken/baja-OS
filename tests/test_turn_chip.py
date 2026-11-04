@@ -108,6 +108,10 @@ def label():
     return obj.findChild(QObject, "turnLabel").property("text")
 
 
+def truncated():
+    return obj.findChild(QObject, "turnLabel").property("truncated")
+
+
 results = {}
 routing.setActive(True)
 wait(100)
@@ -118,6 +122,7 @@ routing.setComputing(True)
 wait(50)
 results["computing_icon"] = icon()
 results["computing_label"] = label()
+results["computing_truncated"] = truncated()
 
 routing.setIcon("turn_right")
 wait(400)
@@ -132,6 +137,7 @@ results["done_opacity"] = obj.findChild(QObject, "turnIcon").property("opacity")
 routing.setArrived(True)
 wait(50)
 results["arrived_label"] = label()
+results["arrived_truncated"] = truncated()
 
 print(json.dumps(results))
 sys.stdout.flush()
@@ -170,6 +176,10 @@ class TurnChipTest(unittest.TestCase):
         self.assertEqual(self.results["done_icon"], "turn_right")
         self.assertEqual(self.results["done_opacity"], 1.0)
         self.assertNotEqual(self.results["done_label"], "Rerouting")
+
+    def test_rerouting_and_arrived_labels_fit(self):
+        self.assertIs(self.results["computing_truncated"], False)
+        self.assertIs(self.results["arrived_truncated"], False)
 
     def test_arrival_reads_arrived(self):
         self.assertEqual(self.results["arrived_label"], "Arrived")

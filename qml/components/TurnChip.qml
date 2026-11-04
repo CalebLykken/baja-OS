@@ -12,12 +12,20 @@ Rectangle {
     // A reroute keeps the route active, but the old turn no longer exists; show what
     // the Maps turn card shows until the new route lands.
     readonly property bool rerouting: active && routing.computing
-    onReroutingChanged: if (!rerouting && active) turnSwap.restart()
+    // The refresh icon stays up until the swap's bottom, so the new arrow never
+    // shows for a frame before fading out and back in.
+    property bool showRefresh: false
+    onReroutingChanged: {
+        if (rerouting) showRefresh = true
+        else if (active) turnSwap.restart()
+        else showRefresh = false
+    }
 
     // A new route or turn is a moment, not a loop: one nudge when the chip appears.
     // A route that restarts mid-swap must not leave the icon half-faded or offset.
     onActiveChanged: {
         turnSwap.stop()
+        showRefresh = false
         turnIcon.opacity = 1
         shift.y = 0
         if (active) {
@@ -70,7 +78,7 @@ Rectangle {
             NumberAnimation { target: turnIcon; property: "opacity"; to: 0; duration: 100; easing.type: Easing.InQuad }
             NumberAnimation { target: shift; property: "y"; to: -6; duration: 100; easing.type: Easing.InQuad }
         }
-        ScriptAction { script: { chip.icon = chip.seenIcon; shift.y = 6 } }
+        ScriptAction { script: { chip.icon = chip.seenIcon; chip.showRefresh = false; shift.y = 6 } }
         ParallelAnimation {
             NumberAnimation { target: turnIcon; property: "opacity"; to: 1; duration: 150; easing.type: Easing.OutCubic }
             NumberAnimation { target: shift; property: "y"; to: 0; duration: 150; easing.type: Easing.OutCubic }
@@ -85,7 +93,7 @@ Rectangle {
             id: turnIcon
             objectName: "turnIcon"
             anchors.horizontalCenter: parent.horizontalCenter
-            name: chip.rerouting ? "refresh" : chip.icon
+            name: chip.showRefresh ? "refresh" : chip.icon
             size: 36
             color: Theme.accent
             transform: Translate { id: shift; y: 0 }
@@ -93,8 +101,11 @@ Rectangle {
         Label {
             objectName: "turnLabel"
             anchors.horizontalCenter: parent.horizontalCenter
-            elide: Text.ElideRight
-            width: Math.min(implicitWidth, chip.width - 12)
+            elide: Text.ElideRight          // backstop; the text shrinks to fit first
+            width: chip.width - 12
+            horizontalAlignment: Text.AlignHCenter
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 16
             numeric: true
             font.pixelSize: Theme.fontSmall
             font.weight: Font.DemiBold

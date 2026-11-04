@@ -29,6 +29,32 @@ Card {
     property real peak: Number.NEGATIVE_INFINITY
 
     readonly property bool warning: known && (value > warnAbove || value < warnBelow)
+    // Same one-shot cue as the Home readouts (Readout.qml): on the false-to-true
+    // edge the numeral double-pulses once, at most every 30 s so a reading
+    // sitting on a limit doesn't keep pulsing. A hidden page stays loaded, so a
+    // hidden gauge doesn't animate (and doesn't use up the cooldown). The colour
+    // eases on its own via the Behavior on the numeral.
+    property real _lastPulse: 0
+    SequentialAnimation {
+        id: warnPulse
+        NumberAnimation { target: num; property: "scale"; to: 1.12; duration: 110; easing.type: Easing.OutQuad }
+        NumberAnimation { target: num; property: "scale"; to: 1.0; duration: 140; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: num; property: "scale"; to: 1.12; duration: 110; easing.type: Easing.OutQuad }
+        NumberAnimation { target: num; property: "scale"; to: 1.0; duration: 160; easing.type: Easing.InOutQuad }
+    }
+    // (the handler is below, with the dial repaint)
+    function _warnCue() {
+        if (warning) {
+            var now = Date.now()
+            if (g.visible && now - _lastPulse > 30000) {
+                warnPulse.restart()
+                _lastPulse = now
+            }
+        } else {
+            warnPulse.stop()
+            num.scale = 1
+        }
+    }
     tappable: peakHold
     onTapped: peak = known ? value : Number.NEGATIVE_INFINITY
     // The peak follows real readings only, never the key-on sweep or the easing.
@@ -137,7 +163,7 @@ Card {
     // it), so this is just a safety net and is rare.
     readonly property real peakPaintFrac: Math.round(peakFrac * 200) / 200
     onPeakPaintFracChanged: if (visible && peakShown) dynamic.requestPaint()
-    onWarningChanged: if (visible) dynamic.requestPaint()
+    onWarningChanged: { _warnCue(); if (visible) dynamic.requestPaint() }
     onStyleNameChanged: if (visible) { face.requestPaint(); dynamic.requestPaint() }
     readonly property bool dark: Theme.dark          // day and night have their own colours
     onDarkChanged: if (visible) { face.requestPaint(); dynamic.requestPaint() }
@@ -387,10 +413,14 @@ Card {
         anchors.verticalCenterOffset: g.look === "needle" ? dial.height * 0.24 : 0
         spacing: 0
         Label {
+            id: num
+            objectName: "gaugeNumber"
             anchors.horizontalCenter: parent.horizontalCenter
             numeric: true
             text: g.known ? g.value.toFixed(g.decimals) : "—"
             color: g.warning ? Theme.warn : g.known ? Theme.text : Theme.textDim
+            transformOrigin: Item.Center
+            Behavior on color { ColorAnimation { duration: 180 } }
             font.pixelSize: g.look === "needle" ? Math.max(20, dial.width * 0.12)
                                                 : Math.max(28, dial.width * 0.22)
             font.weight: Theme.numWeight

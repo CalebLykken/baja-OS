@@ -2,7 +2,8 @@
 
 `MediaPlayer` fakes a playlist so the music screens have something to show
 (on a Mac; the truck only shows what's real). Given an empty queue it's an
-empty player instead: nothing playing, and every key does nothing.
+empty player instead: nothing playing, and every key does nothing. Only the
+default demo has albums (DEMO_ALBUMS); a queue passed in has none.
 The real players are backend/library.py (local files), bluetooth.py (phone)
 and spotify.py; this is the stand-in the UI shows when none is wired.
 `volumeUp`/`volumeDown` are what the dash knob drives.
@@ -10,14 +11,27 @@ and spotify.py; this is the stand-in the UI shows when none is wired.
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-DEMO_QUEUE = [
-    {"title": "Gravel Road Overture", "artist": "The Flat-Four Choir", "duration": 214},
-    {"title": "Intercooler Blues", "artist": "Boxer Rebellion", "duration": 187},
-    {"title": "Cascade Pass", "artist": "Northbound Static", "duration": 241},
-    {"title": "Maple Leaf Night Drive", "artist": "Lo-Fi Odometer", "duration": 198},
-    {"title": "Head Gasket Heartbreak", "artist": "The Timing Belts", "duration": 176},
-    {"title": "Ferry Line Daydream", "artist": "Sound & Puget", "duration": 222},
+DEMO_ALBUMS = [
+    {"title": "Flat-Four Anthems", "artist": "The Flat-Four Choir", "tracks": [
+        {"title": "Gravel Road Overture", "artist": "The Flat-Four Choir", "duration": 214},
+        {"title": "Intercooler Blues", "artist": "Boxer Rebellion", "duration": 187},
+        {"title": "Head Gasket Heartbreak", "artist": "The Timing Belts", "duration": 176},
+        {"title": "Open Diff Lullaby", "artist": "The Flat-Four Choir", "duration": 203},
+    ]},
+    {"title": "Cascade Crossing", "artist": "Northbound Static", "tracks": [
+        {"title": "Cascade Pass", "artist": "Northbound Static", "duration": 241},
+        {"title": "Maple Leaf Night Drive", "artist": "Lo-Fi Odometer", "duration": 198},
+        {"title": "Ferry Line Daydream", "artist": "Sound & Puget", "duration": 222},
+        {"title": "Drizzle on the Dash", "artist": "Sound & Puget", "duration": 189},
+        {"title": "Chains Required", "artist": "Northbound Static", "duration": 168},
+    ]},
+    {"title": "Bed Liner Sessions", "artist": "Boxer Rebellion", "tracks": [
+        {"title": "Tailgate Down", "artist": "Boxer Rebellion", "duration": 195},
+        {"title": "Roof Rack Rattle", "artist": "Lo-Fi Odometer", "duration": 172},
+        {"title": "Last Exit Gas", "artist": "The Timing Belts", "duration": 231},
+    ]},
 ]
+DEMO_QUEUE = [dict(t) for a in DEMO_ALBUMS for t in a["tracks"]]   # every song, in album order
 NO_SONG = {"title": "", "artist": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
@@ -27,7 +41,7 @@ class MediaPlayer(QObject):
     positionChanged = pyqtSignal()
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
-    queueChanged = pyqtSignal()             # never: the demo has no albums
+    queueChanged = pyqtSignal()             # playAlbum/playAll: the queue and `album` changed
     modesChanged = pyqtSignal()             # never: the demo plays in order
 
     def __init__(self, queue=None, parent=None):
@@ -35,6 +49,8 @@ class MediaPlayer(QObject):
         [] for none)."""
         super().__init__(parent)
         self._queue = list(DEMO_QUEUE if queue is None else queue)
+        self._albums = DEMO_ALBUMS if queue is None else []
+        self._album = -1                # the album playing, or -1 for all songs
         self._index = 0 if self._queue else -1
         self._position = 37 if self._queue else 0
         self._playing = bool(self._queue)
@@ -47,7 +63,8 @@ class MediaPlayer(QObject):
     def restore(self, state, play=False):
         """Pick up the song and place in it from the last run (as
         LibraryPlayer does), playing only if `play`. With nothing saved
-        the demo plays from where it always has."""
+        the demo plays from where it always has. The demo always resumes in the
+        all-songs queue (the album isn't remembered), so index is clamped to it."""
         if not self._queue:
             self._saved = dict(state) if isinstance(state, dict) else None   # state() hands it back
             return
@@ -110,7 +127,7 @@ class MediaPlayer(QObject):
     def index(self):
         return self._index
 
-    @pyqtProperty("QVariantList", constant=True)
+    @pyqtProperty("QVariantList", notify=queueChanged)
     def queue(self):
         return self._queue
 
@@ -144,23 +161,43 @@ class MediaPlayer(QObject):
 
     @pyqtProperty("QVariantList", constant=True)
     def albums(self):
-        return []
+        return [{"title": a["title"], "artist": a["artist"], "art": "",
+                 "count": len(a["tracks"]),
+                 "duration": sum(t["duration"] for t in a["tracks"])}
+                for a in self._albums]
 
-    @pyqtProperty(int, constant=True)
+    @pyqtProperty(int, notify=queueChanged)
     def album(self):
-        return -1
+        return self._album
 
     @pyqtSlot(int, result="QVariantList")
     def albumTracks(self, album):
-        return []
+        if not 0 <= album < len(self._albums):
+            return []
+        return [dict(t) for t in self._albums[album]["tracks"]]
 
     @pyqtSlot(int, int)
     def playAlbum(self, album, start=0):
-        pass
+        """Play that album's songs from song `start`; out of range does nothing."""
+        if not 0 <= album < len(self._albums):
+            return
+        self._queue = [dict(t) for t in self._albums[album]["tracks"]]
+        self._album = album
+        self.queueChanged.emit()
+        self._start_playing(start)
 
     @pyqtSlot()
     def playAll(self):
+        if self._album != -1:
+            self._queue = list(DEMO_QUEUE if self._albums else self._queue)
+            self._album = -1
+            self.queueChanged.emit()
         self.playIndex(0)
+
+    def _start_playing(self, index):
+        self._set_index(max(0, min(index, len(self._queue) - 1)))
+        if not self._playing:
+            self.togglePlay()
 
     @pyqtProperty(int, notify=positionChanged)
     def position(self):

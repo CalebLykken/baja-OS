@@ -18,7 +18,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 try:
     from PyQt6.QtCore import QCoreApplication
-    from backend.media import DEMO_QUEUE, MediaPlayer
+    from backend.media import DEMO_ALBUMS, DEMO_QUEUE, MediaPlayer
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
 
@@ -83,6 +83,103 @@ class DemoMediaPlayerTest(unittest.TestCase):
         self.assertEqual(len(p.queue), len(DEMO_QUEUE))
         p.next()
         self.assertEqual(p.index, 1)
+
+
+class DemoAlbumsTest(unittest.TestCase):
+    """The demo's small fake library, for the Albums tab."""
+
+    def make(self, *args):
+        p = MediaPlayer(*args)
+        self.players.append(p)          # kept alive until the cleanups have run
+        self.addCleanup(p._timer.stop)
+        return p
+
+    def setUp(self):
+        self.players = []
+
+    def test_albums_in_the_library_players_shape(self):
+        albums = self.make().albums
+        self.assertGreaterEqual(len(albums), 2)
+        for a, src in zip(albums, DEMO_ALBUMS):
+            self.assertEqual(a, {"title": src["title"], "artist": src["artist"], "art": "",
+                                 "count": len(src["tracks"]),
+                                 "duration": sum(t["duration"] for t in src["tracks"])})
+
+    def test_the_default_queue_is_every_song_in_album_order(self):
+        p = self.make()
+        self.assertEqual([t["title"] for t in p.queue],
+                         [t["title"] for a in DEMO_ALBUMS for t in a["tracks"]])
+        self.assertEqual(p.album, -1)
+
+    def test_album_tracks_and_bounds(self):
+        p = self.make()
+        tracks = p.albumTracks(1)
+        self.assertEqual(len(tracks), p.albums[1]["count"])
+        self.assertEqual(set(tracks[0]), {"title", "artist", "duration"})
+        for bad in (-1, len(p.albums), 99):
+            self.assertEqual(p.albumTracks(bad), [])
+
+    def test_play_album_switches_the_queue(self):
+        p = self.make()
+        seen = []
+        p.queueChanged.connect(lambda: seen.append("queue"))
+        p.trackChanged.connect(lambda: seen.append("track"))
+        p.playAlbum(1)
+        self.assertEqual(p.album, 1)
+        self.assertEqual([t["title"] for t in p.queue], [t["title"] for t in p.albumTracks(1)])
+        self.assertEqual((p.title, p.index, p.position), (p.queue[0]["title"], 0, 0))
+        self.assertTrue(p.playing)
+        self.assertEqual(seen[:2], ["queue", "track"])
+
+    def test_play_album_from_a_song_and_clamps(self):
+        p = self.make()
+        p.playAlbum(0, 2)
+        self.assertEqual(p.index, 2)
+        p.playAlbum(0, 99)
+        self.assertEqual(p.index, len(p.queue) - 1)
+
+    def test_out_of_range_album_is_a_no_op(self):
+        p = self.make()
+        seen = []
+        p.queueChanged.connect(lambda: seen.append(1))
+        for bad in (-1, 50):
+            p.playAlbum(bad)
+        self.assertEqual((seen, p.album, len(p.queue), p.index), ([], -1, len(DEMO_QUEUE), 0))
+
+    def test_play_all_goes_back_to_the_whole_queue(self):
+        p = self.make()
+        p.playAlbum(1)
+        p.playAll()
+        self.assertEqual((p.album, len(p.queue), p.index), (-1, len(DEMO_QUEUE), 0))
+        self.assertEqual(p.title, DEMO_QUEUE[0]["title"])
+
+    def test_next_wraps_within_the_album(self):
+        p = self.make()
+        p.playAlbum(2)
+        n = len(p.queue)
+        titles = {p.title}
+        for _ in range(n):
+            p.next()
+            titles.add(p.title)
+        self.assertEqual((p.index, p.album), (0, 2))
+        self.assertEqual(titles, {t["title"] for t in p.albumTracks(2)})
+
+    def test_restore_clamps_inside_an_album(self):
+        p = self.make()
+        p.playAlbum(2)
+        p.restore({"index": 40, "position": 5})
+        self.assertLess(p.index, len(p.queue))
+
+    def test_explicit_queues_have_no_albums(self):
+        custom = [{"title": "X", "artist": "Y", "duration": 100}]
+        for q in ([], custom):
+            p = self.make(q)
+            self.assertEqual((p.albums, p.album, p.albumTracks(0)), ([], -1, []))
+            seen = []
+            p.queueChanged.connect(lambda: seen.append(1))
+            p.playAlbum(0)
+            p.playAll()
+            self.assertEqual((seen, p.album, p.queue), ([], -1, q))
 
 
 def write_wav(path):

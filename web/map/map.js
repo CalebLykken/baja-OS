@@ -580,6 +580,9 @@ const pin = document.createElement("div");
 pin.className = "pin";
 pin.innerHTML = '<svg viewBox="0 0 22 28" width="44" height="56"><path d="M11 1C5.5 1 1 5.4 1 10.9 1 18.3 11 27 11 27s10-8.7 10-16.1C21 5.4 16.5 1 11 1z"/><circle cx="11" cy="10.5" r="3.6"/></svg>';
 const pinMarker = new maplibregl.Marker({ element: pin, anchor: "bottom" });
+pin.addEventListener("animationend", (e) => {
+    if (e.animationName === "pin-drop") pin.classList.remove("dropping");
+});
 
 function frameAll(points, maxZoom = 16, duration = 1200) {
     // Drop follow mode's offset first, or it adds to the framing margins.
@@ -593,6 +596,10 @@ function showPlace(lon, lat) {
     touched = true;
     setFollowing(false);
     pinMarker.setLngLat([lon, lat]).addTo(map);
+    // Restart the drop, so a second place drops in too.
+    pin.classList.remove("dropping");
+    void pin.offsetWidth;
+    pin.classList.add("dropping");
     // The truck and the place together, so you can see which way it is.
     frameAll(shown ? [[shown.lon, shown.lat], [lon, lat]] : [[lon, lat]], 16);
 }

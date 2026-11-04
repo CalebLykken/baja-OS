@@ -24,5 +24,6 @@ EqSlider 1.0 EqSlider.qml
 EqualizerPanel 1.0 EqualizerPanel.qml
 Keyboard 1.0 Keyboard.qml
 EngineWarning 1.0 EngineWarning.qml
+EmptyState 1.0 EmptyState.qml
 TurnChip 1.0 TurnChip.qml
 Trip 1.0 Trip.qml

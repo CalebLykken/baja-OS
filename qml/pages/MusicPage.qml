@@ -401,12 +401,15 @@ Item {
                         tappable: !queue.spotifyQueue
                         onHit: media.playIndex(index)
                     }
-                    Label {
+                    EmptyState {
                         visible: queue.count === 0
-                        anchors { left: parent.left; top: parent.top; leftMargin: 10; topMargin: 10 }
-                        text: queue.spotifyQueue ? "Nothing queued in Spotify" : media.scanning ? "Reading your music..." : "No songs in ~/Music on the Pi"
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontBody
+                        width: parent.width
+                        height: queue.height
+                        icon: queue.spotifyQueue ? "queue" : media.scanning ? "refresh" : "music"
+                        title: queue.spotifyQueue ? "Nothing queued" : media.scanning ? "Reading your music" : "No songs yet"
+                        hint: queue.spotifyQueue ? "Songs you queue in Spotify line up here"
+                              : media.scanning ? "Songs show up as they're found"
+                              : "Copy albums into ~/Music on the Pi"
                     }
                 }
 
@@ -430,13 +433,13 @@ Item {
                         current: index === media.album
                         onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = index }
                     }
-                    Label {
+                    EmptyState {
                         visible: albumGrid.count === 0
                         width: parent.width
-                        wrapMode: Text.WordWrap
-                        text: media.scanning ? "Reading your music..." : "No music on the Pi yet. Albums copied into ~/Music on the Pi show up here."
-                        color: Theme.textDim
-                        font.pixelSize: Theme.fontBody
+                        height: albumGrid.height
+                        icon: media.scanning ? "refresh" : "album"
+                        title: media.scanning ? "Reading your music" : "The shelf is empty"
+                        hint: media.scanning ? "Songs show up as they're found" : "Albums copied into ~/Music on the Pi show up here"
                     }
                 }
 
@@ -692,15 +695,18 @@ Item {
                             onHit: media.playSpotify(modelData.uri)
                             onQueued: media.queueSpotify(modelData.uri)
                         }
-                        Label {
+                        EmptyState {
                             visible: resultList.count === 0
                             width: parent.width
-                            wrapMode: Text.WordWrap
-                            text: !searchView.ready ? "Search needs a Spotify app on this Pi: run deploy/spotify/set-spotify-search.sh."
-                                  : spotifySearch.searching ? "Searching..."
-                                  : spotifySearch.message
-                            color: Theme.textDim
-                            font.pixelSize: Theme.fontBody
+                            height: resultList.height
+                            icon: "search"
+                            title: !searchView.ready ? "Search isn't set up"
+                                   : spotifySearch.searching ? "Searching"
+                                   : spotifySearch.message !== "" ? spotifySearch.message
+                                   : "Search Spotify"
+                            hint: !searchView.ready ? "Run deploy/spotify/set-spotify-search.sh on the Pi to set up Spotify search."
+                                  : spotifySearch.searching || spotifySearch.message !== "" ? ""
+                                  : "Type a song, artist or album"
                         }
                     }
                 }

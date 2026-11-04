@@ -11,6 +11,7 @@ from collections import deque
 from unittest import mock
 
 try:
+    from PyQt6 import sip
     from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
     from PyQt6.QtMultimedia import QAudio
 
@@ -38,9 +39,17 @@ class FakeSink(QObject):
     """Stands in for QAudioSink: it never asks the feed for anything."""
     stateChanged = pyqtSignal(object)
 
+    made = []
+
     def __init__(self, device, fmt, parent=None):
         super().__init__(parent)
         self._size = 0
+        self.dev = device
+        self.err = QAudio.Error.NoError
+        FakeSink.made.append(self)
+
+    def device(self):
+        return self.dev
 
     def setBufferSize(self, n):
         self._size = n
@@ -61,7 +70,7 @@ class FakeSink(QObject):
         pass
 
     def error(self):
-        return QAudio.Error.NoError
+        return self.err
 
 
 class FakeBuffer:
@@ -434,6 +443,68 @@ class TeardownTest(Base):
         engine.play_from(1)
         self.assertFalse(dec.live)
         self.assertEqual(engine._decoding.index, 1)
+
+
+class SinkRetryTest(Base):
+    def setUp(self):
+        super().setUp()
+        FakeSink.made = []
+        self.retries = []
+        patch = mock.patch.object(gapless.QTimer, "singleShot",
+                                  lambda ms, fn: self.retries.append(fn))
+        patch.start()
+        self.addCleanup(patch.stop)
+        # Its own output on this thread, not the engine's, which is on the audio
+        # thread making a sink of its own.
+        self.out = gapless._Output(types.SimpleNamespace())
+        self.out.make_sink("A")
+
+    def fail(self, sink):
+        sink.err = QAudio.Error.IOError
+        sink.stateChanged.emit(QAudio.State.StoppedState)
+
+    def test_retry_after_new_device_is_dropped(self):
+        a = self.out.sink
+        self.fail(a)
+        self.assertEqual(len(self.retries), 1)
+        self.out.make_sink("B")
+        b = self.out.sink
+        self.retries[0]()
+        self.assertIs(self.out.sink, b)
+        self.assertEqual([s.dev for s in FakeSink.made if s.dev == "A"], ["A"])
+
+    def test_retry_with_nothing_else_remakes_sink(self):
+        self.fail(self.out.sink)
+        self.retries[0]()
+        self.assertEqual([s.dev for s in FakeSink.made][-2:], ["A", "A"])
+        self.assertIs(self.out.sink, FakeSink.made[-1])
+
+    def test_old_sink_error_schedules_nothing(self):
+        a = self.out.sink
+        self.out.make_sink("B")
+        self.fail(a)
+        self.assertEqual(self.retries, [])
+
+    def test_stopping_old_sink_schedules_nothing(self):
+        a = self.out.sink
+        a.err = QAudio.Error.IOError
+        a.stop = lambda: a.stateChanged.emit(QAudio.State.StoppedState)
+        self.out.make_sink("B")
+        self.assertEqual(self.retries, [])
+
+    def test_deleted_sink_reporting_a_stop_is_ignored(self):
+        a = self.out.sink
+        a.err = QAudio.Error.IOError
+        sip.delete(a)
+        self.out._state(a, QAudio.State.StoppedState)
+        self.assertEqual(self.retries, [])
+
+    def test_retry_after_output_is_deleted_does_nothing(self):
+        self.fail(self.out.sink)
+        made = len(FakeSink.made)
+        sip.delete(self.out)
+        self.retries[0]()
+        self.assertEqual(len(FakeSink.made), made)
 
 
 if __name__ == "__main__":

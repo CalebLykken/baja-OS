@@ -22,6 +22,15 @@ class TruckEasterEgg(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bTimer\s*\{", self.src)), 1)
         self.assertNotIn("repeat: true", self.src)
 
+    def test_spins_stop_the_running_intro_before_restarting_it(self):
+        # start() on a running animation is a no-op and property changes only
+        # apply on restart, so a tap during an open spin or an earlier egg spin
+        # would change the caption but never spin. Stop first, then retarget.
+        for fn in ("playIntro", "eggTap"):
+            body = self.src.split("function %s()" % fn, 1)[1].split("\n    }\n", 1)[0]
+            self.assertRegex(body, r"intro\.stop\(\)[\s\S]*intro\.from\s*=[\s\S]*intro\.start\(\)",
+                             fn)
+
 
 if __name__ == "__main__":
     unittest.main()

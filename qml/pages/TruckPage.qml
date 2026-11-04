@@ -44,6 +44,7 @@ Item {
         if (dragging || Date.now() - lastIntro < 30000) return
         lastIntro = Date.now()
         flick.stop()
+        intro.stop()           // start() on a running animation is a no-op
         intro.duration = 1400
         intro.from = spin
         intro.to = spin + 360
@@ -75,6 +76,7 @@ Item {
         eggLine = eggLines[eggIndex]
         eggIndex = (eggIndex + 1) % eggLines.length
         flick.stop()
+        intro.stop()           // restart from the current angle if one is running
         intro.duration = 2000
         intro.from = spin
         intro.to = spin + 720

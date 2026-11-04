@@ -6,10 +6,15 @@ Rectangle {
     property real value: 0
     property color fill: Theme.accent
 
+    // Read-only view of the seek-flash overlay's opacity (0 when idle).
+    readonly property real flashOpacity: seekFlash.opacity
+
     // What the fill actually draws; follows value, except for the sweep below.
     property real shown: 0
     // Last clamped value, to tell a new track from an ordinary change.
     property real _prev: 0
+    // False until the starting value is in, so creation never flashes.
+    property bool _ready: false
 
     height: 6
     radius: 3
@@ -20,6 +25,31 @@ Rectangle {
         height: parent.height
         radius: parent.radius
         color: parent.fill
+    }
+
+    // Seek acknowledgement: a lighter copy of the fill laid over it that
+    // brightens once and fades. Invisible (not drawn) except for 280 ms after
+    // a seek jump; the bar's position is untouched.
+    Rectangle {
+        id: seekFlash
+        objectName: "seekFlash"
+        width: parent.width * parent.shown
+        height: parent.height
+        radius: parent.radius
+        color: Qt.lighter(parent.fill, 1.5)
+        opacity: 0
+        visible: opacity > 0
+    }
+
+    // One-shot fade of the overlay; same timing as the sweep, ends by itself.
+    NumberAnimation {
+        id: flash
+        target: seekFlash
+        property: "opacity"
+        from: 0.6
+        to: 0
+        duration: 280
+        easing.type: Easing.OutCubic
     }
 
     // One-shot drain back to the start; never loops or runs while idle.
@@ -35,6 +65,7 @@ Rectangle {
         var v = Math.max(0, Math.min(1, value))
         shown = v
         _prev = v
+        _ready = true
     }
 
     onValueChanged: {
@@ -44,6 +75,11 @@ Rectangle {
         // 1 s position ticks and forward jumps must not animate, and drags
         // must follow the finger. A tick arriving mid-sweep stops it and snaps,
         // so the bar always ends on the true position.
+        // A jump of more than 0.08 either way that is not the sweep case also
+        // flashes the fill once. 1 s ticks and small drag steps stay below it.
+        var sweeps = _prev >= 0.5 && v <= 0.05 && bar.visible
+        if (_ready && !sweeps && bar.visible && Math.abs(v - _prev) > 0.08)
+            flash.restart()
         if (_prev >= 0.5 && v <= 0.05 && bar.visible) {
             sweep.from = shown
             sweep.to = v

@@ -11,13 +11,12 @@ import shutil
 import subprocess
 import threading
 import time
-import traceback
 from glob import glob
 from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import errorlog, safe_emit
+from backend import FailureLog, errorlog, safe_emit
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_EVERY_MS = 5000
@@ -141,7 +140,7 @@ class SystemInfo(QObject):
         self._version_read = False
         self._busy = False
         self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
-        self._read_error = ""      # the error the last reading died of, while it keeps happening
+        self._logged = FailureLog("System: status check failed", "System: status check working again")
         self._power_error = ""
         self._hold = lambda: False  # True while reboot and shut down should wait
         self._held = None           # (action, give up then) while one's waiting
@@ -187,17 +186,6 @@ class SystemInfo(QObject):
             finally:
                 safe_emit(self, "_read_done", v)      # always, or _busy would never clear
         threading.Thread(target=work, daemon=True).start()
-
-    def _logged(self, error=None):
-        """Log a reading that crashed (once, while the same error repeats), or
-        that it's working again."""
-        err = "" if error is None else f"{type(error).__name__}: {error}"
-        if err and err != self._read_error:
-            trace = "".join(traceback.format_exception(error)).rstrip()
-            print(f"System: status check failed: {err}\n{trace}", flush=True)
-        elif not err and self._read_error:
-            print("System: status check working again", flush=True)
-        self._read_error = err
 
     def _got_version(self, version):
         if version != self._version:

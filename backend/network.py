@@ -12,11 +12,10 @@ import shutil
 import socket
 import subprocess
 import threading
-import traceback
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
-from backend import safe_emit
+from backend import FailureLog, safe_emit
 from backend.dbus import NM_DEBOUNCE_MS, NM_SERVICE, NM_SIGNALS, BusWatch
 
 CHECK_EVERY_MS = 5000
@@ -103,7 +102,7 @@ class Network(QObject):
         self._checked = False
         self._busy = False
         self._again = False        # a signal came during a check, which may have looked too early
-        self._check_error = ""     # the error the last check died of, while it keeps happening
+        self._logged = FailureLog("Network: check failed", "Network: working again")
         self._result.connect(self._apply)  # queued back onto the UI thread
         self._timer = QTimer(self)
         self._timer.setInterval(CHECK_EVERY_MS)
@@ -137,17 +136,6 @@ class Network(QObject):
             self._logged(e)
         finally:
             safe_emit(self, "_result", result)    # always, or _busy would never clear
-
-    def _logged(self, error=None):
-        """Log a check that crashed (once, while the same error repeats), or
-        that it's working again."""
-        err = "" if error is None else f"{type(error).__name__}: {error}"
-        if err and err != self._check_error:
-            trace = "".join(traceback.format_exception(error)).rstrip()
-            print(f"Network: check failed: {err}\n{trace}", flush=True)
-        elif not err and self._check_error:
-            print("Network: working again", flush=True)
-        self._check_error = err
 
     def _apply(self, result):
         self._busy = False

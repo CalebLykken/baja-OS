@@ -83,6 +83,10 @@ Rectangle {
         MouseArea { id: area; anchors.fill: parent; onClicked: key.hit() }
     }
 
+    // Swallow taps in the gaps and frame so they don't reach what's under
+    // the keyboard (the keys' own MouseAreas sit above this one).
+    MouseArea { anchors.fill: parent }
+
     Column {
         anchors { fill: parent; margins: 12 }
         spacing: kb.gap

@@ -143,6 +143,11 @@ class DemoDriveTest(unittest.TestCase):
         for s in run(1, 600, limit=15):
             self.assertLess(s["speed"], 22)
 
+    def test_step_zero_before_any_time_passes(self):
+        s = DemoDrive(seed=1).step(0)
+        self.assertEqual(set(s), KEYS)
+        self.assertAlmostEqual(s["coolant"], 120, delta=5)
+
     def test_import_has_no_qt(self):
         code = "import sys, backend.demo; sys.exit('PyQt6' in sys.modules)"
         r = subprocess.run([sys.executable, "-c", code], cwd=ROOT)

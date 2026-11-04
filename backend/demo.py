@@ -63,6 +63,7 @@ class DemoDrive:
         self._throttle = 0.0
         self._boost = -18.0
         self._intake = 72.0
+        self._coolant = _COOLANT_COLD
         self._wobble = 0.0
         self._phases = []
         self._idx = 0

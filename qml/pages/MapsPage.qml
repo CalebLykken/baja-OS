@@ -368,7 +368,7 @@ Item {
             height: 100
             radius: page.cRadius
             color: page.cPanel
-            scale: whereTap.pressed ? 0.98 : 1
+            scale: whereTo.pressed ? 0.98 : 1
             Behavior on scale { NumberAnimation { duration: 80 } }
             Row {
                 anchors { left: parent.left; leftMargin: 26; verticalCenter: parent.verticalCenter }
@@ -381,7 +381,7 @@ Item {
                     font.weight: Font.DemiBold
                 }
             }
-            TapHandler { id: whereTap; onTapped: page.openSearch() }
+            onTapped: page.openSearch()
         }
         // One tap Home or Work, beside it.
         Row {
@@ -419,7 +419,6 @@ Item {
             height: (page.typing ? keyboard.y - 16 : parent.height) - 32
             radius: page.cRadius
             color: page.cPanel
-            MouseArea { anchors.fill: parent }            // the map underneath doesn't react
 
             // ---- the header: search box (or a title), back and close ----
             RowLayout {
@@ -895,7 +894,7 @@ Item {
                     }
                 }
             }
-            TapHandler { onTapped: routing.repeatLast() }    // say it again (Re-center is its own key)
+            onTapped: routing.repeatLast()                   // say it again (Re-center is its own key)
         }
 
         // ... and the trip, bottom-left: arrival, time left, distance left.
@@ -1345,7 +1344,7 @@ Item {
                       bottom: parent.bottom; bottomMargin: 16 }
             width: recenterRow.implicitWidth + 56
             height: 100
-            color: recenterTap.pressed ? page.cPanelHi : page.cPanel
+            color: pressed ? page.cPanelHi : page.cPanel
             Row {
                 id: recenterRow
                 anchors.centerIn: parent
@@ -1358,7 +1357,7 @@ Item {
                     font.weight: Font.DemiBold
                 }
             }
-            TapHandler { id: recenterTap; onTapped: page.map.call("recenter()") }
+            onTapped: page.map.call("recenter()")
         }
 
         // The road you're on, bottom centre, while just following.
@@ -1409,9 +1408,14 @@ Item {
     component MapLabel: Label { color: page.cText }
 
     // A card over the map: the style's card, framed, on a hard offset
-    // shadow like the album cover's, so it stands off a busy map.
+    // shadow like the album cover's, so it stands off a busy map. It takes
+    // every touch that lands on it (the map underneath neither pans nor
+    // drops out of follow mode); a tap on its own face is `tapped`.
     component Sheet: Rectangle {
         id: sheet
+        signal tapped()
+        readonly property bool pressed: swallow.pressed
+        MouseArea { id: swallow; anchors.fill: parent; onClicked: sheet.tapped() }
         radius: page.cRadius
         color: page.cPanel
         border.width: Theme.border
@@ -1459,9 +1463,9 @@ Item {
         signal hit()
         width: savedRow.implicitWidth + 48
         height: 100
-        scale: savedTap.pressed ? 0.98 : 1
+        scale: savedBack.pressed ? 0.98 : 1
         Behavior on scale { NumberAnimation { duration: 80 } }
-        Sheet { anchors.fill: parent }
+        Sheet { id: savedBack; anchors.fill: parent; onTapped: saved.hit() }
         Row {
             id: savedRow
             anchors.centerIn: parent
@@ -1478,7 +1482,6 @@ Item {
                 }
             }
         }
-        TapHandler { id: savedTap; onTapped: saved.hit() }
     }
 
     // A heading in the search panel's list.

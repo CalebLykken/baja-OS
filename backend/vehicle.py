@@ -162,7 +162,8 @@ class VehicleData(QObject):
         """Time a 0-60 mph (and 0-100 km/h) run from the speeds already
         arriving. Only real speeds count, and only runs that start from under
         1 mph; a stop, a long crawl or a lost speed abandons the run."""
-        mph = None if self.simulated else self._speed_now()
+        real = self._live or self._gps_mph is not None    # not the simulated drive
+        mph = self._speed_now() if real else None
         if mph is None or mph < 1:
             # armed: the start is refreshed until the moment it rolls
             self._launch_at = None if mph is None else self._clock()

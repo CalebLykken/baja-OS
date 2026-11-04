@@ -139,5 +139,28 @@ class GpsOnly(unittest.TestCase):
         self.assertEqual(self.v.zeroToSixty, 4.0)
 
 
+class GpsOnlyNeverAnswered(GpsOnly):
+    """The same on a fresh install: no demo flag and the OBD has never
+    answered, so the engine is `simulated`, but the GPS speed is real."""
+
+    def setUp(self):
+        self.now = 0.0
+        self.v = VehicleData(settings=None, demo=None)
+        self.v._clock = lambda: self.now
+        self.gps = FakeGps()
+        self.v.set_gps(self.gps)
+
+    def test_it_is_simulated_yet_the_gps_speed_times_the_run(self):
+        self.assertTrue(self.v.simulated)
+        for t, mph in ((0, 0), (1, 20), (3, 45), (5, 62)):
+            self.at(t, mph)
+        self.assertEqual(self.v.zeroToSixty, 5.0)
+
+    def test_the_simulated_drive_alone_records_nothing(self):
+        self.v._speed, self.now = 62.0, 5.0
+        self.v._watch_launch()
+        self.assertEqual(self.v.zeroToSixty, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

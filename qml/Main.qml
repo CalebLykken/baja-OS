@@ -252,7 +252,9 @@ Window {
     // Trip milestone toast: shown for a few seconds by one short animation
     // that ends by itself; invisible (not drawn) the rest of the time. No
     // MouseArea, so it never takes a tap. Above the pages, below the dimming,
-    // screen-off and prompt layers.
+    // screen-off and prompt layers. Never on Maps: the next-turn card, the
+    // "Outside the offline map" banner and the Home/Work keys fill that top
+    // row, and the toast would cover them while the driver is reading them.
     Rectangle {
         id: milestonePill
         property string text: ""
@@ -287,10 +289,19 @@ Window {
             NumberAnimation { target: milestonePill; property: "opacity"; to: 0; duration: 400 }
         }
     }
+    // Opening Maps while the toast is up cuts it short.
+    Connections {
+        target: root
+        function onOnMapsChanged() {
+            if (!root.onMaps) return
+            milestoneShow.stop()
+            milestonePill.opacity = 0
+        }
+    }
     Connections {
         target: tripCounter
         function onMilestone(text) {
-            if (splash.visible) return
+            if (splash.visible || root.onMaps) return
             milestonePill.text = text
             milestoneShow.restart()
         }

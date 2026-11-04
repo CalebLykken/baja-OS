@@ -1,13 +1,24 @@
 import QtQuick
 
-// Full-window decoration behind the UI. Painted once per size or style
-// change, never per frame, so it costs nothing while driving.
+// Full-window decoration behind the UI. Painted once per size, style or
+// colour change (day/night flips the theme colours), never per frame, so it
+// costs nothing while driving.
 Canvas {
     id: bd
     visible: Theme.backdrop !== "none"
 
     property string kind: Theme.backdrop
+    // Theme colours, bound so a day/night or style switch repaints the canvas.
+    // Canvas only repaints on requestPaint(), and kind does not change between
+    // day and night, so these handlers are what keep the lines and stripes
+    // in the right colours.
+    property color lineColor: Theme.line
+    property color accentColor: Theme.accent
+    property color hiColor: Theme.panelHi
     onKindChanged: requestPaint()
+    onLineColorChanged: requestPaint()
+    onAccentColorChanged: requestPaint()
+    onHiColorChanged: requestPaint()
     onWidthChanged: requestPaint()
     onHeightChanged: requestPaint()
 
@@ -15,7 +26,7 @@ Canvas {
     // "peaks". Deterministic so the map doesn't change between runs.
     function paintTopo(ctx) {
         var peaks = [[0.78, 0.30, 11], [0.25, 0.85, 9], [1.05, 0.95, 8]]
-        ctx.strokeStyle = "" + Theme.line
+        ctx.strokeStyle = "" + lineColor
         ctx.lineWidth = 1.5
         ctx.globalAlpha = 0.8
         for (var p = 0; p < peaks.length; p++) {
@@ -38,7 +49,7 @@ Canvas {
 
     // Two diagonal livery stripes sweeping up from the bottom-right corner.
     function paintStripes(ctx) {
-        var colors = ["" + Theme.accent, "" + Theme.panelHi]
+        var colors = ["" + accentColor, "" + hiColor]
         var w = [70, 34]
         var x0 = width * 0.62
         ctx.globalAlpha = 0.24

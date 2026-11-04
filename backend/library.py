@@ -380,7 +380,7 @@ def resume_point(albums, tracks, state):
     name and the song by its file, so songs added since don't shift them;
     a song that's gone falls back to its place in the queue, then to the
     first song. A damaged position (not a finite number, negative, a bool)
-    counts as 0, and a position past the song's end is clamped to its last
+    counts as 0, and a position past a known song end is clamped to its last
     second, so a bad saved value can't stop startup or skip the song."""
     if not tracks:
         return -1, 0, 0
@@ -406,8 +406,11 @@ def resume_point(albums, tracks, state):
     if (paths[index] != state.get("path") or isinstance(position, bool)
             or not isinstance(position, (int, float)) or position < 0):
         position = 0                         # not the same song: from its start
+    position = int(position)
     dur = tracks[queue[index]]["duration"]
-    return album, index, min(int(position), dur - 1 if dur > 1 else 0)
+    if dur > 0:                              # a tag with no length can't bound it
+        position = min(position, dur - 1 if dur > 1 else 0)
+    return album, index, position
 
 
 def play_order(count, first, shuffle):

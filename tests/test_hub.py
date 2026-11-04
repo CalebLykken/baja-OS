@@ -233,12 +233,16 @@ class SpotifyResumeTest(unittest.TestCase):
 
 
 class HubTest(unittest.TestCase):
+    def setUp(self):
+        self.kept = []
+
     def make(self, **values):
         self.settings = FakeSettings(**values)
         self.local, self.phone, self.spotify = MediaPlayer(), FakeSource(), FakeSource()
         with mock.patch("backend.hub.shutil.which", return_value=None):   # never the Pi's real volume
             hub = MediaHub(self.local, self.phone, self.spotify, settings=self.settings)
         hub.start()
+        self.kept.append((self.local, hub))      # a dropped player would delete its timer
         self.addCleanup(self.local._timer.stop)
         return hub
 

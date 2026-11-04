@@ -437,6 +437,16 @@ class ResumePointTest(unittest.TestCase):
             state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": position}
             self.assertEqual(resume_point(self.albums, self.tracks, state), (self.red, 1, 199), position)
 
+    def test_a_song_with_no_known_length_keeps_its_saved_position(self):
+        # mutagen reports 0 for some playable files; that must not force 0:00.
+        tracks = [dict(t, duration=0) for t in self.tracks]
+        albums = group_albums(tracks)
+        red = next(i for i, a in enumerate(albums) if a["title"] == "Red")
+        for position, want in ((125, 125), (125.9, 125), (10 ** 6, 10 ** 6), (-3, 0),
+                               (float("nan"), 0), (float("inf"), 0)):
+            state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": position}
+            self.assertEqual(resume_point(albums, tracks, state), (red, 1, want), position)
+
     def test_a_position_within_the_song_is_kept(self):
         state = {"album": ["Band", "Red"], "path": "/m/Red-2.wav", "index": 1, "position": 1.9}
         self.assertEqual(resume_point(self.albums, self.tracks, state), (self.red, 1, 1))

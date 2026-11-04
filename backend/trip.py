@@ -11,7 +11,7 @@ import json
 import math
 import time
 
-from PyQt6.QtCore import QObject, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from backend.routing import boot_id
 
@@ -58,7 +58,10 @@ def saved_trip(text, boot, up):
 
 class TripStore(QObject):
     """Saves and restores the trip for Trip.qml. save() is cheap: one small
-    string handed to settings, which writes it later on its own thread."""
+    string handed to settings, which writes it later on its own thread.
+    saveRequested asks Trip.qml to save now (the dashboard is quitting)."""
+
+    saveRequested = pyqtSignal()
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -73,3 +76,16 @@ class TripStore(QObject):
     def save(self, metres, moving_seconds, running_seconds, peak_boost):
         self._settings.set(SETTING, trip_record(metres, moving_seconds, running_seconds,
                                                 peak_boost, boot_id(), uptime()))
+
+    @pyqtSlot()
+    def request_save(self):
+        """Ask the trip to save itself now; Trip.qml answers by calling save()."""
+        self.saveRequested.emit()
+
+
+def connect_quit(about_to_quit, store, flush):
+    """On the way out, the trip saves first and then settings are flushed, so
+    the last save is on disk. Slots run in the order they are connected, which
+    is why both are connected here, together."""
+    about_to_quit.connect(store.request_save)
+    about_to_quit.connect(flush)

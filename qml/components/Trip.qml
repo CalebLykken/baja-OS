@@ -7,8 +7,8 @@ import QtQuick
 // once at boot: the Pi's clock at boot is the last shutdown time until
 // chrony steps it, and a start stamped then would stay wrong all drive.
 // A restart of the dashboard mid-drive (the watchdog, the updater at a stop)
-// carries the trip on: it is saved every 30 s of rolling and at a milestone,
-// and read back at start-up when it is the same boot (backend/trip.py). What
+// carries the trip on: it is saved every 30 s of rolling, at a milestone, when
+// the truck stops and when the dashboard quits, and read back at start-up when it is the same boot (backend/trip.py). What
 // is read back is what the milestones compare against, so none fires twice.
 Item {
     id: trip
@@ -17,6 +17,7 @@ Item {
     property real metres: 0
     property real movingSeconds: 0        // time actually rolling, not stopped at lights
     property real peakBoost: Number.NEGATIVE_INFINITY   // psi, while the engine answers
+    property bool wasMoving: false        // rolling at the last tick, to catch the stop
 
     readonly property real averageMph: movingSeconds > 0 ? metres / movingSeconds / 0.44704 : 0
     readonly property bool boostKnown: isFinite(peakBoost)
@@ -27,6 +28,12 @@ Item {
     function save() {
         if (typeof tripStore !== "undefined")
             tripStore.save(trip.metres, trip.movingSeconds, trip.runningSeconds, trip.peakBoost)
+    }
+
+    // The dashboard is quitting (main.py asks before settings are flushed).
+    Connections {
+        target: typeof tripStore !== "undefined" ? tripStore : null
+        function onSaveRequested() { trip.save() }
     }
 
     Component.onCompleted: {
@@ -68,7 +75,8 @@ Item {
             trip.runningSeconds += 1
             trip.started = new Date(Date.now() - trip.runningSeconds * 1000)
             if (typeof vehicle === "undefined") return
-            if (vehicle.speedKnown && vehicle.speed > 1) {
+            var moving = vehicle.speedKnown && vehicle.speed > 1
+            if (moving) {
                 var prevMetres = trip.metres, prevSeconds = trip.movingSeconds
                 trip.metres += vehicle.speed * 0.44704      // mph to metres in this second
                 trip.movingSeconds += 1
@@ -79,6 +87,9 @@ Item {
             }
             if (vehicle.engineKnown && vehicle.boost > trip.peakBoost)
                 trip.peakBoost = vehicle.boost
+            // One save per stop; nothing while parked.
+            if (trip.wasMoving && !moving) trip.save()
+            trip.wasMoving = moving
         }
     }
 }

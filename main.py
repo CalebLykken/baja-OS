@@ -56,7 +56,7 @@ from backend.spotifyaccount import SpotifyAccount
 from backend.spotifysearch import SpotifySearch
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
-from backend.trip import TripStore
+from backend.trip import TripStore, connect_quit
 from backend.updater import Updater, mark_clean_exit
 from backend.vehicle import VehicleData
 from backend.wifi import Wifi
@@ -191,7 +191,10 @@ def main():
     # quits or when systemd stops it (SIGTERM would otherwise end the process
     # on the spot). Python only sees the signal when it gets to run, so a
     # timer gives it a turn.
-    app.aboutToQuit.connect(settings.flush_and_wait)
+    # The trip saves first (a restart at a stop, the updater's, would otherwise
+    # lose what it counted since its last save), then settings go to disk.
+    trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
+    connect_quit(app.aboutToQuit, trip_store, settings.flush_and_wait)
 
     def on_sigterm(*_):
         settings.flush_and_wait()
@@ -275,7 +278,6 @@ def main():
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power)
     system.powerFailed.connect(key_off.power_failed)
 
-    trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
     clock.mark("backends")
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()

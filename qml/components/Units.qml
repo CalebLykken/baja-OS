@@ -29,16 +29,26 @@ QtObject {
     }
 
     // Distances for directions: feet then miles, or metres then kilometres.
+    // Decimals follow the rounded value, so 9.96 mi reads "10 mi", not "10.0 mi".
+    // Metres switch to km once they would round to 1000 m.
     function distanceText(m) {
         if (m < 0) return ""
-        if (metric)
-            return m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1000).toFixed(m < 10000 ? 1 : 0) + " km"
+        if (metric) {
+            if (Math.round(m / 10) * 10 < 1000) return Math.max(10, Math.round(m / 10) * 10) + " m"
+            var km = Math.round(m / 100) / 10
+            return (km < 10 ? km.toFixed(1) : km.toFixed(0)) + " km"
+        }
         var mi = m / 1609.34
-        return mi < 0.1 ? Math.round(m * 3.281 / 50) * 50 + " ft" : mi.toFixed(mi < 10 ? 1 : 0) + " mi"
+        if (mi < 0.1) return Math.max(50, Math.round(m * 3.281 / 50) * 50) + " ft"
+        var miles = Math.round(mi * 10) / 10
+        return (miles < 10 ? miles.toFixed(1) : miles.toFixed(0)) + " mi"
     }
+    // Whole hours drop the minutes: "1 h", "1 h 5 min".
     function durationText(s) {
         var min = Math.max(1, Math.round(s / 60))
-        return min < 60 ? min + " min" : Math.floor(min / 60) + " h " + (min % 60) + " min"
+        if (min < 60) return min + " min"
+        var rest = min % 60
+        return Math.floor(min / 60) + " h" + (rest ? " " + rest + " min" : "")
     }
     function arrivalText(s) { return timeText(new Date(Date.now() + s * 1000)) }
 }

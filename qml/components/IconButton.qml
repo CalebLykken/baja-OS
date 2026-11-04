@@ -25,7 +25,10 @@ Rectangle {
     color: primary ? (tap.pressed ? Qt.darker(Theme.accent, 1.25) : Theme.accent)
                    : (tap.pressed ? Theme.line : Theme.panelHi)
     scale: tap.pressed ? 0.97 : 1
-    Behavior on scale { NumberAnimation { duration: 70 } }
+    // Press dips in 70 ms, release springs back in 180 ms (OutBack). The same
+    // numbers are used in Card, TextButton, IconButton, NavButton, Keyboard and
+    // SegmentedControl. Runs only on a touch, so there is no idle cost.
+    Behavior on scale { NumberAnimation { duration: tap.pressed ? 70 : 180; easing.type: tap.pressed ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
 
     property bool ready: false      // no swap animation while the page is being created
     property string shownIcon: ""   // the name `front` last showed, so a swap knows what to retire

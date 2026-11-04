@@ -73,6 +73,12 @@ Rectangle {
                     anchors.centerIn: parent
                     text: modelData.label
                     color: parent.selected ? Theme.bg : Theme.text
+                    scale: tap.pressed && !parent.selected ? 0.94 : 1
+                    // Press dips in 70 ms, release springs back in 180 ms
+                    // (OutBack). The same numbers are used in Card, TextButton,
+                    // IconButton, NavButton, Keyboard and SegmentedControl. Runs
+                    // only on a touch, so there is no idle cost.
+                    Behavior on scale { NumberAnimation { duration: tap.pressed ? 70 : 180; easing.type: tap.pressed ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
                     Behavior on color { ColorAnimation { duration: 150 } }
                     font.pixelSize: Theme.fontBody - 2
                     font.weight: parent.selected ? Font.DemiBold : Font.Normal

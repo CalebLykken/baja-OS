@@ -20,7 +20,10 @@ Rectangle {
                    : (tap.pressed ? Theme.line : Theme.panelHi)
     opacity: enabled ? 1 : 0.5
     scale: tap.pressed ? 0.97 : 1
-    Behavior on scale { NumberAnimation { duration: 70 } }
+    // Press dips in 70 ms, release springs back in 180 ms (OutBack). The same
+    // numbers are used in Card, TextButton, IconButton, NavButton, Keyboard and
+    // SegmentedControl. Runs only on a touch, so there is no idle cost.
+    Behavior on scale { NumberAnimation { duration: tap.pressed ? 70 : 180; easing.type: tap.pressed ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
 
     Row {
         id: row

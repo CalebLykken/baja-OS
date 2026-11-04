@@ -58,7 +58,11 @@ Rectangle {
                        : (area.pressed ? Theme.line : (lit ? Theme.line : Theme.panelHi))
         opacity: enabled ? 1 : 0.5
         scale: area.pressed ? 0.96 : 1
-        Behavior on scale { NumberAnimation { duration: 70 } }
+        // Press dips in 70 ms, release springs back in 180 ms (OutBack). The
+        // same numbers are used in Card, TextButton, IconButton, NavButton,
+        // Keyboard and SegmentedControl. Runs only on a touch, so there is no
+        // idle cost.
+        Behavior on scale { NumberAnimation { duration: area.pressed ? 70 : 180; easing.type: area.pressed ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
         onDownChanged: {
             if (key.preview) {
                 if (key.down) kb.previewKey = key

@@ -135,6 +135,28 @@ def _busctl(*args, timeout=3):
                           capture_output=True, text=True, timeout=timeout)
 
 
+def _try_busctl(label, *args, timeout=3):
+    """_busctl for the worker threads behind the buttons: never raises, says why in the
+    journal when BlueZ can't be reached or refuses, and returns whether it worked."""
+    try:
+        result = _busctl(*args, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Bluetooth: {label} failed (busctl timed out)", flush=True)
+        return False
+    except OSError as e:
+        print(f"Bluetooth: {label} failed (busctl not available: {e})", flush=True)
+        return False
+    except subprocess.SubprocessError as e:
+        print(f"Bluetooth: {label} failed ({e})", flush=True)
+        return False
+    if result.returncode != 0:
+        lines = (result.stderr or "").strip().splitlines()
+        print(f"Bluetooth: {label} failed: {lines[0] if lines else 'exit ' + str(result.returncode)}",
+              flush=True)
+        return False
+    return True
+
+
 class BluetoothAudio(QObject):
     changed = pyqtSignal()          # connection / pairing state
     volumeChanged = pyqtSignal()    # the phone's volume (changed on either end)
@@ -142,6 +164,7 @@ class BluetoothAudio(QObject):
     positionChanged = pyqtSignal()
     playingChanged = pyqtSignal()
     _polled = pyqtSignal(object)
+    _pairing_failed = pyqtSignal()
 
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
@@ -160,6 +183,7 @@ class BluetoothAudio(QObject):
         self._ticks_left = 0       # until the next poll
         self._poll_error = ""      # the error the last poll died of, while it keeps happening
         self._polled.connect(self._apply)
+        self._pairing_failed.connect(self._cancel_pairing_window)
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self._tick)
@@ -339,9 +363,9 @@ class BluetoothAudio(QObject):
         if not self._player:
             return
         path = self._player["path"]
-        threading.Thread(target=lambda: _busctl("call", "org.bluez", path,
-                                                "org.bluez.MediaPlayer1", method),
-                         daemon=True).start()
+        threading.Thread(target=lambda: _try_busctl(
+            method, "call", "org.bluez", path, "org.bluez.MediaPlayer1", method),
+            daemon=True).start()
 
     # ---- properties -------------------------------------------------------
     @pyqtProperty(bool, constant=True)
@@ -484,8 +508,8 @@ class BluetoothAudio(QObject):
         self._state["volume"] = raw
         self._volume_sent_at = time.monotonic()
         self._volume_settle.start()
-        threading.Thread(target=lambda: _busctl(
-            "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
+        threading.Thread(target=lambda: _try_busctl(
+            "Volume", "set-property", "org.bluez", transport, "org.bluez.MediaTransport1",
             "Volume", "q", str(raw)), daemon=True).start()
         self.volumeChanged.emit()
 
@@ -500,14 +524,14 @@ class BluetoothAudio(QObject):
     @pyqtSlot(str)
     def connectDevice(self, path):
         if path.startswith("/org/bluez/"):
-            threading.Thread(target=lambda: _busctl("call", "org.bluez", path, "org.bluez.Device1",
-                                                    "Connect", timeout=25), daemon=True).start()
+            threading.Thread(target=lambda: _try_busctl(
+                "Connect", "call", "org.bluez", path, "org.bluez.Device1", "Connect", timeout=25), daemon=True).start()
 
     @pyqtSlot(str)
     def disconnectDevice(self, path):
         if path.startswith("/org/bluez/"):
-            threading.Thread(target=lambda: _busctl("call", "org.bluez", path, "org.bluez.Device1",
-                                                    "Disconnect", timeout=10), daemon=True).start()
+            threading.Thread(target=lambda: _try_busctl(
+                "Disconnect", "call", "org.bluez", path, "org.bluez.Device1", "Disconnect", timeout=10), daemon=True).start()
 
     @pyqtSlot(str)
     def forgetDevice(self, path):
@@ -515,8 +539,12 @@ class BluetoothAudio(QObject):
         adapter = self._state["adapter"]
         if adapter and path.startswith(adapter + "/"):
             self._accepted.pop(path, None)
-            threading.Thread(target=lambda: _busctl("call", "org.bluez", adapter, "org.bluez.Adapter1",
-                                                    "RemoveDevice", "o", path), daemon=True).start()
+            threading.Thread(target=lambda: _try_busctl(
+                "Forget", "call", "org.bluez", adapter, "org.bluez.Adapter1", "RemoveDevice", "o", path), daemon=True).start()
+
+    def _cancel_pairing_window(self):
+        self._pairing_until = 0.0
+        self.changed.emit()
 
     @pyqtSlot(bool)
     def setPairing(self, on):
@@ -530,9 +558,13 @@ class BluetoothAudio(QObject):
         val = "true" if on else "false"
 
         def run():
-            _busctl("set-property", "org.bluez", adapter, "org.bluez.Adapter1",
-                    "DiscoverableTimeout", "u", str(PAIRING_SECONDS))
-            _busctl("set-property", "org.bluez", adapter, "org.bluez.Adapter1", "Pairable", "b", val)
-            _busctl("set-property", "org.bluez", adapter, "org.bluez.Adapter1", "Discoverable", "b", val)
+            ok = [_try_busctl("Pairing", "set-property", "org.bluez", adapter, "org.bluez.Adapter1",
+                              "DiscoverableTimeout", "u", str(PAIRING_SECONDS)),
+                  _try_busctl("Pairing", "set-property", "org.bluez", adapter, "org.bluez.Adapter1",
+                              "Pairable", "b", val),
+                  _try_busctl("Pairing", "set-property", "org.bluez", adapter, "org.bluez.Adapter1",
+                              "Discoverable", "b", val)]
+            if on and not all(ok):
+                safe_emit(self, "_pairing_failed")    # don't show a countdown for nothing
         threading.Thread(target=run, daemon=True).start()
         self.changed.emit()

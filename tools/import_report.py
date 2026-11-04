@@ -13,7 +13,7 @@ Mac and on the Pi alike.
 Usage:
     python3 tools/import_report.py
     python3 tools/import_report.py --top 20 --min-ms 5
-    ssh baja.local 'cd ~/baja-OS && python3 -X importtime -c "import main"' 2> imports.txt; python3 tools/import_report.py --file imports.txt
+    ssh baja.local 'cd ~/baja-OS && python3 -X importtime -c "import main, PyQt6.QtWebEngineQuick, backend.library"' 2> imports.txt; python3 tools/import_report.py --file imports.txt
     python3 tools/import_report.py --file -   # read a saved log from stdin
 """
 
@@ -25,6 +25,10 @@ import sys
 
 _LINE = re.compile(r"^import time:\s+(\d+)\s*\|\s*(\d+)\s*\|( *)(\S.*?)\s*$")
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+# main() imports these lazily on every real boot, so `import main` alone never
+# loads them. Keep in step with the function-level imports in main.py.
+_LAZY_STARTUP = ("PyQt6.QtWebEngineQuick", "backend.library", "backend.demo")
+_BOOT = "interpreter"
 
 
 def parse(text):
@@ -56,6 +60,23 @@ def build_parents(records):
     return parents
 
 
+def boot_count(records, prefix="backend."):
+    """How many leading records are the interpreter's own startup imports
+    (encodings, site, .pth files), not the app's.
+
+    CPython prints children before their parent, so main's own stdlib imports
+    precede the `main` record: the app's imports start where the first top-level
+    main/backend record's subtree starts, just after the top-level record
+    before it. Zero when the log has no main/backend record."""
+    for i, rec in enumerate(records):
+        if rec[3] == 0 and _is_backend(rec[0], prefix):
+            j = i
+            while j > 0 and records[j - 1][3] > 0:
+                j -= 1
+            return j
+    return 0
+
+
 def _is_backend(name, prefix):
     # the bare package record ("backend") is the backend too, not a heavy package
     return (name.startswith(prefix) or name == prefix.rstrip(".")
@@ -64,12 +85,17 @@ def _is_backend(name, prefix):
 
 def attribute(records, prefix="backend."):
     """{index: importer}: the nearest ancestor under prefix (else 'main') for
-    every record that is not itself under prefix and not main."""
+    every record that is not itself under prefix and not main. Records from
+    the interpreter's own boot (see boot_count) are labelled 'interpreter'."""
     parents = build_parents(records)
     by_name = {rec[0]: i for i, rec in enumerate(records)}
+    boot = boot_count(records, prefix)
     out = {}
     for i, rec in enumerate(records):
         if _is_backend(rec[0], prefix):
+            continue
+        if i < boot:
+            out[i] = _BOOT
             continue
         who = parents[i]
         while who is not None and not who.startswith(prefix):
@@ -109,8 +135,9 @@ def report(records, top=15, min_ms=2.0, importers=None):
     """Report lines. importers optionally maps a heavy module's full name to
     the backend modules that import it at the top of their file."""
     lines = []
-    outer = sum(r[2] for r in records if r[3] == 0)
-    lines.append("Total (outermost imports): %s ms" % _ms(outer))
+    outer = sum(r[2] for r in records[boot_count(records):] if r[3] == 0)
+    lines.append("Total (outermost imports, interpreter boot excluded): %s ms"
+                 % _ms(outer))
     lines.append("")
     backend = sorted((r for r in records if r[0].startswith("backend.")),
                      key=lambda r: -r[2])[:top]
@@ -179,6 +206,10 @@ def scan_importers(directory, names):
     return {k: sorted(v) for k, v in out.items() if v}
 
 
+_STARTUP_CODE = "import main\n" + "".join(
+    "import %s\n" % m for m in _LAZY_STARTUP)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--file", help="saved importtime log ('-' for stdin)")
@@ -200,7 +231,7 @@ def main(argv=None):
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         try:
             p = subprocess.run(
-                [sys.executable, "-X", "importtime", "-c", "import main"],
+                [sys.executable, "-X", "importtime", "-c", _STARTUP_CODE],
                 cwd=_ROOT, env=env, capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.SubprocessError) as e:
             print("Import run failed: %s" % e)

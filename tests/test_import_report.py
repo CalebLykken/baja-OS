@@ -63,7 +63,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("urllib.request  <- backend.roadinfo", text)
         self.assertNotIn("http.client  <-", text)
         self.assertNotIn("email.parser  <-", text)
-        self.assertIn("Total (outermost imports): 130.9 ms", text)
+        self.assertIn("Total (outermost imports, interpreter boot excluded): 130.9 ms", text)
 
     def test_min_ms_and_top(self):
         recs = ir.parse(FIXTURE)
@@ -87,6 +87,49 @@ class BackendPackageTests(unittest.TestCase):
         self.assertEqual(ir.heavy_packages(recs, 2.0), [])
         self.assertNotIn("<- backend.startup", "\n".join(ir.report(recs)))
         self.assertNotIn("backend  <-", "\n".join(ir.report(recs)))
+
+
+BOOT = """\
+import time: self [us] | cumulative | imported package
+import time:       200 |        200 | encodings
+import time:      3000 |       3000 | site
+import time:       400 |        400 |   argparse
+import time:       100 |        100 |   json
+import time:        50 |        500 | main
+import time:       100 |      50000 |   PyQt6.QtCore
+import time:       100 |     286000 | PyQt6.QtWebEngineQuick
+import time:       100 |      24000 | backend.library
+"""
+
+
+class BootTests(unittest.TestCase):
+    def test_boot_count_stops_before_mains_own_imports(self):
+        recs = ir.parse(BOOT)
+        self.assertEqual(ir.boot_count(recs), 2)  # encodings, site
+        self.assertEqual(ir.boot_count(ir.parse(FIXTURE)), 0)
+        self.assertEqual(ir.boot_count(ir.parse("")), 0)
+
+    def test_boot_labelled_interpreter_not_main(self):
+        recs = ir.parse(BOOT)
+        who = ir.attribute(recs)
+        self.assertEqual(who[0], "interpreter")
+        self.assertEqual(who[1], "interpreter")
+        self.assertEqual(who[2], "main")  # argparse, imported by main
+        self.assertEqual(who[5], "main")  # QtCore under the lazy PyQt6 import
+        self.assertEqual(who[6], "main")  # the lazy import itself
+        text = "\n".join(ir.report(recs, min_ms=1.0))
+        self.assertIn("site  <- interpreter", text)
+        self.assertNotIn("site  <- main", text)
+
+    def test_total_excludes_boot_includes_lazy_imports(self):
+        text = "\n".join(ir.report(ir.parse(BOOT)))
+        # main 0.5 + QtWebEngineQuick 286 + backend.library 24, not 3.2 of boot
+        self.assertIn("interpreter boot excluded): 310.5 ms", text)
+        self.assertIn("PyQt6.QtWebEngineQuick", text)
+
+    def test_default_command_imports_the_lazy_startup_modules(self):
+        for mod in ("main", "PyQt6.QtWebEngineQuick", "backend.library"):
+            self.assertIn("import %s\n" % mod, ir._STARTUP_CODE)
 
 
 class ScanTests(unittest.TestCase):

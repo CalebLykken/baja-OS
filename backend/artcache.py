@@ -71,13 +71,13 @@ def touch(path):
 def lookup(name):
     """(path, True) if `name` is cached (and counts as used now), else (path, False)."""
     path = cache_dir() / name
-    hit = _usable(path)
+    hit = usable(path)
     if hit:
         touch(path)
     return path, hit
 
 
-def _usable(path):
+def usable(path):
     """True for a non-empty regular file. A zero-byte one (a power cut after
     the rename, before the data reached the disk) is deleted and counts as a
     miss, so it's written again instead of being a hit for ever. One stat."""
@@ -161,7 +161,7 @@ def store(name, data):
 def store_pinned(name, data):
     """Like store(), but in pinned_dir(): only prune_pinned() removes it."""
     path = pinned_dir() / name
-    if not _usable(path):
+    if not usable(path):
         with writing(path, lru=False) as tmp:
             tmp.write_bytes(data)
     return path

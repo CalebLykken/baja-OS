@@ -33,6 +33,7 @@ finishes.
 
 import errno
 import glob
+import math
 import os
 import re
 import select
@@ -62,6 +63,9 @@ RETRY_SLOWEST_S, SLOWEST_AFTER_S = 120.0, 600.0
 # The battery over this: the alternator is charging, the engine's running.
 # Not measured on this truck yet (see backend/ignition.py).
 RUNNING_V = 13.3
+# A battery reading outside this is garbled or cut short: an ELM327 can't run
+# below about 6 V, and no car battery is over 20 V.
+VOLTS_RANGE = (6.0, 20.0)  # V
 HOLD_NAP_S = 0.5                     # how long a held reader sleeps between looks
 # Waking the car: the first time the adapter searches for its protocol,
 # which can take several seconds. Cut short, the next command stops it.
@@ -274,11 +278,18 @@ class Elm:
         return [line.strip() for line in re.split(r"[\r\n]", text) if line.strip()]
 
     def volts(self):
-        """The adapter's supply voltage (the car's battery), or None."""
+        """The adapter's supply voltage (the car's battery), or None when the
+        reply isn't a plausible battery voltage (garbled, cut short, out of range)."""
+        m = re.fullmatch(r"(\d{1,2}(?:\.\d{1,2})?)\s*V?", self.send("ATRV").strip())
+        if m is None:
+            return None
         try:
-            return float(self.send("ATRV").rstrip("V"))
+            v = float(m.group(1))
         except ValueError:
             return None
+        if not math.isfinite(v) or not VOLTS_RANGE[0] <= v <= VOLTS_RANGE[1]:
+            return None
+        return v
 
     def pid(self, pid, timeout=3.0):
         """Mode 01 data bytes, e.g. 0x0C -> [0x1A, 0xF8], or None."""

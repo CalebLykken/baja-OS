@@ -22,6 +22,7 @@ Item {
                 height: bar.height
                 radius: 2
                 color: (index + 0.5) / bar.segments <= bar.value ? Theme.accent : Theme.panelHi
+                Behavior on color { ColorAnimation { duration: 90 } }
             }
         }
     }

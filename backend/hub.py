@@ -203,6 +203,7 @@ class MediaHub(QObject):
         self._art = {}                  # source -> (art url, rounded card url)
         self._phone_connected_at = 0.0
         self._phone_name = phone.deviceName
+        self._phones_connected = self._connected_phones()
 
         for name, src in self._sources.items():
             for sig in ("trackChanged", "positionChanged", "playingChanged"):
@@ -306,9 +307,16 @@ class MediaHub(QObject):
 
     def _phone_connection_changed(self):
         name = self._sources["phone"].deviceName
-        if name and not self._phone_name:
+        connected = self._connected_phones()
+        # Grace starts for the first phone and for a second one joining the first.
+        if (name and not self._phone_name) or (connected - self._phones_connected):
             self._phone_connected_at = time.monotonic()
         self._phone_name = name
+        self._phones_connected = connected
+
+    def _connected_phones(self):
+        paired = getattr(self._sources["phone"], "paired", None) or []
+        return {d.get("address") or d.get("path") for d in paired if d.get("connected")}
 
     def _phone_player_changed(self):
         if not self._sources["phone"].hasPlayer and self._source == "phone":

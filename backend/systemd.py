@@ -21,10 +21,20 @@ def notify(message):
         addr = "\0" + addr[1:]
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.setblocking(False)        # a full queue drops this ping, never stalls the UI
             s.connect(addr)
             s.sendall(message.encode())
-    except OSError:
+    except OSError:                     # includes BlockingIOError
         pass
+
+
+def _watchdog_usec():
+    """WATCHDOG_USEC as a positive int, or 0 (no watchdog) if unset, malformed or <= 0."""
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC", "0") or 0)
+    except (ValueError, TypeError):
+        return 0
+    return usec if usec > 0 else 0
 
 
 class Watchdog(QObject):
@@ -34,11 +44,12 @@ class Watchdog(QObject):
         super().__init__(parent)
         self._timer = QTimer(self)
         self._timer.timeout.connect(lambda: notify("WATCHDOG=1"))
-        usec = int(os.environ.get("WATCHDOG_USEC", "0") or 0)
-        if usec:
-            self._timer.setInterval(max(1000, usec // 2000))
+        self._usec = _watchdog_usec()
+        if self._usec:
+            # QTimer takes a C int; clamp so a huge value can't overflow it
+            self._timer.setInterval(min(max(1000, self._usec // 2000), 2**31 - 1))
 
     def start(self):
         notify("READY=1")
-        if self._timer.interval() > 0 and os.environ.get("WATCHDOG_USEC"):
+        if self._usec:
             self._timer.start()

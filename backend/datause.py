@@ -17,6 +17,7 @@ import time
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
 
 SAMPLE_EVERY_MS = 60000
+FIRST_SAMPLE_MS = 5000     # keeps the settings write off the startup path; well under SAMPLE_EVERY_MS
 SYS_NET = "/sys/class/net"
 SETTING = "dataUse"
 
@@ -62,10 +63,13 @@ class DataUse(QObject):
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
             self._month, self._bytes, self._last = "", 0, {}
         self._present = False
+        self._first = QTimer(self, singleShot=True, interval=FIRST_SAMPLE_MS, timeout=self.sample)
         self._timer = QTimer(self, interval=SAMPLE_EVERY_MS, timeout=self.sample)
 
     def start(self):
-        self.sample()
+        # Not sampled here: start() runs before the event loop, and the first
+        # sample writes the settings file. A few seconds later it's off the startup path.
+        self._first.start()
         self._timer.start()
 
     def sample(self):

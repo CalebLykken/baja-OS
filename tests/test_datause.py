@@ -11,7 +11,7 @@ import unittest
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.datause import DataUse, format_bytes
+from backend.datause import SAMPLE_EVERY_MS, DataUse, format_bytes
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -150,6 +150,22 @@ class DataUseTests(unittest.TestCase):
         du = self.make()
         du.sample()
         self.assertEqual(du.bytesThisMonth, 10)
+
+    def test_start_does_not_sample_at_once(self):
+        self.iface("wlan0", 100, 50)
+        du = self.make()
+        du.start()
+        # Cleanups run after the test returns; the lambdas hold du so the
+        # QObject (and its child timers) is not collected before they stop.
+        self.addCleanup(lambda: (du._first.stop(), du._timer.stop()))
+        self.assertNotIn("dataUse", self.settings.d)
+        self.assertFalse(du.available)
+        self.assertTrue(du._first.isSingleShot())
+        self.assertLess(du._first.interval(), SAMPLE_EVERY_MS)
+        du._first.timeout.emit()
+        self.assertIn("dataUse", self.settings.d)
+        self.assertTrue(du.available)
+        self.assertEqual(du.bytesThisMonth, 150)
 
     def test_format(self):
         self.assertEqual(format_bytes(1_200_000_000), "1.2 GB")

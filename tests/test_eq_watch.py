@@ -71,5 +71,29 @@ class WatchPaceTests(unittest.TestCase):
         push.assert_called_once()
 
 
+class RestartTests(unittest.TestCase):
+    """A restarted filter must get its gains back without waiting out the
+    slow found-interval: its sink reappearing triggers a check."""
+
+    def test_output_list_change_triggers_a_check(self):
+        e = make()
+        e._on_found((57, 1000))            # slow-watch mode
+        with mock.patch("backend.eq.threading.Thread"), \
+                mock.patch("backend.eq.QMediaDevices") as devices:
+            e.start()
+            slot = devices.return_value.audioOutputsChanged.connect.call_args[0][0]
+        with mock.patch("backend.eq.threading.Thread") as thread:
+            slot()
+        thread.assert_called_once_with(target=e._find, daemon=True)
+        thread.return_value.start.assert_called_once()
+
+    def test_restart_seen_by_that_check_pushes_gains(self):
+        e = make()
+        e._on_found((57, 1000))
+        with mock.patch.object(e, "_push") as push:
+            e._on_found((58, 1001))        # what _find reports after the restart
+        push.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

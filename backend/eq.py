@@ -12,6 +12,7 @@ import subprocess
 import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtMultimedia import QMediaDevices
 
 from backend import errorlog, safe_emit
 
@@ -77,6 +78,7 @@ class Equalizer(QObject):
         self._pw = bool(shutil.which("pw-cli"))
         self._node = None
         self._pending = None
+        self._devices = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._found.connect(self._on_found)
@@ -88,6 +90,10 @@ class Equalizer(QObject):
         if not self._pw:
             return
         threading.Thread(target=self._writer, name="eq-writer", daemon=True).start()
+        # The slow 30 s check would leave a crashed-and-restarted filter flat
+        # for a while; its sink coming back shows up here at once.
+        self._devices = QMediaDevices(self)
+        self._devices.audioOutputsChanged.connect(self._check)
         self._check()
         self._timer.start()
 

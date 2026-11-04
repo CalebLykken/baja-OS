@@ -284,6 +284,47 @@ Window {
         && (vehicle.warnings.indexOf("coolant") >= 0 || vehicle.warnings.indexOf("voltage") >= 0)
     onUrgentWarningChanged: if (urgentWarning && typeof display !== "undefined") display.wake()
 
+    // The last start had to take an update back (backend/updater.py): say
+    // so, once, until OK. Declared before the pairing and shutdown prompts so
+    // they stay above it and their buttons stay tappable.
+    Rectangle {
+        id: updateNotice
+        readonly property string text: typeof updater === "undefined" ? "" : updater.notice
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.6)
+        visible: text !== ""
+        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+
+        Card {
+            anchors.centerIn: parent
+            width: 720
+            height: noticeColumn.implicitHeight + 64
+            ColumnLayout {
+                id: noticeColumn
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
+                spacing: 12
+                Label {
+                    text: "Software update"
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: updateNotice.text
+                }
+                TextButton {
+                    Layout.topMargin: 12
+                    Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                    text: "OK"; primary: true
+                    onClicked: updater.dismissNotice()
+                }
+            }
+        }
+    }
+
     // A phone wants to pair (backend/btagent.py): nothing pairs without a
     // tap here. Phones with no screen have no code to compare.
     Rectangle {
@@ -426,46 +467,6 @@ Window {
                         icon: "power"; text: "Shut down now"; danger: true
                         onClicked: system.powerOff()
                     }
-                }
-            }
-        }
-    }
-
-    // The last start had to take an update back (backend/updater.py): say
-    // so, once, until OK.
-    Rectangle {
-        id: updateNotice
-        readonly property string text: typeof updater === "undefined" ? "" : updater.notice
-        anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        visible: text !== ""
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
-
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: noticeColumn.implicitHeight + 64
-            ColumnLayout {
-                id: noticeColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    text: "Software update"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: updateNotice.text
-                }
-                TextButton {
-                    Layout.topMargin: 12
-                    Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                    text: "OK"; primary: true
-                    onClicked: updater.dismissNotice()
                 }
             }
         }

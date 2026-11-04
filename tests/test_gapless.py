@@ -344,6 +344,24 @@ class BadSongTest(Base):
             self.play(engine, 3, step=0.25)
         self.assertFalse(engine._songs)
 
+    def test_a_song_that_decodes_to_nothing_on_repeat_one_stops_instead_of_looping(self):
+        engine = self.engine((0, 0))                        # empty, and no error
+        engine._after = lambda i, failed=False: i           # repeat-one
+        with mock.patch("builtins.print"):
+            engine.play_from(0)
+            self.play(engine, 3, step=0.25)
+        self.assertFalse(engine._songs)
+        self.assertLessEqual(len(FakeDecoder.made), 3)
+
+    def test_a_good_song_still_clears_the_bad_run_after_an_empty_one(self):
+        engine = self.engine((0, 0), (0, 1))
+        engine._after = lambda i, failed=False: (i + 1) % 2
+        with mock.patch("builtins.print"):
+            engine.play_from(0)
+            self.play(engine, 4, step=0.25)
+        self.assertTrue(engine._songs)                      # the empty one is skipped, the good one goes round
+        self.assertGreaterEqual(sum(d.path == "/music/1.flac" for d in FakeDecoder.made), 3)
+
 
 class RestartTest(Base):
     def test_a_decoder_that_wont_wait_restarts_at_the_right_frame(self):

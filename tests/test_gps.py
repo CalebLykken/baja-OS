@@ -21,7 +21,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from backend import gps as gpsmod
 from backend.gps import (DemoRoute, Gps, Position, configure_receiver, nmea_coord, nmea_fields,
-                         sky_report, ubx_frame, ubx_nav5_frame, ubx_rate_frame, ubx_replies,
+                         sky_report, tpv_report, ubx_frame, ubx_nav5_frame, ubx_rate_frame, ubx_replies,
                          ubx_valset_frame)
 
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -112,6 +112,13 @@ class PositionTest(unittest.TestCase):
         self.assertEqual(p.fix["heading"], 270.0)
         p.real(real(heading=180.0), 3)
         self.assertEqual(p.fix["heading"], 180.0)
+
+    def test_a_speed_that_is_not_a_number_counts_as_parked(self):
+        p = Position(stale_s=STALE_S)
+        p.real(real(heading=270.0), 0)
+        p.real(dict(real(heading=45.0), speed="fast"), 1)      # no TypeError on the comparison
+        self.assertEqual(p.fix["speed"], 0.0)
+        self.assertEqual(p.fix["heading"], 270.0)
 
 
 class FakeVehicle:
@@ -251,6 +258,63 @@ class GpsdOddMessagesTest(unittest.TestCase):
         self.assertEqual(len(fixes), 1)
         self.assertEqual(fixes[0]["lat"], 47.6)
 
+    def test_odd_speed_and_track_still_give_one_safe_fix(self):
+        sock = FakeGpsd([])
+        sock.lines = "".join(l + "\n" for l in (
+            '{"class":"TPV","mode":3,"lat":47.6,"lon":-122.3,"speed":null,"track":"x"}',
+            '{"class":"TPV","mode":3,"lat":47.6,"lon":-122.3,"speed":NaN,"track":NaN}',
+            '{"class":"TPV","mode":3,"lat":91,"lon":-122.3,"speed":5}'))
+        got = []
+        g = Gps(None)
+        g._report.disconnect()
+        g._report.connect(got.append)
+        with mock.patch("backend.gps.socket.create_connection", lambda *a, **k: sock):
+            self.assertTrue(g._read_gpsd())
+        fixes = [r for r in got if "lat" in r]
+        self.assertEqual(len(fixes), 2)                    # the lat 91 one is dropped
+        for fix in fixes:
+            self.assertEqual(fix["speed"], 0.0)
+            self.assertIsNone(fix["heading"])
+            g._apply(fix)                                  # the UI thread side: no TypeError
+        self.assertEqual(g._pos.fix["speed"], 0.0)
+        self.assertEqual(g.heading, 0.0)
+
+
+class TpvReportTest(unittest.TestCase):
+    """gpsd's TPV fixes: only real numbers reach the map and the routing."""
+
+    GOOD = {"class": "TPV", "mode": 3, "lat": 47.6, "lon": -122.3, "speed": 5.0, "track": 90.0}
+
+    def report(self, **changes):
+        return tpv_report(dict(self.GOOD, **changes))
+
+    def test_a_good_tpv(self):
+        self.assertEqual(tpv_report(self.GOOD),
+                         {"lat": 47.6, "lon": -122.3, "speed": 5.0, "heading": 90.0, "source": "gps"})
+
+    def test_a_missing_speed_is_zero(self):
+        self.assertEqual(tpv_report({"mode": 2, "lat": 1, "lon": 2})["speed"], 0.0)
+
+    def test_speed_that_is_not_a_number_is_zero(self):
+        for speed in (None, "5", float("nan"), True, -3.0, float("inf")):
+            self.assertEqual(self.report(speed=speed)["speed"], 0.0, speed)
+
+    def test_track_that_is_not_a_number_is_no_heading(self):
+        for track in ("x", float("nan"), None, True):
+            self.assertIsNone(self.report(track=track)["heading"], track)
+
+    def test_track_is_wrapped_to_a_bearing(self):
+        self.assertEqual(self.report(track=370)["heading"], 10)
+
+    def test_a_position_that_is_not_on_the_earth_is_no_fix(self):
+        for changes in ({"lat": float("nan")}, {"lat": 91}, {"lon": -181},
+                        {"lat": True}, {"lon": float("inf")}, {"lat": -90.5}):
+            self.assertIsNone(self.report(**changes), changes)
+
+    def test_a_mode_that_is_not_a_2d_fix_is_no_fix(self):
+        for mode in ("3", True, 1, None, float("nan")):
+            self.assertIsNone(self.report(mode=mode), mode)
+
 
 class GpsdSatellitesTest(unittest.TestCase):
     """gpsd's SKY reports give the same satellite counts as the NMEA path."""
@@ -357,6 +421,29 @@ class NmeaTest(unittest.TestCase):
         self.assertIsNone(nmea_coord("", "N"))
         self.assertIsNone(nmea_coord(None, "N"))
         self.assertIsNone(nmea_coord("4736", "N"))
+
+    def rmc_reports(self, body):
+        g = Gps(None)
+        got = []
+        g._report.disconnect()
+        g._report.connect(got.append)
+        g._sentence(nmea_fields(sentence(body)), False, 0, {})
+        return got
+
+    def test_a_nan_speed_or_heading_in_rmc_is_zero_or_no_heading(self):
+        got = self.rmc_reports("GPRMC,123519,A,4807.038,N,01131.000,E,nan,nan,230394,003.1,W")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["speed"], 0.0)
+        self.assertIsNone(got[0]["heading"])
+        self.assertAlmostEqual(got[0]["lat"], 48 + 7.038 / 60, places=6)
+
+    def test_an_inf_speed_in_rmc_is_zero(self):
+        got = self.rmc_reports("GPRMC,123519,A,4807.038,N,01131.000,E,inf,084.4,230394,003.1,W")
+        self.assertEqual(got[0]["speed"], 0.0)
+        self.assertEqual(got[0]["heading"], 84.4)
+
+    def test_an_rmc_position_off_the_earth_is_dropped(self):
+        self.assertEqual(self.rmc_reports("GPRMC,123519,A,9999.000,N,01131.000,E,022.4,084.4,230394,003.1,W"), [])
 
 
 class DemoRouteAtTest(unittest.TestCase):

@@ -290,6 +290,39 @@ def sky_report(msg):
     return None if used is None or view is None else {"sats": used, "view": view}
 
 
+def _number(value):
+    """The value as a finite float, or None: not a number, a bool, or NaN and inf."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        value = float(value)
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _on_earth(lat, lon):
+    """Whether lat and lon are a position: finite, within 90 and 180 degrees."""
+    return math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
+
+
+def tpv_report(msg):
+    """The {lat, lon, speed, heading, source} fix for a gpsd TPV message, or
+    None when it has no 2D fix or no usable position. Odd values don't get
+    through: a speed that isn't a number is 0.0, a track that isn't one is None."""
+    mode = _number(msg.get("mode"))
+    lat, lon = _number(msg.get("lat")), _number(msg.get("lon"))
+    if mode is None or mode < 2 or lat is None or lon is None or not _on_earth(lat, lon):
+        return None
+    speed, track = _number(msg.get("speed")), _number(msg.get("track"))
+    return {
+        "lat": lat, "lon": lon,
+        "speed": speed if speed is not None and speed >= 0 else 0.0,
+        "heading": track % 360 if track is not None else None,
+        "source": "gps",
+    }
+
+
 class Position:
     """Which position to show, without Qt: the receiver's while it's fresh,
     its last one held (stale) once it stops, and the demo drive only while
@@ -312,6 +345,8 @@ class Position:
 
     def real(self, report, now):
         self.receiver()
+        speed = _number(report.get("speed"))
+        report["speed"] = speed if speed is not None else 0.0      # never a non-number in the comparison
         # Below walking pace the receiver's track is noise; keep the last.
         if report["heading"] is None or report["speed"] < 1.0:
             report["heading"] = self.fix["heading"] if self.fix else 0.0
@@ -455,15 +490,9 @@ class Gps(QObject):
                     continue
                 if kind != "TPV":
                     continue
-                mode, lat, lon = msg.get("mode"), msg.get("lat"), msg.get("lon")
-                if (isinstance(mode, (int, float)) and mode >= 2
-                        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lon))):
-                    safe_emit(self, "_report", {
-                        "lat": msg["lat"], "lon": msg["lon"],
-                        "speed": msg.get("speed", 0.0),
-                        "heading": msg.get("track"),
-                        "source": "gps",
-                    })
+                report = tpv_report(msg)
+                if report is not None:
+                    safe_emit(self, "_report", report)
         return True
 
     def _read_receiver(self, path):
@@ -521,11 +550,17 @@ class Gps(QObject):
                              else "lost the position"), flush=True)
         if kind == "RMC" and len(f) > 8 and f[2] == "A":
             lat, lon = nmea_coord(f[3], f[4]), nmea_coord(f[5], f[6])
-            if lat is not None and lon is not None:
+            speed = float(f[7] or 0) * KNOTS_TO_MS
+            heading = float(f[8]) if f[8] else None
+            if not math.isfinite(speed):
+                speed = 0.0                   # "nan" or "inf" in the sentence
+            if heading is not None and not math.isfinite(heading):
+                heading = None
+            if lat is not None and lon is not None and _on_earth(lat, lon):
                 safe_emit(self, "_report", {
                     "lat": lat, "lon": lon,
-                    "speed": float(f[7] or 0) * KNOTS_TO_MS,
-                    "heading": float(f[8]) if f[8] else None,
+                    "speed": speed,
+                    "heading": heading,
                     "source": "gps",
                 })
         elif kind == "GSV" and len(f) > 3 and f[3].isdigit():

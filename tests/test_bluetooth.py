@@ -244,7 +244,41 @@ class ParseObjectsTest(unittest.TestCase):
         objects = {"/org/bluez/hci0/dev_AA": {"org.bluez.Device1": {
             "Address": "AA:BB", "Paired": True, "Trusted": True, "Connected": True}},
             "/org/bluez/hci0/dev_BB": {"org.bluez.Device1": {"Paired": True, "Trusted": True, "Connected": False}}}
-        self.assertEqual([d["name"] for d in parse_objects(objects)["paired"]], ["AA:BB", "Device"])
+        self.assertEqual([d["name"] for d in parse_objects(objects)["paired"]], ["AA:BB", "Bluetooth device"])
+
+    def named(self, **props):
+        """parse_objects for one paired, connected device at AA with these Device1 properties."""
+        def v(kind, data):
+            return {"type": kind, "data": data}
+        objects = {"/org/bluez/hci0/dev_AA": {"org.bluez.Device1": dict(
+            {"Paired": v("b", True), "Trusted": v("b", True), "Connected": v("b", True)},
+            **{k: v("s", x) for k, x in props.items()})}}
+        return parse_objects(objects)
+
+    def test_an_address_for_a_name_is_replaced_by_the_kind_of_device(self):
+        self.assertEqual(self.named(Alias="AA-BB-CC-DD-EE-FF", Icon="phone")["paired"][0]["name"], "Phone")
+        self.assertEqual(self.named(Alias="aa:bb:cc:dd:ee:ff", Icon="audio-headset")["paired"][0]["name"],
+                         "Headset")
+
+    def test_an_alias_equal_to_the_address_is_replaced_too(self):
+        state = self.named(Alias="AA:BB:CC:DD:EE:FF", Address="AA:BB:CC:DD:EE:FF", Icon="audio-headset")
+        self.assertEqual(state["paired"][0]["name"], "Headset")
+
+    def test_a_device_with_no_name_or_known_icon_is_a_bluetooth_device(self):
+        self.assertEqual(self.named(Icon="something-odd")["paired"][0]["name"], "Bluetooth device")
+        self.assertEqual(self.named(Alias="   ")["paired"][0]["name"], "Bluetooth device")
+
+    def test_a_full_address_is_never_shown_as_the_name(self):
+        self.assertEqual(self.named(Address="AA:BB:CC:DD:EE:FF")["paired"][0]["name"], "Bluetooth device")
+
+    def test_a_real_name_is_stripped_and_never_replaced_even_with_an_icon(self):
+        self.assertEqual(self.named(Alias="  Pixel 9  ")["paired"][0]["name"], "Pixel 9")
+        self.assertEqual(self.named(Alias="Pixel 9", Icon="phone")["paired"][0]["name"], "Pixel 9")
+        self.assertEqual(self.named(Name="Galaxy", Icon="phone")["paired"][0]["name"], "Galaxy")
+
+    def test_the_connected_phone_with_an_address_for_a_name_is_phone(self):
+        self.assertEqual(parse_objects(phone("AA:BB:CC:DD:EE:FF"))["device"], "Phone")
+        self.assertEqual(self.named(Alias="AA-BB-CC-DD-EE-FF", Icon="audio-headset")["device"], "Headset")
 
     def test_discoverable_while_pairing(self):
         objects = phone("Driver")

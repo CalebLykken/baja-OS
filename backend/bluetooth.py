@@ -45,8 +45,34 @@ def _v(variant):
     return variant.get("data") if isinstance(variant, dict) and "type" in variant else variant
 
 
-def _name(device):
-    return _v(device.get("Alias")) or _v(device.get("Name")) or _v(device.get("Address")) or "Device"
+HEX = "0123456789abcdefABCDEF"
+GENERIC_NAME = "Bluetooth device"
+# BlueZ's Device1 Icon (a freedesktop icon name) as the kind of device, for one with no name.
+ICON_WORDS = {"phone": "Phone", "audio-headset": "Headset", "audio-headphones": "Headphones",
+              "audio-card": "Speaker", "computer": "Computer", "input-gaming": "Game controller",
+              "input-keyboard": "Keyboard", "input-mouse": "Mouse", "input-tablet": "Tablet",
+              "camera-photo": "Camera", "multimedia-player": "Music player"}
+
+
+def _looks_like_address(text):
+    """True for six hex pairs joined by ':' or '-', as in AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF."""
+    parts = text.replace("-", ":").split(":")
+    return len(parts) == 6 and all(len(p) == 2 and all(c in HEX for c in p) for p in parts)
+
+
+def _name(device, fallback=GENERIC_NAME):
+    """What to call a device: its Alias, else its Name (blank, or only an address, doesn't count),
+    else the kind of device from its Icon, else a short address BlueZ gave, else `fallback`."""
+    address = _v(device.get("Address"))
+    address = address.strip() if isinstance(address, str) else ""
+    for text in (_v(device.get("Alias")), _v(device.get("Name"))):
+        text = text.strip() if isinstance(text, str) else ""
+        if text and text != address and not _looks_like_address(text):
+            return text
+    icon = _v(device.get("Icon"))
+    if isinstance(icon, str) and icon in ICON_WORDS:
+        return ICON_WORDS[icon]
+    return address if address and not _looks_like_address(address) else fallback
 
 
 def _address(path, device):
@@ -124,10 +150,9 @@ def parse_objects(objects, prefer=None):
         key=lambda d: (not d["connected"], d["name"].lower()))
     if state["player"] and state["player"]["device"] in devices:
         path = state["player"]["device"]
-        state["device"] = _v(devices[path].get("Alias")) or _v(devices[path].get("Name")) or "Phone"
+        state["device"] = _name(devices[path], "Phone")
     elif connected:
-        d = connected[0][1]
-        state["device"] = _v(d.get("Alias")) or _v(d.get("Name")) or "Phone"
+        state["device"] = _name(connected[0][1], "Phone")
     return state
 
 

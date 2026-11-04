@@ -6,6 +6,10 @@ month. The kernel's counters start over at every boot, so each sample adds
 the change since the last one (or the whole reading, if it went down). The
 last readings are saved too, so a restart doesn't lose or double count.
 
+When a month ends, its total is kept and shown as a small fact next to the
+new month's ("120 MB (Oct: 2.1 GB)"), but only while it is the month just
+before the current one.
+
 It doesn't tell the phone's hotspot from home Wi-Fi, so it counts all Wi-Fi
 use and says so. Without those interfaces (a Mac) nothing is shown.
 """
@@ -20,6 +24,8 @@ SAMPLE_EVERY_MS = 60000
 FIRST_SAMPLE_MS = 5000     # keeps the settings write off the startup path; well under SAMPLE_EVERY_MS
 SYS_NET = "/sys/class/net"
 SETTING = "dataUse"
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+MAX_PREV_BYTES = 10 ** 15     # anything bigger in the saved setting is garbage
 
 
 def counted(name):
@@ -46,6 +52,17 @@ def format_bytes(n):
     return f"{n / 1_000_000_000:.1f} GB"
 
 
+def month_before(month):
+    """The 'YYYY-MM' before this one (January goes back to the last year's December), or '' if it isn't one."""
+    try:
+        y, m = int(month[:4]), int(month[5:7])
+    except (ValueError, TypeError):
+        return ""
+    if len(month) != 7 or month[4] != "-" or not 1 <= m <= 12:
+        return ""
+    return f"{y - 1:04d}-12" if m == 1 else f"{y:04d}-{m - 1:02d}"
+
+
 class DataUse(QObject):
     changed = pyqtSignal()
 
@@ -62,6 +79,14 @@ class DataUse(QObject):
             self._last = {str(k): int(v) for k, v in saved["last"].items()}
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
             self._month, self._bytes, self._last = "", 0, {}
+        self._prev_month, self._prev_bytes = "", 0
+        try:
+            prev = json.loads(str(settings.get(SETTING, "{}")))["prev"]
+            month, nbytes = str(prev["month"]), prev["bytes"]
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and 0 < nbytes < MAX_PREV_BYTES and month_before(month):
+                self._prev_month, self._prev_bytes = month, nbytes
+        except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            self._prev_month, self._prev_bytes = "", 0
         self._present = False
         self._first = QTimer(self, singleShot=True, interval=FIRST_SAMPLE_MS, timeout=self.sample)
         self._timer = QTimer(self, interval=SAMPLE_EVERY_MS, timeout=self.sample)
@@ -79,6 +104,10 @@ class DataUse(QObject):
             names = None
         month = time.strftime("%Y-%m", time.localtime(self._clock()))
         if month > self._month:     # an earlier month is a clock not yet set: keep counting
+            if self._month and month_before(month) == self._month and self._bytes > 0:
+                self._prev_month, self._prev_bytes = self._month, self._bytes
+            else:
+                self._prev_month, self._prev_bytes = "", 0
             self._month, self._bytes = month, 0
         readings = {n: t for n in names or [] if (t := read_total(self._root, n)) is not None}
         for n, t in readings.items():
@@ -93,7 +122,10 @@ class DataUse(QObject):
             del self._last[n]
         self._present = bool(readings)
         if self._present or gone:        # nothing to save on a Mac
-            self._settings.set(SETTING, json.dumps({"month": self._month, "bytes": self._bytes, "last": self._last}))
+            saved = {"month": self._month, "bytes": self._bytes, "last": self._last}
+            if self._prev_month:
+                saved["prev"] = {"month": self._prev_month, "bytes": self._prev_bytes}
+            self._settings.set(SETTING, json.dumps(saved))
         self.changed.emit()
 
     @pyqtProperty(bool, notify=changed)
@@ -104,6 +136,18 @@ class DataUse(QObject):
     def bytesThisMonth(self):
         return self._bytes
 
+    def _last_month(self):
+        """The finished month's bytes, only while it is the month just before this one."""
+        return self._prev_bytes if self._prev_month and self._prev_month == month_before(self._month) else 0
+
+    @pyqtProperty('qlonglong', notify=changed)
+    def lastMonthBytes(self):
+        return self._last_month()
+
     @pyqtProperty(str, notify=changed)
     def text(self):
-        return format_bytes(self._bytes)
+        prev = self._last_month()
+        if not prev:
+            return format_bytes(self._bytes)
+        # The short month name, not "last month": that wouldn't fit the Settings card in DejaVu Sans Bold.
+        return f"{format_bytes(self._bytes)} ({MONTHS[int(self._prev_month[5:7]) - 1]}: {format_bytes(prev)})"

@@ -6,10 +6,21 @@ Rectangle {
     property real value: 0
     property color fill: Theme.accent
 
+    // Read-only view of the seek-flash overlay's opacity (0 when idle).
+    readonly property real flashOpacity: seekFlash.opacity
+
     // What the fill actually draws; follows value, except for the sweep below.
     property real shown: 0
     // Last clamped value, to tell a new track from an ordinary change.
     property real _prev: 0
+
+    // Call when the user has just seeked (tap or drag release): brightens the
+    // fill once. Never triggered by value changes, so 1 s ticks, drags and
+    // track changes cannot flash.
+    function flashSeek() {
+        if (bar.visible)
+            flash.restart()
+    }
 
     height: 6
     radius: 3
@@ -20,6 +31,31 @@ Rectangle {
         height: parent.height
         radius: parent.radius
         color: parent.fill
+    }
+
+    // Seek acknowledgement: a lighter copy of the fill laid over it that
+    // brightens once and fades. Invisible (not drawn) except for 280 ms after
+    // flashSeek(); the bar's position is untouched.
+    Rectangle {
+        id: seekFlash
+        objectName: "seekFlash"
+        width: parent.width * parent.shown
+        height: parent.height
+        radius: parent.radius
+        color: Qt.lighter(parent.fill, 1.5)
+        opacity: 0
+        visible: opacity > 0
+    }
+
+    // One-shot fade of the overlay; same timing as the sweep, ends by itself.
+    NumberAnimation {
+        id: flash
+        target: seekFlash
+        property: "opacity"
+        from: 0.6
+        to: 0
+        duration: 280
+        easing.type: Easing.OutCubic
     }
 
     // One-shot drain back to the start; never loops or runs while idle.

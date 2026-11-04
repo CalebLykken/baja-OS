@@ -19,6 +19,15 @@ Card {
     property bool seeded: false
     // The title the running slide is heading to.
     property string slideTarget: ""
+    // Which way the words travel: 1 slides them out to the left and in from
+    // the right, -1 the other way round (after a tap on Previous).
+    property int slideDir: 1
+    // When Previous was last tapped, and how long that tap still counts. A
+    // timestamp rather than a timer: a Previous that only restarts the song
+    // changes no title, and the stale tap just expires.
+    property real prevTappedAt: 0
+    property int prevWindowMs: 1500
+    readonly property real slideX: shift.x
     readonly property string liveTitle: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
     readonly property string liveArtist: media.artist
 
@@ -35,10 +44,17 @@ Card {
 
     // A new song slides the words out to the left, swaps them while they
     // are invisible, and slides them back in from the right (a card being
-    // moved along, pairing with the cover's crossfade). A skip mid-slide
+    // moved along, pairing with the cover's crossfade). After a tap on
+    // Previous the slide runs the other way (out to the right, in from the
+    // left), so going back feels like moving the card back. A skip mid-slide
     // settles the words at once and starts over, so they never stay
     // half-faded or stale. Only the title starts the slide: an artist
     // change alone just updates in place.
+    function tapPrevious() {
+        prevTappedAt = Date.now()
+        media.previous()
+    }
+
     function trackChanged() {
         if (!seeded) return
         if (liveTitle === shownTitle) {
@@ -56,6 +72,8 @@ Card {
             shownArtist = liveArtist
         }
         slideTarget = liveTitle
+        slideDir = (Date.now() - prevTappedAt < prevWindowMs) ? -1 : 1
+        prevTappedAt = 0
         slide.start()
     }
 
@@ -63,18 +81,18 @@ Card {
         id: slide
         ParallelAnimation {
             NumberAnimation { target: words; property: "opacity"; from: 1; to: 0; duration: 120; easing.type: Easing.InCubic }
-            NumberAnimation { target: shift; property: "x"; from: 0; to: -28; duration: 120; easing.type: Easing.InCubic }
+            NumberAnimation { target: shift; property: "x"; from: 0; to: -28 * np.slideDir; duration: 120; easing.type: Easing.InCubic }
         }
         ScriptAction {
             script: {
                 np.shownTitle = np.liveTitle
                 np.shownArtist = np.liveArtist
-                shift.x = 28
+                shift.x = 28 * np.slideDir
             }
         }
         ParallelAnimation {
             NumberAnimation { target: words; property: "opacity"; from: 0; to: 1; duration: 200; easing.type: Easing.OutCubic }
-            NumberAnimation { target: shift; property: "x"; from: 28; to: 0; duration: 200; easing.type: Easing.OutCubic }
+            NumberAnimation { target: shift; property: "x"; from: 28 * np.slideDir; to: 0; duration: 200; easing.type: Easing.OutCubic }
         }
     }
 
@@ -153,7 +171,7 @@ Card {
             spacing: 20
             opacity: np.idle ? 0.4 : 1
             enabled: !np.idle
-            IconButton { icon: "previous"; size: 76; anchors.verticalCenter: parent.verticalCenter; onClicked: media.previous() }
+            IconButton { icon: "previous"; size: 76; anchors.verticalCenter: parent.verticalCenter; onClicked: np.tapPrevious() }
             IconButton {
                 icon: media.playing ? "pause" : "play"
                 primary: true

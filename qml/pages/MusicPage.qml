@@ -699,6 +699,9 @@ Item {
                             visible: resultList.count === 0
                             width: parent.width
                             height: resultList.height
+                            // The keyboard covers the lower part of the list
+                            // while typing, so keep this above it.
+                            alignTop: page.typing
                             icon: "search"
                             title: !searchView.ready ? "Search isn't set up"
                                    : spotifySearch.searching ? "Searching"

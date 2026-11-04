@@ -49,6 +49,10 @@ out["empty_hint"] = obj.property("hintShown")
 obj.setProperty("hint", "fill me")
 out["with_hint"] = obj.property("hintShown")
 
+out["centred_y"] = obj.property("contentY")
+obj.setProperty("alignTop", True)
+out["top_y"] = obj.property("contentY")
+
 print(json.dumps(out))
 '''
 
@@ -68,6 +72,10 @@ class EmptyStateTest(unittest.TestCase):
 
     def test_hint_shown_when_set(self):
         self.assertTrue(self.out["with_hint"])
+
+    def test_align_top_pins_block_to_top(self):
+        self.assertGreater(self.out["centred_y"], 40)
+        self.assertLess(self.out["top_y"], 20)
 
 
 if __name__ == "__main__":

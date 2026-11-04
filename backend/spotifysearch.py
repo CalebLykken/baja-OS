@@ -22,7 +22,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import retry, safe_emit
+from backend import errorlog, retry, safe_emit
 
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 SEARCH_URL = "https://api.spotify.com/v1/search"
@@ -45,32 +45,46 @@ def read_credentials(path=CREDENTIALS):
     return (client, secret) if client and secret else ("", "")
 
 
+def _width(image):
+    """A cover's width if Spotify gave a real number for it, else 0."""
+    width = image.get("width")
+    return width if isinstance(width, (int, float)) and not isinstance(width, bool) else 0
+
+
 def _art(images):
     """The smallest cover at least ART_WIDTH wide, else the last one, or ''."""
-    shown = [i for i in images or [] if isinstance(i, dict) and i.get("url")]
-    big_enough = [i for i in shown if (i.get("width") or 0) >= ART_WIDTH]
+    shown = [i for i in (images if isinstance(images, list) else []) if isinstance(i, dict) and i.get("url")]
+    big_enough = [i for i in shown if _width(i) >= ART_WIDTH]
     if big_enough:
-        return min(big_enough, key=lambda i: i["width"])["url"]
+        return min(big_enough, key=_width)["url"]
     return shown[-1]["url"] if shown else ""
 
 
 def _artists(item):
-    return ", ".join(a.get("name", "") for a in item.get("artists") or [] if isinstance(a, dict))
+    artists = item.get("artists")
+    names = (a.get("name") for a in artists if isinstance(a, dict)) if isinstance(artists, list) else ()
+    return ", ".join(n for n in names if isinstance(n, str))
 
 
 def entry(kind, item):
     """{uri, kind, title, subtitle, art} for a Web API item, or None if it
     isn't a whole one (Spotify leaves nulls in its lists)."""
-    if not (isinstance(item, dict) and item.get("uri") and item.get("name")):
+    if not isinstance(item, dict):
+        return None
+    uri, name = item.get("uri"), item.get("name")
+    if not (isinstance(uri, str) and uri and isinstance(name, str) and name):
         return None
     if kind == "track":
-        subtitle, images = _artists(item), (item.get("album") or {}).get("images")
+        album = item.get("album") if isinstance(item.get("album"), dict) else {}
+        subtitle, images = _artists(item), album.get("images")
     elif kind == "album":
         subtitle, images = "Album, " + _artists(item), item.get("images")
     else:
-        owner = (item.get("owner") or {}).get("display_name")
+        owner = item.get("owner")
+        owner = owner.get("display_name") if isinstance(owner, dict) else None
+        owner = owner if isinstance(owner, str) else ""
         subtitle, images = f"Playlist, {owner}" if owner else "Playlist", item.get("images")
-    return {"uri": item["uri"], "kind": kind, "title": item["name"],
+    return {"uri": uri, "kind": kind, "title": name,
             "subtitle": subtitle, "art": _art(images)}
 
 
@@ -79,7 +93,9 @@ def parse_results(data):
     out = []
     for kind in KINDS:
         section = data.get(kind + "s") if isinstance(data, dict) else None
-        found = (entry(kind, item) for item in (section or {}).get("items") or [])
+        if not (isinstance(section, dict) and isinstance(section.get("items"), list)):
+            continue
+        found = (entry(kind, item) for item in section["items"])
         out += [e for e in found if e]
     return out
 
@@ -111,8 +127,11 @@ class SpotifySearch(QObject):
             with urllib.request.urlopen(req, timeout=10) as r:
                 return json.load(r)
         answer = retry.call(get)
-        self._token = str(answer["access_token"])
-        self._token_until = time.monotonic() + float(answer.get("expires_in", 3600)) - TOKEN_MARGIN_S
+        token = answer.get("access_token") if isinstance(answer, dict) else None
+        if not isinstance(token, str):
+            raise ValueError("no token in Spotify's answer")
+        until = time.monotonic() + float(answer.get("expires_in", 3600)) - TOKEN_MARGIN_S
+        self._token, self._token_until = token, until
 
     def _valid_token(self, client, secret):
         with self._token_lock:
@@ -163,6 +182,9 @@ class SpotifySearch(QObject):
             except (OSError, ValueError, KeyError) as e:
                 print(f"Spotify search: {type(e).__name__}", flush=True)
                 message = "Can't reach Spotify. Is the phone's hotspot connected?"
+            except Exception as e:           # an answer in a shape nobody expected: say so, don't die silently
+                errorlog.log.report(type(e), e, e.__traceback__, label="Spotify search failed:")
+                message = "Spotify search went wrong; try again"
             finally:
                 safe_emit(self, "_answered", which, results, message)
         threading.Thread(target=work, daemon=True).start()

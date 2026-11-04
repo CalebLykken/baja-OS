@@ -177,14 +177,14 @@ class SpotifySearch(QObject):
                     message = f"Nothing on Spotify for {text}"
             except urllib.error.HTTPError as e:
                 print(f"Spotify search: HTTP {e.code}", flush=True)
-                message = ("Spotify search is busy, try again in a minute" if e.code == 429
-                           else "Spotify turned the search down: check its app key on the Pi")
+                message = ("Spotify search is busy. Try again in a minute" if e.code == 429
+                           else "Spotify turned the search down. Check its app key on the Pi")
             except (OSError, ValueError, KeyError) as e:
                 print(f"Spotify search: {type(e).__name__}", flush=True)
-                message = "Can't reach Spotify. Is the phone's hotspot connected?"
+                message = "Can't reach Spotify. Is the phone's hotspot on?"
             except Exception as e:           # an answer in a shape nobody expected: say so, don't die silently
                 errorlog.log.report(type(e), e, e.__traceback__, label="Spotify search failed:")
-                message = "Spotify search went wrong; try again"
+                message = "Spotify search hit a snag. Try again"
             finally:
                 safe_emit(self, "_answered", which, results, message)
         threading.Thread(target=work, daemon=True).start()

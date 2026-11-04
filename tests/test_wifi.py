@@ -426,7 +426,7 @@ class RadioTest(unittest.TestCase):
 
     def test_a_saved_network_out_of_range_asks_if_the_hotspot_is_on(self):
         why = Wifi._why("Error: Connection activation failed: The Wi-Fi network could not be found", "Phone")
-        self.assertEqual(why, "Can't see Phone; is the hotspot on?")
+        self.assertEqual(why, "Can't see Phone. Is the hotspot on?")
 
     # ---- the phone as a backup ------------------------------------------------
     def test_a_hotspot_still_being_retried_is_not_wifi(self):
@@ -615,7 +615,7 @@ class HiddenNetworkTest(unittest.TestCase):
         for bad in ("", "x" * 33, "a\nb", "a\x00b"):
             self.join(bad, "hunter22")
         self.assertEqual(self.calls, [])
-        self.assertEqual(self.wifi.message, "That isn't a valid network name")
+        self.assertEqual(self.wifi.message, "That isn't a valid network name. It needs 1 to 32 letters")
 
     def test_a_saved_network_of_that_name_is_replaced(self):
         self.wifi._saved = [{"uuid": "u1", "ssid": "Secret Net", "type": "802-11-wireless"}]
@@ -648,7 +648,7 @@ class HiddenNetworkTest(unittest.TestCase):
         sleep = self.join_seq([miss] * 5)
         self.assertEqual(sleep.call_count, 2)
         self.assertEqual(len([c for c in self.calls if c[0][0] == "--ask"]), 3)
-        self.assertEqual(self.wifi.message, "Can't see Secret Net; is the hotspot on?")
+        self.assertEqual(self.wifi.message, "Can't see Secret Net. Is the hotspot on?")
         self.assertEqual(self.wifi.busy, "")
 
     def test_a_wrong_password_is_not_retried(self):
@@ -658,6 +658,42 @@ class HiddenNetworkTest(unittest.TestCase):
     def test_valid_ssid_counts_bytes(self):
         self.assertTrue(valid_ssid("é" * 16))
         self.assertFalse(valid_ssid("é" * 17))
+
+
+class JoinErrorWordingTest(unittest.TestCase):
+    """The message after a failed join: a short statement, then a hint."""
+
+    def test_a_timeout_says_the_hotspot_took_too_long(self):
+        self.assertEqual(Wifi._why("Command '['nmcli']' timed out after 40 seconds", "Phone"),
+                         "Phone took too long to answer. Try again closer to it")
+
+    def test_a_wrong_password_wins_over_a_timeout(self):
+        self.assertEqual(Wifi._why("Secrets were required, but not provided. timed out", "Phone"),
+                         "Wrong password for Phone")
+
+    def test_not_authorized_points_at_the_setup_script(self):
+        self.assertEqual(Wifi._why("Error: Not authorized to control networking.", "Phone"),
+                         "Not allowed yet. Run deploy/setup-pi.sh once on the Pi")
+
+    def test_any_other_error_is_the_plain_message(self):
+        self.assertEqual(Wifi._why("Error: something odd", "Phone"), "Couldn't join Phone")
+
+    def test_a_join_that_times_out_says_so_and_frees_the_page(self):
+        wifi = Wifi({})
+        wifi._available = False
+        wifi._saved = [{"uuid": "u-phone", "ssid": "Phone", "type": "802-11-wireless"}]
+        INLINE.start()
+        self.addCleanup(mock.patch.stopall)
+        nm = FakeNM()
+
+        def fake(*args, input=None, timeout=10):
+            if args[:2] == ("connection", "up"):
+                return 1, "", "Error: Command '['nmcli', 'connection', 'up']' timed out after 40 seconds"
+            return nm(*args, input=input, timeout=timeout)
+        with mock.patch("backend.wifi.nmcli", fake):
+            wifi.join("Phone", "")
+        self.assertEqual(wifi.message, "Phone took too long to answer. Try again closer to it")
+        self.assertEqual(wifi.busy, "")
 
 
 class SplitTerseTest(unittest.TestCase):

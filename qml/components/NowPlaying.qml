@@ -112,7 +112,7 @@ Card {
                 anchors { left: art.right; leftMargin: 26; right: parent.right; verticalCenter: art.verticalCenter }
                 spacing: 6
 
-                SourceBadge {}
+                SourceBadge { Layout.fillWidth: true }
                 Label {
                     Layout.fillWidth: true
                     Layout.topMargin: 2

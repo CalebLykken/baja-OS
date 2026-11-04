@@ -4,6 +4,8 @@ import QtQuick
 // name over Bluetooth, or "On this Pi". Quiet text, no brand colour.
 // A change of source is one short moment: the old text slides out to the
 // left and fades, then the new text slides in from the right.
+// The row is given its width by the column it sits in (Layout.fillWidth),
+// so a long phone name is cut short with "..." instead of running past.
 Row {
     id: badge
     readonly property string src: media.source
@@ -71,7 +73,11 @@ Row {
     }
     Label {
         anchors.verticalCenter: parent.verticalCenter
+        // Whatever is left of the row after the icon and the gap.
+        width: Math.min(implicitWidth, Math.max(0, badge.width - 18 - badge.spacing))
         text: parent.shownText
+        textFormat: Text.PlainText      // the name comes from the phone
+        elide: Text.ElideRight
         color: Theme.textDim
         font.pixelSize: Theme.fontSmall
         font.weight: Font.DemiBold

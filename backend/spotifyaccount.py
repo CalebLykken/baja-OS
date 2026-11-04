@@ -78,7 +78,7 @@ class SpotifyAccount(QObject):
     changed = pyqtSignal()
     libraryChanged = pyqtSignal()
     _linked = pyqtSignal(bool, str)               # it worked, message
-    _loaded = pyqtSignal(object, str, bool)       # library or None, message, signed out
+    _loaded = pyqtSignal(object, str, bool, int)  # library or None, message, signed out, sign-in it was read for
 
     def __init__(self, settings=None, credentials=CREDENTIALS, login_file=LOGIN_FILE, parent=None):
         super().__init__(parent)
@@ -89,6 +89,8 @@ class SpotifyAccount(QObject):
         self._access = ""
         self._access_until = 0.0
         self._lock = threading.Lock()
+        self._login_lock = threading.Lock()   # guards the login against a worker finishing after a sign-out
+        self._generation = 0                  # bumped whenever the login is dropped; workers carry the one they began with
         self._link = None              # {nonce, verifier, state, until}, while the QR code is up
         self._link_url = ""
         self._message = ""
@@ -130,11 +132,13 @@ class SpotifyAccount(QObject):
         self._refresh_token = token
 
     def _drop_login(self):
-        self._refresh_token, self._access = "", ""
-        try:
-            self._login_file.unlink()
-        except OSError:
-            pass
+        with self._login_lock:
+            self._generation += 1                 # whatever is still in flight belongs to the login that's gone
+            self._refresh_token, self._access = "", ""
+            try:
+                self._login_file.unlink()
+            except OSError:
+                pass
 
     def _load_saved_library(self):
         if not self._settings or not self._refresh_token:
@@ -198,6 +202,7 @@ class SpotifyAccount(QObject):
         if not (link and hmac.compare_digest(state.encode(), link["state"].encode())):
             return False, "That link has expired. Show the code on the dashboard again."
         self._link = None                        # one use
+        generation = self._generation
         if error or not code:
             safe_emit(self, "_linked", False, "Spotify wasn't linked")
             return False, "Spotify wasn't linked."
@@ -208,9 +213,14 @@ class SpotifyAccount(QObject):
                 tokens = _post_form({"grant_type": "authorization_code", "code": code,
                                      "redirect_uri": REDIRECT_URI, "client_id": client,
                                      "code_verifier": link["verifier"]})
-                self._save_login(str(tokens["refresh_token"]))
-                self._keep_access(tokens)
+                with self._login_lock:
+                    if generation != self._generation:        # signed out while Spotify was answering
+                        raise SignedOut()
+                    self._save_login(str(tokens["refresh_token"]))
+                    self._keep_access(tokens)
                 safe_emit(self, "_linked", True, "")
+            except SignedOut:
+                safe_emit(self, "_linked", False, "")
             except Exception as e:               # always answer, or the link screen waits forever
                 print(f"Spotify account: linking failed ({type(e).__name__})", flush=True)
                 safe_emit(self, "_linked", False, "Couldn't finish linking Spotify")
@@ -240,19 +250,25 @@ class SpotifyAccount(QObject):
         with self._lock:
             if self._access and time.monotonic() < self._access_until:
                 return self._access
+            generation, token = self._generation, self._refresh_token
+            if not token:
+                raise SignedOut()                 # nothing to renew with
             client, _ = read_credentials(self._credentials)
             try:
                 tokens = _post_form({"grant_type": "refresh_token", "client_id": client,
-                                     "refresh_token": self._refresh_token})
+                                     "refresh_token": token})
             except urllib.error.HTTPError as e:
                 if e.code == 400 and b"invalid_grant" in e.read():
                     raise SignedOut() from None
                 raise
-            self._keep_access(tokens)
-            newer = tokens.get("refresh_token")       # Spotify may or may not send a new one
-            if newer and newer != self._refresh_token:
-                self._save_login(str(newer))
-            return self._access
+            with self._login_lock:
+                if generation != self._generation:    # signed out during the request: don't bring it back
+                    raise SignedOut()
+                self._keep_access(tokens)
+                newer = tokens.get("refresh_token")   # Spotify may or may not send a new one
+                if newer and newer != self._refresh_token:
+                    self._save_login(str(newer))
+                return self._access
 
     def _get(self, path):
         def get():
@@ -285,6 +301,7 @@ class SpotifyAccount(QObject):
         self._loading, self._message = True, ""
         self.changed.emit()
         old = self._library
+        generation = self._generation
 
         def work():
             library, message, signed_out = None, "", False
@@ -301,11 +318,16 @@ class SpotifyAccount(QObject):
                 print(f"Spotify account: couldn't read the library ({type(e).__name__})", flush=True)
                 message = "Can't reach Spotify right now"
             finally:
-                safe_emit(self, "_loaded", library, message, signed_out)
+                safe_emit(self, "_loaded", library, message, signed_out, generation)
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_loaded(self, library, message, signed_out):
-        self._loading, self._message = False, message
+    def _on_loaded(self, library, message, signed_out, generation):
+        self._loading = False
+        if generation != self._generation:        # signed out (or re-linked) since this began: its answer is stale
+            self.changed.emit()
+            self.refresh()                        # a re-link's own refresh was skipped while this one ran
+            return
+        self._message = message
         if signed_out:
             self._drop_login()
         if library is not None:

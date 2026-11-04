@@ -439,30 +439,61 @@ Item {
                     text: wifi.message
                 }
 
+                // The scan lands every 15 s (and `changed` also fires for other reasons).
+                // Handing the Repeater the fresh list each time would rebuild every row
+                // and disarm a half-done "Forget"; so keep one row per ssid and update
+                // them in place.
+                ListModel { id: netModel }
+                Connections {
+                    target: wifi
+                    function onChanged() { netRows.sync(wifi.networks) }
+                }
+                Component.onCompleted: netRows.sync(wifi.networks)
+                QtObject {
+                    id: netRows
+                    function indexOfSsid(ssid, from) {
+                        for (var j = from; j < netModel.count; j++)
+                            if (netModel.get(j).ssid === ssid) return j
+                        return -1
+                    }
+                    function sync(nets) {
+                        for (var i = 0; i < nets.length; i++) {
+                            var j = indexOfSsid(nets[i].ssid, i)
+                            if (j < 0) netModel.insert(i, nets[i])
+                            else {
+                                if (j !== i) netModel.move(j, i, 1)
+                                netModel.set(i, nets[i])
+                            }
+                        }
+                        if (netModel.count > nets.length)
+                            netModel.remove(nets.length, netModel.count - nets.length)
+                    }
+                }
+
                 Repeater {
-                    model: wifi.networks
+                    model: netModel
                     Rectangle {
                         id: netRow
-                        readonly property bool joining: wifi.busy === modelData.ssid
+                        readonly property bool joining: wifi.busy === model.ssid
                         Layout.fillWidth: true
                         Layout.preferredHeight: 64
                         radius: Theme.radius
-                        color: modelData.active ? Theme.panelHi : (rowTap.pressed ? Theme.panelHi : "transparent")
-                        border.width: modelData.active ? Theme.border : 0
+                        color: model.active ? Theme.panelHi : (rowTap.pressed ? Theme.panelHi : "transparent")
+                        border.width: model.active ? Theme.border : 0
                         border.color: Theme.line
 
                         SignalBars {
                             id: bars
                             anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
-                            signal: modelData.signal
-                            lit: modelData.active ? Theme.accent : Theme.text
+                            signal: model.signal
+                            lit: model.active ? Theme.accent : Theme.text
                         }
                         Label {
                             anchors { left: bars.right; leftMargin: 18; right: status.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
-                            text: modelData.ssid
+                            text: model.ssid
                             elide: Text.ElideRight
                             font.pixelSize: Theme.fontBody
-                            font.weight: modelData.active ? Font.DemiBold : Font.Normal
+                            font.weight: model.active ? Font.DemiBold : Font.Normal
                         }
                         Row {
                             id: status
@@ -471,32 +502,35 @@ Item {
                             Label {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: text !== ""
-                                text: netRow.joining ? "Joining" : modelData.active ? "Connected" : modelData.saved ? "Saved" : ""
-                                color: modelData.active ? Theme.accent : Theme.textDim
+                                text: netRow.joining ? "Joining" : model.active ? "Connected" : model.saved ? "Saved" : ""
+                                color: model.active ? Theme.accent : Theme.textDim
                                 font.pixelSize: Theme.fontSmall
                                 font.weight: Font.DemiBold
                             }
                             Icon {
                                 anchors.verticalCenter: parent.verticalCenter
-                                visible: modelData.secure
+                                visible: model.secure
                                 name: "lock"
                                 size: 22
                                 color: Theme.textDim
                             }
                             ConfirmButton {
-                                visible: modelData.saved && wifi.canControl
+                                id: forgetBtn
+                                visible: model.saved && wifi.canControl
                                 implicitHeight: 48
                                 text: "Forget"
                                 confirmText: "Tap again to forget"
-                                onConfirmed: wifi.forget(modelData.ssid)
+                                onConfirmed: wifi.forget(model.ssid)
                             }
                         }
                         TapHandler {
                             id: rowTap
-                            enabled: !modelData.active && wifi.canControl && wifi.busy === ""
-                            onTapped: {
-                                if (modelData.saved || !modelData.secure) wifi.join(modelData.ssid, "")
-                                else joinSheet.open(modelData.ssid)
+                            enabled: !model.active && wifi.canControl && wifi.busy === ""
+                            onTapped: (eventPoint) => {
+                                // A tap on Forget reaches this handler too; it is not a tap on the row.
+                                if (forgetBtn.visible && forgetBtn.contains(forgetBtn.mapFromItem(netRow, eventPoint.position))) return
+                                if (model.saved || !model.secure) wifi.join(model.ssid, "")
+                                else joinSheet.open(model.ssid)
                             }
                         }
                     }

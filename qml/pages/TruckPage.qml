@@ -4,7 +4,9 @@ import QtQuick3D
 import "../components"
 import "../assets/truck"
 
-// The Baja in 3D: turns slowly on its own, drag sideways to spin it. Only
+// The Baja in 3D: turns slowly on its own, drag sideways to spin it (let go
+// mid-swipe and it keeps turning, then slows). Opening the page whips it
+// round once, at most every 30 s. Only
 // renders while this page is on screen (PageHost hides it otherwise), so
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
 // triangles) converted to Qt's own mesh files, which load at once, with
@@ -22,12 +24,40 @@ Item {
     // Slow idle turntable; pauses while you drag and for a moment after.
     NumberAnimation on spin {
         id: turntable
-        running: page.visible && !page.dragging && !resume.running
+        running: page.visible && !page.dragging && !resume.running && !intro.running && !flick.running
         from: page.spin; to: page.spin + 360
         duration: 48000
         loops: Animation.Infinite
     }
     Timer { id: resume; interval: 2500 }
+
+    // Showroom spin: one fast turn when the page opens, then the turntable.
+    property real lastIntro: 0         // Date.now() of the last one
+    NumberAnimation {
+        id: intro
+        target: page; property: "spin"
+        duration: 1400
+        easing.type: Easing.OutCubic
+    }
+    function playIntro() {
+        if (dragging || Date.now() - lastIntro < 30000) return
+        lastIntro = Date.now()
+        flick.stop()
+        intro.from = spin
+        intro.to = spin + 360
+        intro.start()
+    }
+    onVisibleChanged: if (visible) playIntro()
+    Component.onCompleted: if (visible) playIntro()
+
+    // Flick: a swipe released at speed keeps turning and slows to a stop.
+    NumberAnimation {
+        id: flick
+        target: page; property: "spin"
+        duration: 900
+        easing.type: Easing.OutQuad
+        onRunningChanged: if (!running && !page.dragging) resume.restart()
+    }
 
     // A soft pool of light on the floor under the truck, so it stands on
     // something (flat and fixed, like the camera: costs nothing to draw).
@@ -120,11 +150,30 @@ Item {
     DragHandler {
         target: null
         property real startSpin: 0
+        property real lastVx: 0        // px/s, in case it reads 0 at release
+        property real lastVxAt: 0      // when lastVx was recorded (ms)
         onActiveChanged: {
             page.dragging = active
-            if (active) startSpin = page.spin
-            else resume.restart()
+            if (active) {
+                intro.stop()
+                flick.stop()
+                startSpin = page.spin
+                lastVx = 0
+                lastVxAt = 0
+            } else {
+                var v = centroid.velocity.x
+                if (v === 0 && Date.now() - lastVxAt < 100) v = lastVx
+                var dps = v * 0.35     // degrees/s, same factor as the drag
+                if (Math.abs(dps) > 40) {
+                    flick.from = page.spin
+                    flick.to = page.spin + Math.max(-540, Math.min(540, dps * 0.6))
+                    flick.start()      // resume starts when it finishes
+                } else {
+                    resume.restart()
+                }
+            }
         }
+        onCentroidChanged: if (active) { lastVx = centroid.velocity.x; lastVxAt = Date.now() }
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
 

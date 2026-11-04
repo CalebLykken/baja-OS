@@ -249,6 +249,72 @@ Window {
         }
     }
 
+    // Trip milestone toast: shown for a few seconds by one short animation
+    // that ends by itself; invisible (not drawn) the rest of the time. No
+    // MouseArea, so it never takes a tap. Above the pages, below the dimming,
+    // screen-off and prompt layers. Never on Maps: the next-turn card, the
+    // "Outside the offline map" banner and the Home/Work keys fill that top
+    // row, and the toast would cover them while the driver is reading them.
+    // Likewise never while a route is active: Home and Music also carry the
+    // next-turn card at the top right, which the toast would sit on.
+    Rectangle {
+        id: milestonePill
+        property string text: ""
+        anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter
+                  horizontalCenterOffset: rail.width / 2 }
+        width: milestoneLabel.implicitWidth + 56
+        height: milestoneLabel.implicitHeight + 24
+        radius: Theme.radius
+        color: Theme.panel
+        border { width: Theme.border; color: Theme.line }
+        opacity: 0
+        visible: opacity > 0
+
+        Label {
+            id: milestoneLabel
+            anchors.centerIn: parent
+            text: milestonePill.text
+            color: Theme.text
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.DemiBold
+        }
+
+        transform: Translate { id: milestoneSlide; y: 0 }
+
+        SequentialAnimation {
+            id: milestoneShow
+            ParallelAnimation {
+                NumberAnimation { target: milestonePill; property: "opacity"; to: 1; duration: 250; easing.type: Easing.OutCubic }
+                NumberAnimation { target: milestoneSlide; property: "y"; from: -20; to: 0; duration: 250; easing.type: Easing.OutCubic }
+            }
+            PauseAnimation { duration: 4000 }
+            NumberAnimation { target: milestonePill; property: "opacity"; to: 0; duration: 400 }
+        }
+    }
+    readonly property bool routeActive: typeof routing !== "undefined" && routing.active
+    // Opening Maps, or starting a route, while the toast is up cuts it short.
+    Connections {
+        target: root
+        function onOnMapsChanged() {
+            if (!root.onMaps) return
+            milestoneShow.stop()
+            milestonePill.opacity = 0
+        }
+        function onRouteActiveChanged() {
+            if (!root.routeActive) return
+            milestoneShow.stop()
+            milestonePill.opacity = 0
+        }
+    }
+    Connections {
+        target: tripCounter
+        function onMilestone(text) {
+            if (splash.visible || root.onMaps || root.routeActive) return
+            milestonePill.text = text
+            milestoneShow.restart()
+        }
+    }
+
     // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
     // Never fully black, and it lets touches through to the UI below.
     Rectangle {
@@ -475,6 +541,7 @@ Window {
 
     // Startup animation, on top of everything until it fades out.
     Splash {
+        id: splash
         anchors.fill: parent
         visible: typeof showSplash === "undefined" || showSplash
     }

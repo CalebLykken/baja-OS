@@ -84,16 +84,19 @@ def uptime_text():
 
 
 def version_text():
-    """'abc1234, 14 Oct 2026' from the file deploy/push.sh writes, else git."""
-    v = _read(ROOT / ".version")
-    if v:
-        return v
-    try:
-        return subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%h, %cd",
-                               "--date=format:%-d %b %Y"],
-                              capture_output=True, text=True, timeout=2).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    """'abc1234, 14 Oct 2026' from git when this is a checkout (an in-app update
+    or fall-back moves it, and a .version left by push.sh would go stale), else
+    the file deploy/push.sh writes into copies that have no .git."""
+    if (ROOT / ".git").exists():
+        try:
+            v = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%h, %cd",
+                                "--date=format:%-d %b %Y"],
+                               capture_output=True, text=True, timeout=2).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            v = ""
+        if v:
+            return v
+    return _read(ROOT / ".version")
 
 
 def power(action):

@@ -6,7 +6,9 @@ busy flag, keeps the old readings, and lets the next check run.
 """
 
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -232,6 +234,37 @@ class StatusCheckTest(unittest.TestCase):
             self.system._check()
         self.assertFalse(self.system._busy)
         self.assertEqual(len(logged(self.printed)), 1)
+
+
+class VersionTextTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name)
+        (self.root / ".version").write_text("old1234, 1 Jan 2026\n")
+        patch = mock.patch.object(system_module, "ROOT", self.root)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    @staticmethod
+    def git(out):
+        return mock.patch("subprocess.run",
+                          return_value=subprocess.CompletedProcess([], 0, out, ""))
+
+    def test_a_checkout_ignores_a_stale_version_file(self):
+        (self.root / ".git").mkdir()
+        with self.git("new5678, 2 Feb 2026\n"):
+            self.assertEqual(system_module.version_text(), "new5678, 2 Feb 2026")
+
+    def test_a_push_copy_without_git_uses_the_version_file(self):
+        with self.git("not asked") as run:
+            self.assertEqual(system_module.version_text(), "old1234, 1 Jan 2026")
+        run.assert_not_called()
+
+    def test_a_checkout_whose_git_fails_falls_back_to_the_version_file(self):
+        (self.root / ".git").mkdir()
+        with mock.patch("subprocess.run", side_effect=OSError("no git")):
+            self.assertEqual(system_module.version_text(), "old1234, 1 Jan 2026")
 
 
 if __name__ == "__main__":

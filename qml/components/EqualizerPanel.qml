@@ -8,7 +8,8 @@ ColumnLayout {
     id: panel
     spacing: 16
 
-    function signed(v) { return v > 0 ? "+" + v : String(v) }
+    // A true minus sign (U+2212) for cuts, like the rest of the numbers.
+    function signed(v) { return v > 0 ? "+" + v : v < 0 ? "\u2212" + Math.abs(v) : "0" }
 
     RowLayout {
         Layout.fillWidth: true
@@ -20,7 +21,7 @@ ColumnLayout {
         }
         Label {
             visible: eq.preset === "Custom"
-            text: "Your own"
+            text: "Custom"
             color: Theme.textDim
             font.pixelSize: Theme.fontBody
         }
@@ -43,7 +44,7 @@ ColumnLayout {
                     Layout.alignment: Qt.AlignHCenter
                     text: panel.signed(eq.gains[index]) + " dB"
                     color: eq.gains[index] === 0 ? Theme.textDim : Theme.text
-                    font.family: Theme.numFont
+                    numeric: true
                     font.pixelSize: Theme.fontBody
                     font.weight: Font.DemiBold
                 }
@@ -62,11 +63,14 @@ ColumnLayout {
                 }
                 Legend {
                     Layout.alignment: Qt.AlignHCenter
+                    Layout.maximumWidth: parent.width
+                    elide: Text.ElideRight
                     text: modelData.label
-                    font.letterSpacing: 1
                 }
                 Label {
                     Layout.alignment: Qt.AlignHCenter
+                    Layout.maximumWidth: parent.width
+                    elide: Text.ElideRight
                     text: modelData.freqText + " Hz"
                     color: Theme.textDim
                     font.pixelSize: Theme.fontSmall

@@ -171,6 +171,7 @@ the keys and volume always fit.
 | Primary | The one main key per screen (play/pause, Pair phone) is Blaze with a Basin icon |
 | In range (gauges) | Lit segments in Lichen with only the leading one in Blaze, like a needle's tip, so six healthy gauges read as calm and a bad one stands out |
 | Warning | Ember numerals and segments; the redline's unlit segments are Ember at 30 %. An engine warning from the car is an Ember chip with a Basin icon and reading at the foot of the nav rail, on every page |
+| Empty | A Lichen icon, a Title line saying what's missing and a Body hint saying how to fill it, centred in the space |
 | Disabled | 50 % opacity |
 
 ## Motion

@@ -601,13 +601,45 @@ class SetTracksTest(unittest.TestCase):
         self.assertEqual(player._queue[player.index]["path"], path)
         self.assertEqual(len(player.queue), 5)
 
+    def hear(self, player):
+        """Spin until the song playing has audio decoded (it is being heard)."""
+        for _ in range(50):
+            if player._engine.sounding():
+                return
+            spin(20)
+        self.fail("the song never decoded")
+
     def test_when_the_song_playing_vanishes_the_queue_is_left_alone(self):
         player = self.player(self.tracks)
         player.playIndex(1)
+        self.hear(player)
         player.set_tracks(self.tracks[3:])
         self.assertEqual((player.index, len(player.queue)), (1, 6))
         self.assertEqual(len(player.albums), 1)
+        self.assertEqual(player.album, -1)                 # the queue is no longer the new albums
         self.assertEqual(player.title, "Blue 2")
+
+    def test_when_nothing_is_heard_a_vanished_song_restarts_from_the_new_songs(self):
+        player = self.player(self.tracks)
+        player.restore({"album": None, "path": self.tracks[1]["path"], "index": 1, "position": 0})
+        player.start()                                     # restored, paused
+        self.assertFalse(player._engine.sounding())
+        player.set_tracks(self.tracks[3:])                 # all of Blue deleted
+        paths = [t["path"] for t in self.tracks[3:]]
+        self.assertEqual([t["path"] for t in player._queue], paths)
+        self.assertEqual((player.index, player.playing), (1, False))   # its place in the queue
+        self.assertEqual(player.title, "Red 2")
+        self.assertEqual(player._engine._songs[0].index, 1)
+        self.assertEqual(len(player.albums), 1)
+
+    def test_a_vanished_paused_song_keeps_its_album_when_that_still_exists(self):
+        player = self.player(self.tracks)
+        player.playAlbum(1, 1)                             # Red 2
+        player._engine.set_playing(False)                  # paused
+        player.set_tracks([t for t in self.tracks if not t["path"].endswith("Red-2.wav")])
+        self.assertEqual(player.albums[player.album]["title"], "Red")
+        self.assertEqual((player.index, player.playing, player.title), (1, False, "Red 3"))
+        self.assertEqual(len(player.queue), 2)
 
     def test_the_same_songs_or_none_change_nothing(self):
         player = self.player(self.tracks)

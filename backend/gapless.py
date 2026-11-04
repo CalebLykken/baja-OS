@@ -520,6 +520,13 @@ class GaplessEngine(QObject):
     def playing(self):
         return self._want_play
 
+    def sounding(self):
+        """True while a song is playing (not paused) and its audio is
+        decoded, as opposed to waiting at a restored place or failing to
+        open."""
+        with self._lock:
+            return bool(self._want_play and self._songs and self._songs[0].end > 0)
+
     def position(self):
         """Seconds into the song being heard."""
         with self._lock:

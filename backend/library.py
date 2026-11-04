@@ -487,14 +487,9 @@ class LibraryPlayer(QObject):
         if tracks == self._all or (self._all and not tracks):
             return                      # same songs; or the card went, which isn't "all deleted"
         if not self._queue:
-            self._all = tracks
-            self._albums = group_albums(tracks)
-            self._queue, self._album, self._index, self._start_at = list(tracks), -1, 0, 0
-            self.restore(self._saved, self._start_playing)
-            self.libraryChanged.emit()
-            self.queueChanged.emit()
-            self.start()
+            self._fresh(tracks, self._saved, self._start_playing)
             return
+        state = self.state()
         old_queue, old_index = self._queue, self._index
         was = old_queue[old_index]
         playing = was["path"]
@@ -506,7 +501,14 @@ class LibraryPlayer(QObject):
             self._album = next((i for i, a in enumerate(self._albums)
                                 if (a["artist"].casefold(), a["title"].casefold()) == key), -1)
         if playing not in by_path:
-            self.libraryChanged.emit()  # the song playing is gone: let it finish, queue as it was
+            if not self._engine.sounding():
+                # Nothing is being heard (paused, restored, or the file never
+                # opened): the old queue is just deleted files, so start over
+                # from the new songs, near where it was, paused.
+                self._fresh(tracks, state, False)
+                return
+            self._album = -1            # the song heard is gone: let it finish, queue as it was
+            self.libraryChanged.emit()
             self.queueChanged.emit()
             return
         if self._album >= 0:
@@ -534,6 +536,18 @@ class LibraryPlayer(QObject):
         self.queueChanged.emit()
         if index != old_index or queue[index] != was:    # moved, or retagged / a new cover
             self.trackChanged.emit()
+
+    def _fresh(self, tracks, state, play):
+        """Start from `tracks` as a normal boot would, from the saved `state`
+        (playing only if `play`)."""
+        with self._engine._lock:        # the audio thread never sees half the swap
+            self._all = tracks
+            self._albums = group_albums(tracks)
+            self._queue, self._album, self._index, self._start_at = list(tracks), -1, 0, 0
+            self.restore(state, play)
+        self.libraryChanged.emit()
+        self.queueChanged.emit()
+        self.start()
 
     def cancel_autoplay(self):
         """Another source has taken over: songs found later must not start

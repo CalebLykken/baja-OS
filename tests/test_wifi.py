@@ -17,7 +17,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
-                          WATCH_EVERY_MS, Wifi, scan, split_terse, valid_ssid)
+                          WATCH_EVERY_MS, Wifi, saved_connections, scan, split_terse, valid_ssid)
 from tests.test_dbus import FakeBus, on_bus
 
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -134,6 +134,26 @@ class WorkerFailureTest(unittest.TestCase):
         with mock.patch("backend.wifi.nmcli", side_effect=reply):
             self.wifi._ensure_hotspot_address()
         self.assertIn("working again", logged(self.printed)[-1])
+
+
+class SavedConnectionsTest(unittest.TestCase):
+    """The saved name must come back as the scan spells it."""
+
+    def saved(self, ssid):
+        def reply(*args, **kw):
+            if "UUID,NAME,TYPE,DEVICE,STATE" in args:
+                return 0, "u-1:Profile:802-11-wireless:wlan0:activated\n", ""
+            # nmcli only writes the name raw when told not to escape it
+            return 0, ssid + "\n" if "no" in args else ssid.replace("\\", "\\\\").replace(":", "\\:") + "\n", ""
+        with mock.patch("backend.wifi.nmcli", side_effect=reply):
+            return saved_connections()[0]["ssid"]
+
+    def test_colons_and_backslashes_in_a_name_survive(self):
+        self.assertEqual(self.saved("Shop:Guest"), "Shop:Guest")
+        self.assertEqual(self.saved("Back\\slash"), "Back\\slash")
+
+    def test_a_names_own_spaces_stay(self):
+        self.assertEqual(self.saved(" Cafe "), " Cafe ")
 
 
 class FakeNM:

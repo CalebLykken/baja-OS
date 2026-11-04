@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest import mock
 
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
 from backend import dbus
 from backend.dbus import BusWatch
@@ -47,6 +47,20 @@ class FakeBus:
 
     def isServiceRegistered(self, service):
         return FakeReply(self.running)
+
+
+class FakeWatcher(QObject):
+    serviceOwnerChanged = pyqtSignal(str, str, str)
+
+
+class WatcherFactory:
+    def __init__(self):
+        self.made = []
+        self.watcher = FakeWatcher()
+
+    def __call__(self, service, bus, parent):
+        self.made.append((service, bus))
+        return self.watcher
 
 
 def on_bus(bus):
@@ -156,6 +170,74 @@ class BusWatchTest(unittest.TestCase):
         result = bus.connect("org.example", "", dbus.PROPERTIES, "PropertiesChanged", self.watch._on_signal)
         self.assertIsInstance(result, bool)
         self.assertGreaterEqual(self.watch.metaObject().indexOfSlot("_on_signal(QDBusMessage)"), 0)
+
+    def test_the_real_watcher_takes_the_slot(self):
+        bus = dbus.QDBusConnection.systemBus()
+        watcher = dbus.QDBusServiceWatcher(
+            "org.example", bus, dbus.QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange, self.watch)
+        watcher.serviceOwnerChanged.connect(self.watch._owner_changed)
+        self.assertGreaterEqual(
+            self.watch.metaObject().indexOfSlot("_owner_changed(QString,QString,QString)"), 0)
+
+
+class BusWatchWatcherTest(unittest.TestCase):
+    def setUp(self):
+        self.changes = mock.Mock()
+        self.factory = WatcherFactory()
+        self.watch = BusWatch("org.example", SIGNALS, self.changes, debounce_ms=20,
+                              watcher=self.factory)
+        self.printed = mock.patch("builtins.print").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_live_comes_from_the_watcher_not_the_bus(self):
+        bus = FakeBus()
+        with on_bus(bus):
+            self.assertTrue(self.watch.start())
+        self.assertEqual(self.factory.made, [("org.example", bus)])
+        self.assertTrue(self.watch.live())
+        bus.isServiceRegistered = mock.Mock(side_effect=AssertionError("blocking call"))
+        for _ in range(5):
+            self.assertTrue(self.watch.live())
+        bus.isServiceRegistered.assert_not_called()
+
+    def test_owner_changes_update_live_and_a_return_pokes(self):
+        with on_bus(FakeBus()):
+            self.watch.start()
+        self.factory.watcher.serviceOwnerChanged.emit("org.example", ":1.5", "")
+        self.assertFalse(self.watch.live())
+        spin(0.06)
+        self.changes.assert_not_called()
+        self.factory.watcher.serviceOwnerChanged.emit("org.example", "", ":1.9")
+        self.assertTrue(self.watch.live())
+        spin(0.08)
+        self.changes.assert_called_once()
+
+    def test_down_at_start_until_the_watcher_reports_an_owner(self):
+        with on_bus(FakeBus(running=False)):
+            self.assertTrue(self.watch.start())
+        self.assertFalse(self.watch.live())
+        self.factory.watcher.serviceOwnerChanged.emit("org.example", "", ":1.2")
+        self.assertTrue(self.watch.live())
+
+    def test_a_watcher_that_cant_be_made_falls_back_to_asking_the_bus(self):
+        watch = BusWatch("org.example", SIGNALS, self.changes, watcher=mock.Mock(side_effect=RuntimeError("no")))
+        bus = FakeBus(running=False)
+        with on_bus(bus):
+            self.assertTrue(watch.start())
+        self.assertFalse(watch.live())
+        bus.running = True
+        self.assertTrue(watch.live())
+
+    def test_no_bus_means_no_watcher(self):
+        with on_bus(None):
+            self.assertFalse(self.watch.start())
+        self.assertEqual(self.factory.made, [])
+        self.assertFalse(self.watch.live())
+
+    def test_the_slot_never_raises(self):
+        self.watch.poke = mock.Mock(side_effect=RuntimeError("x"))
+        self.watch._owner_changed("org.example", "", ":1.1")
+        self.assertIn("dropped", self.printed.call_args.args[0])
 
 
 if __name__ == "__main__":

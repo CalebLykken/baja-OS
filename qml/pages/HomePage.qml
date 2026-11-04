@@ -11,6 +11,22 @@ Item {
     property bool mapReady: false
     readonly property alias mapSlot: slot   // where Main.qml puts the map while Home shows
 
+    // Coolant under 155 F with the engine known says "Warming up" (go easy on
+    // the boost) until it reaches 160 F. The gap between the two lines holds
+    // the last state, so the label can't flicker at the edge.
+    readonly property real warmCoolantF: 160
+    property bool warmingUp: false
+    function updateWarmingUp() {
+        if (!vehicle.engineKnown) warmingUp = false;
+        else if (vehicle.coolant < warmCoolantF - 5) warmingUp = true;
+        else if (vehicle.coolant >= warmCoolantF) warmingUp = false;
+    }
+    Component.onCompleted: updateWarmingUp()
+    Connections {
+        target: vehicle
+        function onChanged() { page.updateWarmingUp() }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: Theme.gap
@@ -202,7 +218,7 @@ Item {
                 Readout {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
-                    label: "Coolant"
+                    label: page.warmingUp ? "Warming up" : "Coolant"
                     value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
                     unit: Units.tempUnit
                     warning: vehicle.warnings.indexOf("coolant") >= 0

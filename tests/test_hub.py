@@ -286,6 +286,15 @@ class HubTest(unittest.TestCase):
         self.make(music=saved("local", False))
         self.assertFalse(self.local.playing)
 
+    def test_a_damaged_local_position_still_starts_the_hub(self):
+        # The hub builds (and so the dashboard starts) with a non-finite saved position.
+        # The demo local player ignores floats; the real position clamp is in ResumePointTest.
+        for position in ("Infinity", "NaN", "1e999", "-Infinity"):
+            music = ('{"source":"local","playing":false,"local":{"album":null,"path":"",'
+                     '"index":3,"position":%s}}' % position)
+            hub = self.make(music=music)
+            self.assertEqual(hub.source, "local", position)
+
     def test_saves_the_source_and_where_local_music_is(self):
         hub = self.make(music=saved("local", False, index=2, position=10))
         hub.togglePlay()

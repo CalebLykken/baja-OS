@@ -290,7 +290,7 @@ Window {
     Connections {
         target: tripCounter
         function onMilestone(text) {
-            if (typeof showSplash !== "undefined" && showSplash) return
+            if (splash.visible) return
             milestonePill.text = text
             milestoneShow.restart()
         }
@@ -522,6 +522,7 @@ Window {
 
     // Startup animation, on top of everything until it fades out.
     Splash {
+        id: splash
         anchors.fill: parent
         visible: typeof showSplash === "undefined" || showSplash
     }

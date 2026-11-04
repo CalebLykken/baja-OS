@@ -24,5 +24,14 @@ class MapsPageRootReferences(unittest.TestCase):
         self.assertIn("Theme.dark ?", src)
 
 
+class MainMilestoneToast(unittest.TestCase):
+    def test_milestone_skips_only_while_splash_is_visible(self):
+        src = (QML.parent.parent / "Main.qml").read_text()
+        body = src.split("function onMilestone", 1)[1].split("}", 1)[0]
+        self.assertNotIn("showSplash", body)
+        self.assertIn("splash.visible", body)
+        self.assertRegex(src, r"Splash\s*\{\s*id:\s*splash\b")
+
+
 if __name__ == "__main__":
     unittest.main()

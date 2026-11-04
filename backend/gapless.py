@@ -209,16 +209,28 @@ class _Output(QObject):
         return bytes(out)
 
     def _ramp(self, data):
+        # Only the first RAMP_FRAMES frames change gain; once it reaches the
+        # target the rest is a copy (1.0) or silence (0.0), so no per-sample work.
         e = self.e
         samples = array("h")
         samples.frombytes(bytes(data))
         g, target, step = e._gain, e._target, 1.0 / RAMP_FRAMES
-        for f in range(0, len(samples), CHANNELS):
-            if g != target:
-                g = min(target, g + step) if target > g else max(target, g - step)
+        n = len(samples)
+        i = 0
+        while g != target and i < n:
+            g = min(target, g + step) if target > g else max(target, g - step)
             for c in range(CHANNELS):
-                samples[f + c] = int(samples[f + c] * g)
+                samples[i + c] = int(samples[i + c] * g)
+            i += CHANNELS
         e._gain = g
+        if i < n:
+            if target == 1.0:
+                pass                    # the rest is unchanged
+            elif target == 0.0:
+                samples[i:] = array("h", bytes((n - i) * SAMPLE_BYTES))
+            else:
+                for j in range(i, n):
+                    samples[j] = int(samples[j] * g)
         return samples.tobytes()
 
 

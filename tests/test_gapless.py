@@ -4,6 +4,7 @@ A FakeSink and a FakeDecoder, both driven by hand: no audio device, no real
 decoding, no waiting on real time. So a 3-hour file takes a moment.
 """
 
+import types
 import unittest
 from array import array
 from collections import deque
@@ -189,6 +190,61 @@ class Base(unittest.TestCase):
     def assert_counts_up(self, heard, first):
         """Every frame follows the last, from sample value `first`."""
         self.assertTrue(bytes(heard) == counting(first, len(heard)))
+
+
+def old_ramp(data, g, target):
+    """The first _ramp: a per-sample loop over the whole buffer. (bytes, gain)."""
+    samples = array("h")
+    samples.frombytes(bytes(data))
+    step = 1.0 / gapless.RAMP_FRAMES
+    for f in range(0, len(samples), gapless.CHANNELS):
+        if g != target:
+            g = min(target, g + step) if target > g else max(target, g - step)
+        for c in range(gapless.CHANNELS):
+            samples[f + c] = int(samples[f + c] * g)
+    return samples.tobytes(), g
+
+
+class RampTest(unittest.TestCase):
+    def check(self, samples, g, target):
+        data = array("h", samples).tobytes()
+        e = types.SimpleNamespace(_gain=g, _target=target)
+        got = gapless._Output._ramp(types.SimpleNamespace(e=e), data)
+        want, want_gain = old_ramp(data, g, target)
+        self.assertEqual(got, want)
+        self.assertEqual(e._gain, want_gain)
+
+    def loud(self, frames):
+        return [(-32768, 32767, -1, 12345, -7, 1)[i % 6] for i in range(frames * gapless.CHANNELS)]
+
+    def test_fade_in_and_out_match_the_full_loop(self):
+        n = gapless.RAMP_FRAMES * 3
+        self.check(self.loud(n), 0.0, 1.0)
+        self.check(self.loud(n), 1.0, 0.0)
+
+    def test_buffer_shorter_than_the_ramp(self):
+        self.check(self.loud(100), 0.0, 1.0)
+        self.check(self.loud(100), 1.0, 0.0)
+
+    def test_buffer_longer_than_the_ramp(self):
+        self.check(self.loud(gapless.RAMP_FRAMES + 1), 0.0, 1.0)
+        self.check(self.loud(4800), 1.0, 0.0)
+
+    def test_starting_mid_ramp(self):
+        self.check(self.loud(4800), 0.4, 1.0)
+        self.check(self.loud(4800), 0.4, 0.0)
+
+    def test_already_at_target(self):
+        self.check(self.loud(4800), 0.0, 0.0)
+        self.check(self.loud(4800), 1.0, 1.0)
+
+    def test_odd_negative_samples(self):
+        self.check([-32768, -1] * 3000, 0.0, 1.0)
+        self.check([-32768, -1] * 3000, 1.0, 0.0)
+
+    def test_other_target(self):
+        self.check(self.loud(4800), 1.0, 0.5)
+        self.check(self.loud(4800), 0.2, 0.5)
 
 
 class BudgetTest(Base):

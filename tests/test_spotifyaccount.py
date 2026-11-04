@@ -22,7 +22,7 @@ from unittest import mock
 try:
     from PyQt6.QtCore import QCoreApplication
     from backend import spotifyaccount
-    from backend.spotifyaccount import LINK_LASTS_S, REFRESH_EVERY_S, SpotifyAccount
+    from backend.spotifyaccount import LINK_LASTS_S, REFRESH_EVERY_S, RETRY_FIRST_S, RETRY_MAX_S, SpotifyAccount
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
 
@@ -362,6 +362,57 @@ class LibraryTest(AccountCase):
         self.now += REFRESH_EVERY_S + 1
         a.set_online(True)
         self.assertGreater(len(self.requests), count)
+
+    def test_a_failed_read_is_retried_with_backing_off(self):
+        a = self.linked_account()
+        self.answers["playlists"] = http_error(503)
+        a.refresh()
+        self.assertEqual(a.message, "Can't reach Spotify right now")
+        waits = []
+        for _ in range(8):
+            self.assertTrue(a._retry.isActive())
+            waits.append(a._retry.interval() / 1000)
+            a._retry.stop()
+            a._retry.timeout.emit()               # the timer fires and the read fails again
+        self.assertEqual(waits[:3], [RETRY_FIRST_S, RETRY_FIRST_S * 2, RETRY_FIRST_S * 4])
+        self.assertEqual(waits[-1], RETRY_MAX_S)
+
+    def test_the_retry_reads_the_library_when_spotify_is_back(self):
+        a = self.linked_account()
+        self.answers["playlists"] = [http_error(503), http_error(503), http_error(503), PLAYLISTS]
+        a.refresh()
+        self.assertTrue(a._retry.isActive())
+        a._retry.stop()
+        a._retry.timeout.emit()
+        self.assertEqual((a.message, len(a.songs)), ("", 1))
+        self.assertFalse(a._retry.isActive())
+        self.assertEqual(a._retry_s, RETRY_FIRST_S)
+
+    def test_a_manual_refresh_cancels_the_waiting_retry(self):
+        a = self.linked_account()
+        self.answers["playlists"] = [http_error(503)] * 3
+        a.refresh()
+        self.assertTrue(a._retry.isActive())
+        self.answers["playlists"] = {"items": []}
+        a.refresh()
+        self.assertFalse(a._retry.isActive())
+
+    def test_signing_out_stops_retrying(self):
+        a = self.linked_account()
+        self.answers["playlists"] = http_error(503)
+        a.refresh()
+        self.assertTrue(a._retry.isActive())
+        a.signOut()
+        self.assertFalse(a._retry.isActive())
+
+    def test_spotify_ending_the_sign_in_is_not_retried(self):
+        a = self.linked_account()
+        self.answers["playlists"] = http_error(401)
+        self.token_answer = http_error(400, b"invalid_grant")
+        a._access = ""
+        a.refresh()
+        self.assertFalse(a.linked)
+        self.assertFalse(a._retry.isActive())
 
     def test_not_linked_it_reads_nothing(self):
         a = self.account()

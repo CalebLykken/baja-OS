@@ -18,7 +18,7 @@ QtObject {
             line: "#2c2c33", text: "#f3efe8", textDim: "#8f8b84",
             accent: "#ffa21a", warn: "#ff5436", ok: "#83cf6f",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
-            radius: 16, border: 1, gauge: "arc", backdrop: "none"
+            radius: 16, border: 1, gauge: "arc", backdrop: "grid"
         },
         // 2000s analog cluster: black faces, white ticks, orange-red needles.
         cluster: {
@@ -27,7 +27,7 @@ QtObject {
             accent: "#ff4f1f", warn: "#ff2a2a", ok: "#7fd4ff",
             font: "Nimbus Sans Narrow", numFont: "Nimbus Sans Narrow", numItalic: false,
             numWeight: Font.Bold,
-            radius: 10, border: 1, gauge: "needle", backdrop: "none"
+            radius: 10, border: 1, gauge: "needle", backdrop: "dial"
         },
         // Outdoor sport-ute: olive and sand, safety orange, topo lines.
         trail: {
@@ -96,7 +96,7 @@ QtObject {
     readonly property int radius: s.radius
     readonly property int border: s.border
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
-    readonly property string backdrop: s.backdrop  // "none", "topo" or "stripes"
+    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid" or "dial"
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

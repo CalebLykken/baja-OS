@@ -13,6 +13,7 @@ turns those into a single, double or long press. main.py decides what
 they do.
 """
 
+import itertools
 import threading
 import time
 from datetime import timedelta
@@ -120,6 +121,20 @@ class Knob(QObject):
                 continue                 # no debounce support: try without
         return None
 
+    def _reopen(self):
+        """Request the pins again after a fault: at once, then with a growing
+        pause, until they come back. The knob only gives up at start."""
+        req = self._request()
+        if req is not None:
+            return req
+        print("Knob: its pins aren't available, retrying")
+        for pause in itertools.chain((1, 2, 5), itertools.repeat(10)):
+            time.sleep(pause)
+            req = self._request()
+            if req is not None:
+                print("Knob: working again")
+                return req
+
     def _run(self):
         req = self._request()
         if req is None:
@@ -130,7 +145,12 @@ class Knob(QObject):
             a, b = req.get_values([KNOB_A, KNOB_B])
             return (a == Value.ACTIVE) << 1 | (b == Value.ACTIVE)
 
-        last, steps = state(), 0
+        try:
+            last = state()
+        except Exception as e:           # a GPIO hiccup just as the lines are read
+            errorlog.log.report(type(e), e, e.__traceback__, label="Knob: read error, assuming at rest:")
+            last = REST
+        steps = 0
         down, released_at = False, 0.0
         while True:
             try:
@@ -163,11 +183,12 @@ class Knob(QObject):
                     req.release()
                 except Exception:
                     pass
-                req = self._request()
-                if req is None:
-                    print("Knob: its pins aren't available")
-                    return
+                req = self._reopen()
+                steps = 0
+                if down:                 # the press can't be followed any more: end it, so gestures aren't left down
+                    down = False
+                    safe_emit(self, "released")
                 try:
-                    last, steps = state(), 0
+                    last = state()
                 except Exception:
                     pass      # the next pass fails again and comes back here, a second apart

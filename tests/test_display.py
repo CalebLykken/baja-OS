@@ -180,5 +180,57 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(d.brightness, 55)
 
 
+class WriteFailureTests(unittest.TestCase):
+    def hw_display(self):
+        d = display_mod.Display()
+        run_probe(d)
+        d._pending = None
+        return d
+
+    def test_write_retries_a_nak(self):
+        d = self.hw_display()
+        calls = []
+
+        def flaky(value):
+            calls.append(value)
+            if len(calls) < 3:
+                raise OSError("nak")
+
+        d._ddc.set = flaky
+        with mock.patch.object(display_mod.time, "sleep"):
+            d._write(40)
+        self.assertEqual(calls, [40, 40, 40])
+        self.assertEqual(d._written, 40)
+
+    def test_failed_write_is_resent_by_the_next_apply(self):
+        d = self.hw_display()
+        d._ddc.set = mock.Mock(side_effect=OSError("nak"))
+        d._apply(40)
+        self.assertEqual(d._pending, 40)
+        d._pending = None
+        with mock.patch.object(display_mod.time, "sleep") as nap:
+            d._write(40)
+        self.assertEqual(d._ddc.set.call_count, display_mod.DDC_TRIES)
+        self.assertEqual(nap.call_count, display_mod.DDC_TRIES - 1)
+        self.assertEqual(d._written, 30)  # the panel still shows the old level
+        d._apply(40)  # same level again: must be queued, not dropped
+        self.assertEqual(d._pending, 40)
+
+    def test_accepted_write_is_not_resent(self):
+        d = self.hw_display()
+        d._apply(40)
+        d._pending = None
+        d._write(40)
+        d._apply(40)
+        self.assertIsNone(d._pending)
+
+    def test_periodic_check_resends_stale_level(self):
+        d = self.hw_display()
+        d._levels[False] = 40
+        d._brightness = 40  # UI says 40, the panel never took it
+        d._check_sun()
+        self.assertEqual(d._pending, 40)
+
+
 if __name__ == "__main__":
     unittest.main()

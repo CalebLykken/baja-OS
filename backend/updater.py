@@ -34,7 +34,11 @@ the code:
     pending     the merge is done. The guard counts the starts; the dashboard
                 removes the file after HEALTHY_AFTER_MS of running (from the
                 UI thread, so a frozen one doesn't count). Too many starts
-                without that: go back ("fell-back").
+                without that: go back ("fell-back"). A run that ends on
+                purpose (the app returning from its event loop, a key-off or
+                manual shut down, run.sh's restart onto the GPU) leaves
+                CLEAN_MARK; the guard then doesn't count the next start, so
+                only crashes and cut power add up.
     cut-off, fell-back
                 for the dashboard to say so on screen, until OK.
 
@@ -66,6 +70,7 @@ MOVING_MPH = 3.0            # as backend/ignition.py: walking pace counts as sto
 MPH_TO_MS = 0.44704
 RESTART_DELAY_MS = 3000     # long enough to read "Updated"
 MARKER = ".update-state"    # git-ignored; the phases are above
+CLEAN_MARK = ".update-state.clean"   # the last run ended on purpose; also ignored
 HEALTHY_AFTER_MS = 60000    # up this long on a new version: it works, keep it
 
 DRIVING = "Not while driving: stop the truck first."
@@ -260,6 +265,30 @@ def read_marker(root):
 
 def clear_marker(root):
     (Path(root) / MARKER).unlink(missing_ok=True)
+
+
+def mark_clean_exit(root=ROOT):
+    """Says this run is ending on purpose, for the guard: a short trip that
+    ends with the key-off shut down isn't a failed start. Only written for a
+    new version still on trial; on disk before this returns, as the next
+    thing may be power off. Never raises."""
+    try:
+        if read_marker(root).get("phase") != "pending":
+            return
+        with open(Path(root) / CLEAN_MARK, "w") as f:
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass
+
+
+def clear_clean_exit(root=ROOT):
+    """Takes the mark back: the shut down didn't happen, so this run isn't
+    ending on purpose after all. Never raises."""
+    try:
+        (Path(root) / CLEAN_MARK).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def confirm_healthy(root):

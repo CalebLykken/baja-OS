@@ -316,13 +316,17 @@ class SpotifyAccount(QObject):
                            "albums": self._section("albums", "album", "album", old["albums"]),
                            "songs": self._section("tracks", "track", "track", old["songs"])}
             except SignedOut:
-                signed_out, message = True, "Spotify ended the sign-in: scan the code to link it again"
-            except (OSError, ValueError, KeyError) as e:
+                signed_out, message = True, "Spotify signed this Pi out. Scan the code to link it again"
+            except urllib.error.HTTPError as e:      # before OSError, which it is a kind of: Spotify did answer
+                print(f"Spotify account: couldn't read the library (HTTP {e.code})", flush=True)
+                message = ("Spotify is busy. It tries again by itself" if e.code == 429
+                           else "Spotify is having trouble right now. It tries again by itself")
+            except OSError as e:                  # no signal, no route, a timeout: the phone's hotspot
                 print(f"Spotify account: couldn't read the library ({type(e).__name__})", flush=True)
-                message = "Can't reach Spotify right now"
+                message = "Can't reach Spotify right now. Is the phone's hotspot on?"
             except Exception as e:               # an answer of an odd shape: say so, don't leave it silent
                 print(f"Spotify account: couldn't read the library ({type(e).__name__})", flush=True)
-                message = "Can't reach Spotify right now"
+                message = "Spotify sent something unexpected. It tries again by itself"
             finally:
                 safe_emit(self, "_loaded", library, message, signed_out, generation)
         threading.Thread(target=work, daemon=True).start()

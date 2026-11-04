@@ -169,7 +169,7 @@ class SearchTest(unittest.TestCase):
         with mock.patch.object(spotifysearch, "parse_results", side_effect=RuntimeError("boom")):
             self.search.search("a")
         self.assertFalse(self.search.searching)
-        self.assertEqual(self.search.message, "Spotify search went wrong; try again")
+        self.assertEqual(self.search.message, "Spotify search hit a snag. Try again")
         self.assertEqual(report.call_args.kwargs["label"], "Spotify search failed:")
 
     def test_nothing_found(self):

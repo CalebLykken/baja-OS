@@ -72,7 +72,7 @@ Item {
                 // same dark card as the Maps page.
                 Rectangle {
                     id: nextTurnCard
-                    readonly property bool shown: page.mapReady && typeof routing !== "undefined" && routing.active
+                    readonly property bool shown: typeof routing !== "undefined" && routing.active
                     opacity: shown ? 1 : 0
                     visible: opacity > 0
                     Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
@@ -119,7 +119,7 @@ Item {
                 }
                 Rectangle {
                     id: arrivePill
-                    readonly property bool shown: page.mapReady && typeof routing !== "undefined" && routing.active
+                    readonly property bool shown: typeof routing !== "undefined" && routing.active
                     opacity: shown ? 1 : 0
                     visible: opacity > 0
                     Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }

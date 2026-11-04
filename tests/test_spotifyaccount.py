@@ -348,6 +348,37 @@ class LibraryTest(AccountCase):
         self.assertTrue(a.linked)
         self.assertTrue(self.login.exists())
 
+    def test_a_busy_spotify_is_not_blamed_on_the_hotspot(self):
+        a = self.linked_account()
+        self.answers["playlists"] = http_error(429)
+        a.refresh()
+        self.assertEqual(a.message, "Spotify is busy. It tries again by itself")
+        self.assertTrue(a._retry.isActive())
+
+    def test_a_spotify_server_error_is_not_blamed_on_the_hotspot(self):
+        for code in (500, 502, 503):
+            a = self.linked_account()
+            self.answers["playlists"] = http_error(code)
+            a.refresh()
+            self.assertEqual(a.message, "Spotify is having trouble right now. It tries again by itself")
+            self.assertTrue(a._retry.isActive())
+
+    def test_no_connection_still_asks_about_the_hotspot(self):
+        for error in (urllib.error.URLError("offline"), TimeoutError("slow"), ConnectionResetError()):
+            a = self.linked_account()
+            self.answers["playlists"] = error
+            a.refresh()
+            self.assertEqual(a.message, "Can't reach Spotify right now. Is the phone's hotspot on?")
+
+    def test_malformed_json_is_something_unexpected_not_the_hotspot(self):
+        for error in (ValueError("not json"), json.JSONDecodeError("bad", "", 0), KeyError("items")):
+            a = self.linked_account()
+            self.answers["playlists"] = error
+            a.refresh()
+            self.assertEqual(a.message, "Spotify sent something unexpected. It tries again by itself")
+            self.assertTrue(a._retry.isActive())
+            self.assertEqual(len(a.songs), 1)
+
     def test_an_expired_token_is_replaced_once(self):
         a = self.linked_account()
         self.answers["playlists"] = [http_error(401), PLAYLISTS]
@@ -367,7 +398,7 @@ class LibraryTest(AccountCase):
         a = self.linked_account()
         self.answers["playlists"] = http_error(503)
         a.refresh()
-        self.assertEqual(a.message, "Can't reach Spotify right now. Is the phone's hotspot on?")
+        self.assertEqual(a.message, "Spotify is having trouble right now. It tries again by itself")
         waits = []
         for _ in range(8):
             self.assertTrue(a._retry.isActive())

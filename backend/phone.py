@@ -50,6 +50,7 @@ PORT = 8780
 TOKEN_FILE = Path("~/.config/baja-os/send-token").expanduser()
 HOTSPOT_ADDRESS = "172.20.10.14"       # the fixed extra address on an iPhone hotspot (wifi.py)
 MAX_BODY = 16 * 1024
+REQUEST_TIMEOUT = 15            # seconds a connection may sit silent mid-request
 ALLOWED_NETS = [ipaddress.ip_network(n) for n in
                 ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 SHORT_LINK_HOSTS = ("maps.apple", "maps.app.goo.gl", "goo.gl")
@@ -371,18 +372,31 @@ LINKED_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 """
 
 
+def _ip_allowed(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in net for net in ALLOWED_NETS)
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def verify_request(self, request, client_address):
+        # Turn strangers away before a thread is started for them.
+        return _ip_allowed(client_address[0])
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "BajaOS/1"
+    timeout = REQUEST_TIMEOUT      # a peer gone quiet mustn't hold a thread and socket forever
 
     def log_message(self, *args):
         pass
 
     def _allowed_client(self):
-        try:
-            ip = ipaddress.ip_address(self.client_address[0])
-        except ValueError:
-            return False
-        return any(ip in net for net in ALLOWED_NETS)
+        return _ip_allowed(self.client_address[0])
 
     def _authorised(self):
         """The current token if the request carries it (the Shortcut's header
@@ -477,6 +491,9 @@ class _Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(payload, dict):
                 raise ValueError("expected an object")
+        except OSError:                 # timed out (or dropped) before the whole body arrived
+            self.close_connection = True
+            return
         except ValueError:
             return self._json(400, False, "That wasn't JSON")
         try:
@@ -516,7 +533,7 @@ class PhoneSend(QObject):
 
     def start(self):
         try:
-            self._server = ThreadingHTTPServer(("0.0.0.0", PORT), _Handler)
+            self._server = _Server(("0.0.0.0", PORT), _Handler)
         except OSError as e:
             print(f"Send to Baja: can't listen on port {PORT} ({e})")
             return

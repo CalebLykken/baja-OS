@@ -267,8 +267,8 @@ def _reuse(entry, stamp, path, folder_art):
         track = dict(track)
         if entry["embedded"]:               # its picture is in the library's art folder: still there?
             art = QUrl(track["art"]).toLocalFile()
-            if os.path.dirname(art) != str(artcache.pinned_dir()) or not os.path.isfile(art):
-                return None                 # (or in the old LRU cache, which may drop it)
+            if os.path.dirname(art) != str(artcache.pinned_dir()) or not artcache.usable(art):
+                return None                 # (or in the old LRU cache, which may drop it; or empty: a power cut)
         else:                               # a cover.jpg beside it may have come or gone
             track["art"] = folder_art(path.parent)
         return {**entry, "track": track}

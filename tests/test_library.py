@@ -19,7 +19,7 @@ from unittest import mock
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 try:
-    from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QThread, QTimer, pyqtSignal
+    from PyQt6.QtCore import QCoreApplication, QEventLoop, QObject, QThread, QTimer, QUrl, pyqtSignal
     from PyQt6.QtMultimedia import QAudio
     from backend import gapless, library
     from backend.library import (LibraryPlayer, LibraryScanner, _listing, _number, _walk, cached_tracks, group_albums,
@@ -237,6 +237,18 @@ class ScanCacheTest(ScanBase):
         self.assertEqual(self.reads(), 0)        # picture still there: reused
         cover.unlink()
         self.assertEqual(self.reads(), 1)        # gone: this file is read again
+
+    def test_an_empty_embedded_cover_is_written_again_on_a_rescan(self):
+        audio = SimpleNamespace(tags={}, pictures=[SimpleNamespace(data=b"img")],
+                                info=SimpleNamespace(length=1.0))
+        with mock.patch.object(library.mutagen, "File", return_value=audio):
+            tracks = scan(self.top)
+            cover = Path(QUrl(tracks[0]["art"]).toLocalFile())
+            self.assertEqual(cover.read_bytes(), b"img")
+            cover.write_bytes(b"")               # a power cut after the rename, before the data
+            tracks = scan(self.top)
+        self.assertEqual(cover.read_bytes(), b"img")
+        self.assertEqual(QUrl(tracks[0]["art"]).toLocalFile(), str(cover))
 
     def test_a_cover_added_later_reaches_cached_songs(self):
         self.reads()

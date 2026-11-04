@@ -39,7 +39,7 @@ from backend.gps import Gps
 from backend.ignition import KeyOff
 from backend.roadinfo import RoadInfo
 from backend.routing import Router
-from backend.voice import Voice
+from backend.voice import Voice, arrival_line
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
 from backend.knob import Gestures, Knob, double_press
@@ -268,7 +268,7 @@ def main():
     system.hold_power_while(lambda: updater.updating)
     system.before_power(settings.flush_before_power)   # on disk before systemctl is asked
     voice = Voice(settings)
-    routing.speak.connect(voice.say)
+    routing.speak.connect(lambda text: voice.say(arrival_line(text)))
     # Shut down cleanly once the truck is turned off (the car stops
     # answering the OBD adapter), inside the power relay's hold time.
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power)

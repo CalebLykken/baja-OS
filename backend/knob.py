@@ -151,12 +151,16 @@ class Knob(QObject):
             errorlog.log.report(type(e), e, e.__traceback__, label="Knob: read error, assuming at rest:")
             last = REST
         steps = 0
-        down, released_at = False, 0.0
+        down, changed_at, settling = False, float("-inf"), False
         while True:
             try:
-                if not req.wait_edge_events(timedelta(seconds=1)):
+                wait = 1.0
+                if settling:             # a change was ignored as bounce: look again once the gap is over
+                    wait = max(changed_at + PRESS_GAP_S - time.monotonic(), 0.001)
+                if req.wait_edge_events(timedelta(seconds=wait)):
+                    req.read_edge_events()
+                elif not settling:
                     continue
-                req.read_edge_events()
                 now = time.monotonic()
 
                 s = state()
@@ -169,13 +173,14 @@ class Knob(QObject):
                             safe_emit(self, "turned", -click if FLIP else click)
                         steps = 0
 
+                # Bounce on make or break: a change this soon after the last
+                # one is ignored, and the level is read again once the gap is
+                # over, so only the settled level counts.
                 is_down = req.get_value(BUTTON) == Value.INACTIVE
-                if is_down and not down and now - released_at > PRESS_GAP_S:
-                    down = True
-                    safe_emit(self, "pressed")
-                elif not is_down and down:
-                    down, released_at = False, now
-                    safe_emit(self, "released")
+                settling = is_down != down and now - changed_at <= PRESS_GAP_S
+                if is_down != down and not settling:
+                    down, changed_at = is_down, now
+                    safe_emit(self, "pressed" if is_down else "released")
             except Exception as e:       # a GPIO hiccup must not end the knob for good
                 errorlog.log.report(type(e), e, e.__traceback__, label="Knob: read error, retrying:")
                 time.sleep(1.0)

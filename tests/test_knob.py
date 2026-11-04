@@ -97,6 +97,66 @@ class GesturesTest(unittest.TestCase):
         self.assertEqual(self.seen, ["single"])
 
 
+class ButtonDebounceTest(unittest.TestCase):
+    """Knob._run with a scripted fake of the GPIO line: each step is
+    (time, button level after it)."""
+
+    class Stop(BaseException):
+        pass
+
+    def run_script(self, steps, end=1.0):
+        clock = [0.0]
+        level = [False]                     # True: the switch is down
+        script = list(steps)
+
+        class Req:
+            def get_values(_, lines):
+                return [knob.Value.ACTIVE] * len(lines)     # the encoder rests
+
+            def get_value(_, line):
+                return knob.Value.INACTIVE if level[0] else knob.Value.ACTIVE
+
+            def wait_edge_events(_, timeout):
+                secs = timeout.total_seconds()
+                if script and script[0][0] <= clock[0] + secs:
+                    clock[0], level[0] = script.pop(0)
+                    return True
+                clock[0] += secs
+                if clock[0] > end:
+                    raise self.Stop
+                return False
+
+            def read_edge_events(_):
+                pass
+
+        events = []
+        k = knob.Knob()
+        k.pressed.connect(lambda: events.append("pressed"))
+        k.released.connect(lambda: events.append("released"))
+        fake = mock.Mock(Value=mock.Mock(ACTIVE=1, INACTIVE=0))
+        with mock.patch.object(knob, "Value", fake.Value, create=True), \
+                mock.patch.object(k, "_request", return_value=Req()), \
+                mock.patch.object(knob.time, "monotonic", lambda: clock[0]):
+            with self.assertRaises(self.Stop):
+                k._run()
+        return events
+
+    def test_a_clean_press(self):
+        self.assertEqual(self.run_script([(0.1, True), (0.3, False)]), ["pressed", "released"])
+
+    def test_bounce_on_make_is_one_press_that_stays_down(self):
+        events = self.run_script([(0.1, True), (0.102, False), (0.105, True)])
+        self.assertEqual(events, ["pressed"])
+
+    def test_bounce_on_break_is_one_release(self):
+        events = self.run_script([(0.1, True), (0.5, False), (0.502, True), (0.505, False)])
+        self.assertEqual(events, ["pressed", "released"])
+
+    def test_a_release_inside_the_gap_is_not_lost(self):
+        events = self.run_script([(0.1, True), (0.12, False)])
+        self.assertEqual(events, ["pressed", "released"])
+
+
 class DoublePressTest(unittest.TestCase):
     def test_while_navigating_it_repeats_the_last_direction(self):
         routing, media = mock.Mock(active=True), mock.Mock()

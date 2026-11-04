@@ -277,6 +277,7 @@ Item {
                             property bool dragging: false
                             function at(x) { return Math.max(0, Math.min(1, x / width)) }
                             ProgressBar {
+                                id: seekBar
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width
                                 height: 10
@@ -292,6 +293,7 @@ Item {
                                 onReleased: (m) => {
                                     seekArea.dragging = false
                                     media.seek(Math.round(seekArea.at(m.x) * media.duration))
+                                    seekBar.flashSeek()
                                 }
                                 onCanceled: seekArea.dragging = false
                             }

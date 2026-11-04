@@ -204,6 +204,8 @@ class PowerLog(QObject):
         self._hdmi = None
         self._unsynced = 0
         self._kernel_seen = set()
+        self._sample_error = ""       # the last failed sample's error, '' while they work
+        self._sample_fails = 0        # failed samples since the last good one
 
     def start(self):
         if not shutil.which("vcgencmd"):
@@ -235,11 +237,26 @@ class PowerLog(QObject):
                     "|battery V|screen|free MB|app MB\n")
         threading.Thread(target=self._kernel, daemon=True).start()
         while True:
-            try:
-                self._sample()
-            except Exception as e:      # the recorder must not take anything down
-                self.event(f"sample failed: {type(e).__name__}: {e}")
+            self._sample_once()
             time.sleep(EVERY_S)
+
+    def _sample_once(self):
+        """One sample. A sample that keeps failing the same way is logged once, and
+        once more when it works again, not every EVERY_S (each event is a journal
+        line and an fsync on the SD card)."""
+        try:
+            self._sample()
+        except Exception as e:      # the recorder must not take anything down
+            err = f"{type(e).__name__}: {e}"
+            self._sample_fails += 1
+            if err != self._sample_error:
+                self.event(f"sample failed: {err}")
+            self._sample_error = err
+            return
+        if self._sample_fails:
+            self.event(f"samples working again after {self._sample_fails} failed")
+            self._sample_fails = 0
+        self._sample_error = ""
 
     def _sample(self):
         supply, watts = parse_pmic(_run("vcgencmd", "pmic_read_adc"))

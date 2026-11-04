@@ -1,5 +1,8 @@
 """Off-Pi tests for backend/eq.py: saved gains, presets, what gets written to
-PipeWire, and that the writer thread survives a failed write.
+PipeWire, that the writer thread survives a failed write, and that the saved
+gains go back to the filter whenever it (re)starts, even if PipeWire hands the
+new filter the same object id (it reuses ids), and are not re-sent while the
+same filter keeps running. pw-cli is faked.
 
     python3 -m unittest tests.test_eq
 """
@@ -14,6 +17,7 @@ try:
     from PyQt6.QtCore import QCoreApplication
 
     from backend import eq
+    from backend.eq import Equalizer, node_info
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
 
@@ -159,6 +163,77 @@ class WriterSurvivesTests(unittest.TestCase):
         while not cond() and time.monotonic() < end:
             time.sleep(0.01)
         self.assertTrue(cond(), "writer did not make the write")
+
+
+PW_INFO = """\
+\tid: {id}
+\ttype: PipeWire:Interface:Node
+\tproperties:
+\t\tobject.serial = "{serial}"
+\t\tnode.name = "baja_eq"
+"""
+
+
+def make():
+    s = FakeSettings()
+    s.d["eq"] = "4,2,0,2,3"
+    with mock.patch("backend.eq.shutil.which", return_value="/usr/bin/pw-cli"):
+        return Equalizer(s)
+
+
+class NodeInfoTest(unittest.TestCase):
+    def test_reads_id_and_serial(self):
+        with mock.patch.object(eq, "_pw_cli", return_value=PW_INFO.format(id=57, serial=1234)):
+            self.assertEqual(node_info(), (57, 1234))
+            self.assertEqual(eq.node_id(), 57)
+
+    def test_no_serial_line(self):
+        with mock.patch.object(eq, "_pw_cli", return_value="\tid: 57\n"):
+            self.assertEqual(node_info(), (57, None))
+
+    def test_not_running(self):
+        with mock.patch.object(eq, "_pw_cli", return_value=""):
+            self.assertIsNone(node_info())
+            self.assertIsNone(eq.node_id())
+
+
+class RestartTest(unittest.TestCase):
+    def test_pushes_when_first_found(self):
+        e = make()
+        e._on_found((57, 1000))
+        self.assertIn('"bass:Gain" 4.0', e._pending)
+
+    def test_same_filter_not_pushed_again(self):
+        e = make()
+        e._on_found((57, 1000))
+        e._pending = None
+        e._on_found((57, 1000))
+        self.assertIsNone(e._pending)
+
+    def test_restart_with_the_same_id_pushes_again(self):
+        e = make()
+        e._on_found((57, 1000))
+        e._pending = None
+        e._on_found((57, 1007))        # new filter, PipeWire reused id 57
+        self.assertIn('"bass:Gain" 4.0', e._pending)
+
+    def test_restart_with_a_new_id_pushes_again(self):
+        e = make()
+        e._on_found((57, 1000))
+        e._pending = None
+        e._on_found((58, 1007))
+        self.assertIsNotNone(e._pending)
+
+    def test_gone_then_back_pushes_and_reports_availability(self):
+        e = make()
+        changes = []
+        e.changed.connect(lambda: changes.append(e.available))
+        e._on_found((57, 1000))
+        e._pending = None
+        e._on_found(None)
+        e._on_found((57, 1000))
+        self.assertIsNotNone(e._pending)
+        self.assertEqual(changes, [True, False, True])
 
 
 if __name__ == "__main__":

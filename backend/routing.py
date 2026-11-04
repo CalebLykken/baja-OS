@@ -541,6 +541,8 @@ class Router(QObject):
         self._clock = time.monotonic  # for off-route timing (tests use a fake one)
         self._last_reroute = 0.0
         self._arrived = False
+        # Ends the trip a little after arriving; cancelled by anything new.
+        self._arrive_timer = QTimer(self, singleShot=True, interval=20000, timeout=self.stop)
         # The route from before a restart, until it can be asked for again,
         # then while that answer is on its way.
         self._resume = saved_route(str(settings.get("route", "")), time.time()) if settings else None
@@ -693,6 +695,7 @@ class Router(QObject):
         self._stops_failed = ""
         self._route = route
         self._arrived = False
+        self._arrive_timer.stop()
         self._off_count = 0
         self._spoken = set()
         self._route.locate(self._gps.lon, self._gps.lat)
@@ -868,6 +871,8 @@ class Router(QObject):
         if self._started:
             self._gps.clearPath()
         self._started = False
+        self._arrived = False       # a new place ends the arrival's wait to stop
+        self._arrive_timer.stop()
         self._route = None
         self._last_said = ""
         self._dest = (name, lon, lat)
@@ -877,6 +882,7 @@ class Router(QObject):
 
     @pyqtSlot()
     def stop(self):
+        self._arrive_timer.stop()
         self._gps.clearPath()
         self._started = False
         self._route = None
@@ -920,7 +926,7 @@ class Router(QObject):
             self._arrived = True
             self._forget()                          # shown a little longer, but done
             self._say(f"You have arrived at {r.name}.")
-            QTimer.singleShot(20000, lambda: self.stop() if self._arrived else None)
+            self._arrive_timer.start()
         elif not self._arrived:
             while not self._computing and r.past_stop(self._gps.heading, self._gps.speed):
                 self._leave_stop(r)                 # nothing to announce: it wasn't reached

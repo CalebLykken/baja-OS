@@ -437,6 +437,19 @@ class SavingTest(unittest.TestCase):
         self.assertTrue(self.router.arrived)
         self.assertEqual(self.settings.values["route"], "")
 
+    def test_a_new_place_picked_after_arriving_is_not_stopped_by_the_auto_stop(self):
+        self.router.routeTo("Shop", *END)
+        answer(self.router, ROUTE, "", "Shop", False)
+        self.router.go()
+        self.gps.at(END[0] - 0.0001, END[1])
+        self.router._on_fix()
+        self.assertTrue(self.router.arrived)
+        self.assertTrue(self.router._arrive_timer.isActive())
+        self.router.routeTo("Cafe", *START)         # within the 20 s
+        self.assertFalse(self.router._arrive_timer.isActive())
+        self.assertFalse(self.router.arrived)
+        self.assertEqual(self.router._dest[0], "Cafe")
+
     def test_kept_fresh_while_driving(self):
         self.router.routeTo("Shop", *END)
         answer(self.router, ROUTE, "", "Shop", False)

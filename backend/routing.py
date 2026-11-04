@@ -804,7 +804,9 @@ class Router(QObject):
     def _go(self, prefix=""):
         if self._route and not self._started:
             self._started = True
-            self._go_at, self._go_eta = self._clock(), self._route.time
+            self._go_at = self._clock()
+            # The first ETA is only honest for a route with no stops to linger at.
+            self._go_eta = self._route.time if not self._stops else None
             self._route.locate(self._gps.lon, self._gps.lat)
             self._begin(prefix)
             self._save()
@@ -901,6 +903,7 @@ class Router(QObject):
             self.stopsFailed.emit(failed)
             return False
         self._set_stops(stops)
+        self._go_eta = None             # the first ETA no longer describes this drive
         self._request(*self._dest, reroute=True)
         self._stops_failed = failed
         self._save()
@@ -1106,16 +1109,18 @@ class Router(QObject):
 
     def _summarise(self, now):
         """How the drive went against the first ETA, once, at arrival."""
-        if self._go_at is None or self._go_eta is None:
+        if self._go_at is None:
             return ""
         elapsed = max(0.0, now - self._go_at)
+        took = f"{round(elapsed / 60)} min" if elapsed >= 60 else "under a minute"
+        if self._go_eta is None:
+            return took
         diff = elapsed - self._go_eta
         mins = round(abs(diff) / 60)
         if abs(diff) < 90 or mins < 1:
             verdict = "right on time"
         else:
             verdict = f"{mins} min {'late' if diff > 0 else 'early'}"
-        took = f"{round(elapsed / 60)} min" if elapsed >= 60 else "under a minute"
         return f"{took} · {verdict}"
 
     @pyqtProperty(str, notify=progressChanged)

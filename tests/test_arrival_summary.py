@@ -73,6 +73,20 @@ class ArrivalSummaryTest(unittest.TestCase):
         self.router.stop()
         self.assertEqual(self.router._arrival_summary, "")
 
+    def test_a_route_with_a_stop_shows_only_the_time(self):
+        self.router._started = False
+        self.router._stops = [("Cafe", *ll(0, 250))]
+        self.router.go()
+        self.assertIsNone(self.router._go_eta)
+        self.assertEqual(self.arrive_after(340), "6 min")
+
+    def test_adding_a_stop_mid_drive_drops_the_verdict(self):
+        self.assertEqual(self.router._go_eta, 100.0)
+        self.assertTrue(self.router.addStop("Cafe", *ll(0, 250)))
+        self.assertIsNone(self.router._go_eta)
+        self.assertIsNotNone(self.router._go_at)
+        self.assertEqual(self.arrive_after(160), "3 min")
+
 
 class ResumedTest(unittest.TestCase):
     def test_a_resumed_route_has_no_summary(self):

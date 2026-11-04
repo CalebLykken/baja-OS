@@ -6,6 +6,10 @@ import QtQuick
 // The start time is worked back from the seconds counted here, not read
 // once at boot: the Pi's clock at boot is the last shutdown time until
 // chrony steps it, and a start stamped then would stay wrong all drive.
+// A restart of the dashboard mid-drive (the watchdog, the updater at a stop)
+// carries the trip on: it is saved every 30 s of rolling and at a milestone,
+// and read back at start-up when it is the same boot (backend/trip.py). What
+// is read back is what the milestones compare against, so none fires twice.
 Item {
     id: trip
     property date started: new Date()
@@ -19,6 +23,22 @@ Item {
 
     // Fired once when this trip crosses a round distance or an hour of driving.
     signal milestone(string text)
+
+    function save() {
+        if (typeof tripStore !== "undefined")
+            tripStore.save(trip.metres, trip.movingSeconds, trip.runningSeconds, trip.peakBoost)
+    }
+
+    Component.onCompleted: {
+        if (typeof tripStore === "undefined") return
+        var r = tripStore.restore()
+        if (r.metres === undefined) return
+        trip.metres = r.metres
+        trip.movingSeconds = r.movingSeconds
+        trip.runningSeconds = r.runningSeconds
+        if (r.peakBoost != null) trip.peakBoost = r.peakBoost
+        trip.started = new Date(Date.now() - trip.runningSeconds * 1000)
+    }
 
     // The message for a threshold crossed between the previous and current
     // values, or "". Only a crossing counts, so changing units mid-trip
@@ -55,6 +75,7 @@ Item {
                 var text = trip.milestoneText(prevMetres, trip.metres, prevSeconds,
                                               trip.movingSeconds, Units.metric)
                 if (text !== "") trip.milestone(text)
+                if (text !== "" || trip.movingSeconds % 30 === 0) trip.save()
             }
             if (vehicle.engineKnown && vehicle.boost > trip.peakBoost)
                 trip.peakBoost = vehicle.boost

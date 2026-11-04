@@ -56,6 +56,7 @@ from backend.spotifyaccount import SpotifyAccount
 from backend.spotifysearch import SpotifySearch
 from backend.system import SystemInfo
 from backend.systemd import Watchdog
+from backend.trip import TripStore
 from backend.updater import Updater, mark_clean_exit
 from backend.vehicle import VehicleData
 from backend.wifi import Wifi
@@ -274,6 +275,7 @@ def main():
     key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power)
     system.powerFailed.connect(key_off.power_failed)
 
+    trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
     clock.mark("backends")
     engine = QQmlApplicationEngine()
     ctx = engine.rootContext()
@@ -295,6 +297,7 @@ def main():
     ctx.setContextProperty("keyOff", key_off)
     ctx.setContextProperty("gps", gps)
     ctx.setContextProperty("routing", routing)
+    ctx.setContextProperty("tripStore", trip_store)
     ctx.setContextProperty("road", road)
     ctx.setContextProperty("voice", voice)
     ctx.setContextProperty("phone", phone)

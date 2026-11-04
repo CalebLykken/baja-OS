@@ -231,6 +231,22 @@ class HubTest(unittest.TestCase):
         self.assertEqual(hub.source, "spotify")
         self.local.cancel_autoplay.assert_called_once_with()
 
+    def test_a_phone_auto_resuming_after_reconnecting_is_paused(self):
+        hub = self.make(music=saved("local", False))
+        self.spotify.play()
+        hub._phone_connected_at = time.monotonic()      # the phone just reconnected
+        self.phone.play()                               # and resumes by itself
+        self.assertEqual((hub.source, self.spotify.playing, self.phone.playing),
+                         ("spotify", True, False))
+
+    def test_a_phone_playing_well_after_reconnecting_takes_over(self):
+        hub = self.make(music=saved("local", False))
+        self.spotify.play()
+        hub._phone_connected_at = time.monotonic() - 60
+        self.phone.play()
+        self.assertEqual((hub.source, self.spotify.playing, self.phone.playing),
+                         ("phone", False, True))
+
     def test_after_the_phone_local_music_waits(self):
         self.make(music=saved("phone", True))
         self.assertFalse(self.local.playing)

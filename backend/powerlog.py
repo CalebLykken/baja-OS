@@ -153,11 +153,11 @@ KERNEL_BACKOFF_MAX = 300.0
 KERNEL_RUN_OK_S = 300.0         # a run this long counts as healthy: back-off resets
 
 
-def kernel_cmd(first):
-    """The journalctl command. The first run reads this boot from the start, so a
-    dip during boot is in the file too; restarts only want what is new."""
-    since = ["-n", "all"] if first else ["--since", "now"]
-    return ["journalctl", "-k", "-b", "-f", *since, "-o", "short-monotonic", "--no-pager"]
+def kernel_cmd():
+    """The journalctl command. Every run, first or restarted, reads this boot from
+    the start: a dip during boot or while the follower was down is not lost, and
+    new_kernel_events() drops the lines the file already holds."""
+    return ["journalctl", "-k", "-b", "-f", "-n", "all", "-o", "short-monotonic", "--no-pager"]
 
 
 def next_backoff(current, ran_for):
@@ -166,6 +166,27 @@ def next_backoff(current, ran_for):
     if ran_for > KERNEL_RUN_OK_S:
         return KERNEL_BACKOFF_FIRST
     return min(current * 2, KERNEL_BACKOFF_MAX)
+
+
+def logged_kernel_events(path):
+    """The "kernel: ..." events a boot's log file already holds, so a dashboard
+    restart doesn't record the same lines again when it replays the boot."""
+    try:
+        with open(path, errors="replace") as f:
+            rows = [line.rstrip("\n").split("|", 3) for line in f if line.startswith("EVENT|")]
+    except OSError:
+        return set()
+    return {r[3] for r in rows if len(r) == 4 and r[3].startswith("kernel: ")}
+
+
+def new_kernel_events(lines, seen):
+    """The event text for each worthwhile kernel line not in `seen`; adds to it."""
+    for line in lines:
+        if KERNEL_WORTH_KEEPING.search(line):
+            text = "kernel: " + line.strip()
+            if text not in seen:
+                seen.add(text)
+                yield text
 
 
 class PowerLog(QObject):
@@ -182,6 +203,7 @@ class PowerLog(QObject):
         self._throttled = None
         self._hdmi = None
         self._unsynced = 0
+        self._kernel_seen = set()
 
     def start(self):
         if not shutil.which("vcgencmd"):
@@ -199,7 +221,9 @@ class PowerLog(QObject):
                 boot = Path("/proc/sys/kernel/random/boot_id").read_text()[:8]
             except OSError:
                 boot = time.strftime("%Y%m%d-%H%M%S")
-            self._file = open(self._folder / f"{boot}.log", "a", buffering=1)
+            path = self._folder / f"{boot}.log"
+            self._kernel_seen = logged_kernel_events(path)
+            self._file = open(path, "a", buffering=1)
         except OSError as e:
             print(f"Power log: can't write to {self._folder} ({e})", flush=True)
             return
@@ -269,14 +293,13 @@ class PowerLog(QObject):
                 pass
 
     def _kernel(self):
-        first, wait = True, KERNEL_BACKOFF_FIRST
+        wait = KERNEL_BACKOFF_FIRST
         while True:
             started = time.monotonic()
             try:
-                self._follow_kernel(first)
+                self._follow_kernel()
             except Exception as e:      # keep following whatever happens
                 self.event(f"kernel log follower failed: {type(e).__name__}: {e}")
-            first = False
             ran_for = time.monotonic() - started
             wait = KERNEL_BACKOFF_FIRST if ran_for > KERNEL_RUN_OK_S else wait
             self.event(f"the kernel log stopped; following again in {wait:.0f} s")
@@ -284,18 +307,20 @@ class PowerLog(QObject):
             wait = next_backoff(wait, ran_for)
             self.event("following the kernel log again")
 
-    def _follow_kernel(self, first):
+    def _follow_kernel(self):
+        # Every run reads this boot from the start, so nothing that happened
+        # while the follower (or the whole dashboard) was down is lost; lines
+        # already recorded in the file are skipped.
         try:
             proc = subprocess.Popen(
-                kernel_cmd(first), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                kernel_cmd(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, errors="replace")
         except OSError as e:
             self.event(f"can't follow the kernel log: {e}")
             return
         try:
-            for line in proc.stdout:
-                if KERNEL_WORTH_KEEPING.search(line):
-                    self.event("kernel: " + line.strip())
+            for text in new_kernel_events(proc.stdout, self._kernel_seen):
+                self.event(text)
         finally:
             try:
                 proc.stdout.close()

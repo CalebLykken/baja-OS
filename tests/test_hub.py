@@ -65,6 +65,9 @@ class FakeSource(QObject):
     def resume(self, uri):
         self.resumed.append(uri)
 
+    def cancel_resume(self):
+        self.cancelled = getattr(self, "cancelled", 0) + 1
+
     def toggleShuffle(self):
         self.shuffled += 1
 
@@ -331,11 +334,7 @@ class SwitchTest(unittest.TestCase):
                 mock.patch("subprocess.run"):
             self.local = MediaPlayer()
             self.spotify = FakeSource()
-            # The hub's real volume-writer thread drains _pending_level as
-            # soon as it is woken, racing any test that reads it. Start it as
-            # a no-op so _pending_level holds what _apply_volume set.
-            with mock.patch.object(MediaHub, "_level_writer", lambda self: None):
-                self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
+            self.hub = MediaHub(self.local, FakeSource(), self.spotify, volume=20)
         self.levels = []
         real_apply = self.hub._apply_volume
 
@@ -383,6 +382,25 @@ class SwitchTest(unittest.TestCase):
         phone.hasVolume = False
         phone.volumeChanged.emit()
         self.assertAlmostEqual(self.hub._pending_level, 0.2)
+
+    def test_another_source_cancels_a_pending_spotify_resume(self):
+        self.hub._pause_others(keep="local")
+        self.assertEqual(self.spotify.cancelled, 1)
+        self.hub._pause_others(keep="spotify")
+        self.assertEqual(self.spotify.cancelled, 1)
+
+    def test_the_knob_starting_local_music_cancels_the_resume(self):
+        self.assertEqual(self.hub._source, "local")
+        self.local._queue = [{"title": "a", "artist": "b", "duration": 1}]
+        self.local._playing = False
+        self.hub.togglePlay()
+        self.assertTrue(self.local.playing)
+        self.assertEqual(self.spotify.cancelled, 1)
+
+    def test_spotify_playing_does_not_cancel_its_own_resume(self):
+        self.spotify.playing = True
+        self.hub._source_playing_changed("spotify")
+        self.assertFalse(getattr(self.spotify, "cancelled", 0))
 
     def test_no_hush_without_a_switch(self):
         self.hub._pause_others(keep="local")

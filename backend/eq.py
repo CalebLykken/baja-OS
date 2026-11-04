@@ -13,7 +13,7 @@ import threading
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import safe_emit
+from backend import errorlog, safe_emit
 
 NODE = "baja_eq"
 LIMIT = 12                  # dB either way
@@ -39,8 +39,8 @@ CHECK_EVERY_MS = 5000
 def _pw_cli(*args, timeout=3):
     try:
         return subprocess.run(["pw-cli", *args], capture_output=True, text=True,
-                              timeout=timeout).stdout
-    except (OSError, subprocess.SubprocessError):
+                              errors="replace", timeout=timeout).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
         return ""
 
 
@@ -89,7 +89,14 @@ class Equalizer(QObject):
 
     # ---- talking to PipeWire ------------------------------------------------
     def _check(self):
-        threading.Thread(target=lambda: safe_emit(self, "_found", node_id()), daemon=True).start()
+        threading.Thread(target=self._find, daemon=True).start()
+
+    def _find(self):
+        try:
+            nid = node_id()
+        except Exception:
+            return                    # not found yet; the next check tries again
+        safe_emit(self, "_found", nid)
 
     def _on_found(self, nid):
         was = self._node
@@ -118,7 +125,12 @@ class Equalizer(QObject):
             with self._lock:
                 body, self._pending = self._pending, None
             if body:
-                _pw_cli("s", NODE, "Props", "{ params = [ " + body + " ] }")
+                try:
+                    _pw_cli("s", NODE, "Props", "{ params = [ " + body + " ] }")
+                except Exception as e:
+                    # One bad write must not end the thread: later changes still apply.
+                    errorlog.log.report(type(e), e, e.__traceback__,
+                                        label="EQ: couldn't set the gains, carrying on:")
 
     def _set_all(self, gains):
         gains = [max(-LIMIT, min(LIMIT, int(round(g)))) for g in gains]

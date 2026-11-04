@@ -77,9 +77,12 @@ def _number(tags, *keys):
 
 def _folder_art(folder):
     """A cover picture saved in a song's folder (cover.jpg and the like), or ''."""
-    for f in sorted(folder.iterdir()):
-        if f.suffix.lower() in COVER_TYPES and f.stem.lower() in COVER_NAMES:
-            return QUrl.fromLocalFile(str(f)).toString()
+    try:
+        for f in sorted(folder.iterdir()):
+            if f.suffix.lower() in COVER_TYPES and f.stem.lower() in COVER_NAMES:
+                return QUrl.fromLocalFile(str(f)).toString()
+    except OSError:                       # an unreadable folder just has no cover
+        pass
     return ""
 
 
@@ -97,7 +100,11 @@ def _extract_art(path, audio):
         data = audio.pictures[0].data
     if not data:
         return ""
-    out = artcache.store_pinned(artcache.digest(data) + ".img", data)    # the album's tracks share one
+    try:
+        out = artcache.store_pinned(artcache.digest(data) + ".img", data)    # the album's tracks share one
+    except OSError as e:        # a full or unwritable cache costs the cover, not the song
+        print(f"Music: couldn't cache the cover of {path.name} ({e!r})")
+        return ""
     return QUrl.fromLocalFile(str(out)).toString()
 
 
@@ -264,7 +271,7 @@ def _reuse(entry, stamp, path, folder_art):
         else:                               # a cover.jpg beside it may have come or gone
             track["art"] = folder_art(path.parent)
         return {**entry, "track": track}
-    except (KeyError, TypeError, AttributeError):
+    except (KeyError, TypeError, AttributeError, OSError):   # OSError: art folder can't be made
         return None
 
 

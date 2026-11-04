@@ -68,7 +68,9 @@ def _post_form(fields):
 def _read_section(data, kind, key):
     """Entries from one page of a library list; `key` unwraps saved items."""
     items = data.get("items") if isinstance(data, dict) else None
-    found = ((i.get(key) if key and isinstance(i, dict) else i) for i in items or [])
+    if not isinstance(items, list):
+        items = []
+    found = ((i.get(key) if key and isinstance(i, dict) else i) for i in items)
     return [e for e in (entry(kind, item) for item in found) if e]
 
 
@@ -293,6 +295,9 @@ class SpotifyAccount(QObject):
             except SignedOut:
                 signed_out, message = True, "Spotify ended the sign-in: scan the code to link it again"
             except (OSError, ValueError, KeyError) as e:
+                print(f"Spotify account: couldn't read the library ({type(e).__name__})", flush=True)
+                message = "Can't reach Spotify right now"
+            except Exception as e:               # an answer of an odd shape: say so, don't leave it silent
                 print(f"Spotify account: couldn't read the library ({type(e).__name__})", flush=True)
                 message = "Can't reach Spotify right now"
             finally:

@@ -198,8 +198,8 @@ class ScanCacheTest(ScanBase):
 
     def test_a_missing_embedded_cover_is_extracted_again(self):
         self.reads()
-        cover = self.root / "cache" / "baja-os" / "art" / "x.img"
-        cover.parent.mkdir(parents=True)
+        cover = self.root / "cache" / "baja-os" / "library-art" / "x.img"
+        cover.parent.mkdir(parents=True, exist_ok=True)
         cover.write_bytes(b"img")
         cache = library._load_cache(self.top)
         entry = cache[str(self.file)]

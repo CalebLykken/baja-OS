@@ -38,9 +38,13 @@ class ArtCacheTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.dir = self.tmp / "cache" / "baja-os" / "art"
+        for name in ("_total", "_made"):    # the running size estimate is per folder
+            q = mock.patch.object(artcache, name, None)
+            q.start()
+            self.addCleanup(q.stop)
 
     def names(self):
-        return sorted(f.name for f in self.dir.iterdir())
+        return sorted(f.name for f in self.dir.iterdir()) if self.dir.is_dir() else []
 
     def test_the_cache_is_under_the_cache_home(self):
         self.assertEqual(artcache.cache_dir(), self.dir)
@@ -116,9 +120,45 @@ class ArtCacheTest(unittest.TestCase):
         b = library._extract_art(Path("/m/Album/02 Two.mp3"), audio)
         self.assertEqual(a, b)
         self.assertTrue(a.startswith("file://"))
-        self.assertEqual(len(self.names()), 1)
+        self.assertEqual(self.names(), [])                  # not in the LRU folder
+        self.assertEqual(len(list(artcache.pinned_dir().iterdir())), 1)
         self.assertEqual(Path(QUrl(a).toLocalFile()).read_bytes(), b"cover bytes")
         self.assertEqual(library._extract_art(Path("/m/x.mp3"), SimpleNamespace(tags={})), "")
+
+    def test_the_lru_never_deletes_a_library_cover(self):
+        audio = SimpleNamespace(tags={"APIC:": SimpleNamespace(data=b"c" * 100)})
+        art = library._extract_art(Path("/m/A/01.mp3"), audio)
+        os.utime(QUrl(art).toLocalFile(), (1000, 1000))     # the oldest file around
+        with mock.patch.object(artcache, "MAX_BYTES", 150):
+            for i in range(3):
+                artcache.store(f"{i}.img", b"x" * 100)
+        self.assertTrue(os.path.isfile(QUrl(art).toLocalFile()))
+
+    def test_a_library_cover_is_not_counted_against_the_lru_budget(self):
+        artcache.store("first.img", b"x")                   # the run's one walk
+        before = artcache._total
+        with mock.patch.object(artcache, "_prune_locked") as walk:
+            artcache.store_pinned("cover.img", b"c" * 1000)
+        walk.assert_not_called()
+        self.assertEqual(artcache._total, before)
+
+    def test_a_scan_drops_only_covers_no_track_uses(self):
+        used = artcache.store_pinned("used.img", b"u")
+        gone = artcache.store_pinned("gone.img", b"g")
+        artcache.prune_pinned([used])
+        self.assertTrue(used.is_file())
+        self.assertFalse(gone.is_file())
+
+    def test_a_cached_cover_in_the_old_lru_folder_is_read_again(self):
+        old = artcache.store("abc.img", b"cover")
+        stamp = [1, 2]
+        track = {"path": "/m/a.mp3", "title": "t", "artist": "a", "art": QUrl.fromLocalFile(str(old)).toString(),
+                 "album": "x", "albumArtist": "", "duration": 1, "disc": 0, "track": 1}
+        entry = {"stamp": stamp, "embedded": True, "track": track}
+        self.assertIsNone(library._reuse(entry, stamp, Path("/m/a.mp3"), lambda d: ""))
+        new = artcache.store_pinned("abc.img", b"cover")
+        track["art"] = QUrl.fromLocalFile(str(new)).toString()
+        self.assertIsNotNone(library._reuse(entry, stamp, Path("/m/a.mp3"), lambda d: ""))
 
     def test_a_download_is_cached_and_used_again_offline(self):
         url = "https://i.scdn.co/image/abc123"

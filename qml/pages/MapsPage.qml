@@ -755,15 +755,49 @@ Item {
 
             // A new step fades in, so the change is noticed but not jarring.
             property string step: page.hasRouting ? routing.instruction : ""
-            onStepChanged: stepFade.restart()
+            onStepChanged: if (!arrivedNow) stepFade.restart()    // arriving has its own moment
             NumberAnimation { id: stepFade; target: turnContent; property: "opacity"; from: 0.2; to: 1; duration: 350; easing.type: Easing.OutQuad }
+
+            // Arriving gets one small moment, once: the icon drops in like a map
+            // pin and a Blaze bar wipes along the bottom edge, then stays. It
+            // only plays on the change to arrived, not when the page opens
+            // already arrived, and everything stops by itself.
+            readonly property bool arrivedNow: page.hasRouting && routing.arrived
+            property real barFill: 0
+            function resetArrival() {
+                arrivalMoment.stop()
+                barFill = 0
+                iconDrop.y = 0
+                turnIcon.scale = 1
+            }
+            onArrivedNowChanged: {
+                if (arrivedNow) {
+                    stepFade.stop()
+                    turnContent.opacity = 1
+                    arrivalMoment.restart()
+                } else {
+                    resetArrival()
+                }
+            }
+            // A new route starts clean even if the last arrival ended while
+            // another page was open (page visibility is not the signal).
+            onShownChanged: if (shown && !arrivedNow) resetArrival()
+            Component.onCompleted: if (arrivedNow) barFill = 1
+            ParallelAnimation {
+                id: arrivalMoment
+                NumberAnimation { target: iconDrop; property: "y"; from: -40; to: 0; duration: 700; easing.type: Easing.OutBounce }
+                NumberAnimation { target: turnIcon; property: "scale"; from: 1.25; to: 1; duration: 600; easing.type: Easing.OutBack }
+                NumberAnimation { target: turnCard; property: "barFill"; from: 0; to: 1; duration: 500; easing.type: Easing.OutCubic }
+            }
 
             RowLayout {
                 id: turnContent
                 anchors { left: parent.left; right: parent.right; top: parent.top; margins: 22 }
                 spacing: 18
                 Icon {
+                    id: turnIcon
                     Layout.alignment: Qt.AlignTop
+                    transform: Translate { id: iconDrop }     // a RowLayout owns x/y, so drop with a transform
                     name: page.hasRouting && routing.computing ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
                     size: 112
                     color: page.cOnBanner
@@ -790,6 +824,23 @@ Item {
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
                     }
+                }
+            }
+
+            // The arrival bar: only the bottom 6 px of a card-wide rounded
+            // rectangle shows, so its corners follow the card's radius.
+            Item {
+                anchors { left: parent.left; bottom: parent.bottom }
+                width: turnCard.barFill * turnCard.width
+                height: 6
+                visible: width > 0
+                clip: true
+                Rectangle {
+                    anchors { left: parent.left; bottom: parent.bottom }
+                    width: turnCard.width
+                    height: 6 + page.cRadius
+                    radius: page.cRadius
+                    color: Theme.accent
                 }
             }
 

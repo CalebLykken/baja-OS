@@ -118,6 +118,18 @@ def content_fits():
     return QFontMetricsF(font).horizontalAdvance(lab.property("text")) <= lab.property("width") - 4
 
 
+def measure():
+    # For failure messages: what the label's font really measures on this machine.
+    lab = obj.findChild(QObject, "turnLabel")
+    out = {"family": QFont(lab.property("font")).family(), "width": lab.property("width"),
+           "contentWidth": lab.property("contentWidth"), "text": lab.property("text")}
+    for px in (14, 16, 18):
+        font = QFont(lab.property("font"))
+        font.setPixelSize(px)
+        out[px] = QFontMetricsF(font).horizontalAdvance(lab.property("text"))
+    return out
+
+
 def truncated():
     return obj.findChild(QObject, "turnLabel").property("truncated")
 
@@ -134,6 +146,7 @@ results["computing_icon"] = icon()
 results["computing_label"] = label()
 results["computing_truncated"] = truncated()
 results["computing_fits"] = content_fits()
+results["computing_measure"] = measure()
 
 routing.setIcon("turn_right")
 wait(400)
@@ -201,7 +214,7 @@ class TurnChipTest(unittest.TestCase):
         self.assertNotEqual(self.results["done_label"], "Rerouting")
 
     def test_rerouting_and_arrived_labels_fit(self):
-        self.assertIs(self.results["computing_truncated"], False)
+        self.assertIs(self.results["computing_truncated"], False, self.results["computing_measure"])
         self.assertIs(self.results["arrived_truncated"], False)
         self.assertIs(self.results["computing_fits"], True)
         self.assertIs(self.results["arrived_fits"], True)

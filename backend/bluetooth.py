@@ -131,6 +131,10 @@ def parse_objects(objects, prefer=None):
     return state
 
 
+# What busctl says on stderr when nothing owns org.bluez (as opposed to BlueZ being slow).
+BLUEZ_MISSING = ("not activatable", "not provided by any", "ServiceUnknown", "not found")
+
+
 def _busctl(*args, timeout=3):
     return subprocess.run(["busctl", "--system", *args],
                           capture_output=True, text=True, timeout=timeout)
@@ -235,11 +239,17 @@ class BluetoothAudio(QObject):
         accepted = list(self._accepted)
         try:
             try:
-                out = _busctl("--json=short", "call", "org.bluez", "/",
-                              "org.freedesktop.DBus.ObjectManager", "GetManagedObjects").stdout
+                done = _busctl("--json=short", "call", "org.bluez", "/",
+                               "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
+                if done.returncode != 0 and not any(m in done.stderr for m in BLUEZ_MISSING):
+                    # BlueZ is there but slow or erroring: a crashed poll, so the
+                    # phone and player aren't dropped over one bad read.
+                    raise RuntimeError(f"busctl exited {done.returncode}: {done.stderr.strip()}")
+                out = done.stdout
                 data = json.loads(out)["data"][0] if out else {}
-            except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
+            except (OSError, ValueError, KeyError, IndexError):
                 data = {}                    # no BlueZ, or nothing usable from it
+            # (a busctl timeout is a SubprocessError, so it also counts as a crashed poll)
             state = parse_objects(data, (self._player or {}).get("path"))
             self._trust(state, accepted)
             self._logged()

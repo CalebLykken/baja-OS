@@ -457,13 +457,20 @@ class RestoreTest(unittest.TestCase):
         self.assertEqual(self.player.state(), state)
 
     def test_plays_on_if_it_was_playing(self):
+        # A FakeSink: with a real device the position is what has been heard,
+        # so until the device drains its buffer it reads under the saved place
+        # (0 for a song restored 1 s in). That made this test depend on the
+        # audio device's timing.
         state = {"album": None, "path": self.tracks[1]["path"], "index": 1, "position": 1}
-        self.player.restore(state, play=True)
-        self.player.start()
-        spin(1500)
-        self.assertTrue(self.player.playing)
-        self.assertEqual(self.player.title, "Blue 2")
-        self.assertGreaterEqual(self.player.position, 1)
+        with mock.patch.object(gapless, "QAudioSink", FakeSink):
+            player = LibraryPlayer(self.tracks)
+            self.addCleanup(player._engine._shutdown)
+            player.restore(state, play=True)
+            player.start()
+            spin(300)
+            self.assertTrue(player.playing)
+            self.assertEqual(player.title, "Blue 2")
+            self.assertGreaterEqual(player.position, 1)
 
     def test_play_after_a_paused_restore_goes_on_from_there(self):
         # A FakeSink, pulled by hand: no audio device, no waiting on real time.

@@ -291,7 +291,7 @@ Item {
     Item {
         id: frame
         anchors.fill: parent
-        Rectangle { anchors.fill: parent; color: page.dark ? "#1a1b1d" : "#ebe7df" }   // the map's own ground
+        Rectangle { anchors.fill: parent; color: Theme.dark ? "#1a1b1d" : "#ebe7df" }   // the map's own ground
         Item { id: slot; anchors.fill: parent }
         Connections {
             target: page.map

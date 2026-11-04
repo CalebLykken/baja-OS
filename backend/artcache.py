@@ -20,6 +20,7 @@ with no hotspot yet.
 import contextlib
 import hashlib
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -70,10 +71,27 @@ def touch(path):
 def lookup(name):
     """(path, True) if `name` is cached (and counts as used now), else (path, False)."""
     path = cache_dir() / name
-    hit = path.is_file()
+    hit = _usable(path)
     if hit:
         touch(path)
     return path, hit
+
+
+def _usable(path):
+    """True for a non-empty regular file. A zero-byte one (a power cut after
+    the rename, before the data reached the disk) is deleted and counts as a
+    miss, so it's written again instead of being a hit for ever. One stat."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_size > 0:
+        return True
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+    return False
 
 
 @contextlib.contextmanager
@@ -90,6 +108,14 @@ def writing(path, lru=True):
     os.close(fd)
     try:
         yield Path(tmp)
+        # Flush the data before the rename: on ext4 a power cut soon after
+        # os.replace can otherwise leave the final name as a zero-length file.
+        with contextlib.suppress(OSError):
+            fd = os.open(tmp, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -135,7 +161,7 @@ def store(name, data):
 def store_pinned(name, data):
     """Like store(), but in pinned_dir(): only prune_pinned() removes it."""
     path = pinned_dir() / name
-    if not path.is_file():
+    if not _usable(path):
         with writing(path, lru=False) as tmp:
             tmp.write_bytes(data)
     return path

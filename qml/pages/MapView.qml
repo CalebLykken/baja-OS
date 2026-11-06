@@ -106,12 +106,12 @@ WebEngineView {
     // Every page load (a crash retry, a map update) starts with no page to
     // talk to, so the Maps page stops sending until the new page says ready
     // (then it re-shows the pin and sends what it held back).
-    signal loading()
+    signal pageLoading()    // not "loading": WebEngineView already has a loading property, which wins
     onLoadingChanged: (request) => {
         if (request.status === WebEngineView.LoadStartedStatus || request.status === WebEngineView.LoadSucceededStatus)
             forgetSent()            // a new page (or a reload) has none of the last values
         if (request.status === WebEngineView.LoadStartedStatus)
-            loading()
+            pageLoading()
         else if (request.status === WebEngineView.LoadFailedStatus)
             web.failed(request.errorString)
         else if (request.status === WebEngineView.LoadSucceededStatus)

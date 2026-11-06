@@ -16,7 +16,7 @@ Item {
     default property alias content: holder.data
     readonly property bool shown: current === index
     // A page given as `lazy` (instead of as a child) is built the first time it
-    // is shown, or quietly in the background once `preload` is set so the first
+    // is shown, or ahead of time once `preload` is set so the first
     // tap is still instant. Once built it is kept, so its scroll position and
     // open panels survive navigating away.
     property Component lazy: null
@@ -47,22 +47,10 @@ Item {
             anchors.fill: parent
             sourceComponent: host.lazy
             active: host.lazy !== null && (host.everShown || host.preload)
-            // Background loads are incremental; a page you are waiting for is not.
-            asynchronous: !host.shown
-            // Shown while a background load is still going: restart it
-            // synchronously so the page is there at once.
-            Connections {
-                target: host
-                function onShownChanged() {
-                    if (host.shown && lazyLoader.status === Loader.Loading) {
-                        lazyLoader.asynchronous = false
-                        lazyLoader.active = false
-                        lazyLoader.active = true
-                        lazyLoader.active = Qt.binding(() => host.lazy !== null && (host.everShown || host.preload))
-                        lazyLoader.asynchronous = Qt.binding(() => !host.shown)
-                    }
-                }
-            }
+            // Always synchronous: Rows, Repeaters and anchors in a page built by
+            // an asynchronous Loader never laid out (every segmented control's
+            // options piled up at x = 0, IconButtons lost their icons). The
+            // preload timers still keep the build off the first frame.
         }
     }
 }

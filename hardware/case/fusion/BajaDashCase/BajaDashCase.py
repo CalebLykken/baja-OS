@@ -26,7 +26,7 @@ import traceback
 import adsk.core
 import adsk.fusion
 
-VERSION = 6
+VERSION = 7
 
 # (name, default, unit, comment). Units: 'mm', 'deg', or '' (a plain number).
 PARAMETERS = [
@@ -68,8 +68,7 @@ PARAMETERS = [
     ('ScreenMountOffsetY', -3.21, 'mm', 'VERIFIED: 3.2 mm below the glass centre (Waveshare drawing; Caleb measured 3.9)'),
     ('ScreenOverhangTop', 5.5, 'mm', 'DESIGN (Caleb): top of the screen stands this far above the opening'),
     ('ScreenStandoffHeight', 6.0, 'mm', 'DESIGN (Caleb): posts from the panel face to the back of the screen, 6 at most'),
-    ('ScreenPostDiameter', 6.5, 'mm', 'DESIGN'),
-    ('ScreenScrewLength', 16.0, 'mm', 'DESIGN: M2.5 screws from the back of the panel into the screen; the counterbore depth follows'),
+    ('ScreenPostDiameter', 8.0, 'mm', 'DESIGN: the carrier\'s screen posts'),
     ('DisplayTiltAngle', 0.0, 'deg', 'DESIGN: + leans the screen back by shortening the top posts; keep it small (0 to 4)'),
     ('CableClearance', 6.0, 'mm', 'DESIGN: room around the plugs in the panel notch'),
     ('PlugAreaLeft', -40.0, 'mm', 'VERIFIED: left end of the USB-C/HDMI/USB sockets from the glass centre, seen from the front (Waveshare drawing)'),
@@ -92,23 +91,42 @@ PARAMETERS = [
     ('PiCaseWall', 2.0, 'mm', 'DESIGN: wall of the Pi case'),
     ('PiCaseHeight', 25.0, 'mm', 'DESIGN: wall height from the case floor; the top stays open for the DAC HAT and airflow'),
     ('PiStackHeight', 34.0, 'mm', 'ESTIMATED: Pi + active cooler + DAC HAT, for the clearance check'),
-    ('AmpBoardWidth', 118.0, 'mm', 'MEASURED (Caleb): the amp board (Taidacent XH-M180), long side'),
-    ('AmpBoardHeight', 76.0, 'mm', 'MEASURED (Caleb): the amp board, short side'),
-    ('AmpHoleSpacingX', 111.0, 'mm', "ESTIMATED: the amp board's mounting holes, centre to centre along the long side "
-                                     '(3.5 mm in from each end); measure'),
-    ('AmpHoleSpacingY', 69.0, 'mm', "ESTIMATED: the amp board's mounting holes, centre to centre along the short side; "
-                                    'measure'),
+    ('AmpBoardWidth', 125.0, 'mm', 'ESTIMATED: the amp board (Taidacent XH-M180), long side: the hole spacing '
+                                   'plus 3.5 mm each side; measure'),
+    ('AmpBoardHeight', 83.0, 'mm', 'ESTIMATED: the amp board, short side: the hole spacing plus 3.5 mm each side; measure'),
+    ('AmpHoleSpacingX', 118.0, 'mm', "MEASURED (Caleb): the amp board's mounting holes, centre to centre along the long side"),
+    ('AmpHoleSpacingY', 76.0, 'mm', "MEASURED (Caleb): the amp board's mounting holes, centre to centre along the short side"),
     ('AmpTotalHeight', 29.0, 'mm', "ESTIMATED: the amp's height with its heatsink, from the seller's listing"),
-    ('AmpStandoffHeight', 8.0, 'mm', 'DESIGN: gap under the amp board, for its solder joints and the plate screws'),
+    ('AmpStandoffHeight', 33.0, 'mm', 'DESIGN: posts under the amp board; the Mean Well sits under it on the same plate, '
+                                      'with 4 mm to spare'),
     ('AmpPlateThickness', 3.0, 'mm', 'DESIGN'),
     ('AmpClearance', 5.0, 'mm', 'DESIGN: air gap between the top of the Pi stack (DAC HAT) and the amp plate'),
     ('AmpPostSize', 8.0, 'mm', 'DESIGN: the four square posts on the Pi case that hold the amp plate'),
+    # Mean Well RSD-30G-5 (isolated 12 V to 5 V for the Pi), under the amp on the amp plate
+    ('MeanWellLength', 113.0, 'mm', 'VERIFIED: Mean Well RSD-30 datasheet, case 253A'),
+    ('MeanWellWidth', 60.0, 'mm', 'VERIFIED: Mean Well RSD-30 datasheet'),
+    ('MeanWellHeight', 25.0, 'mm', 'VERIFIED: Mean Well RSD-30 datasheet'),
+    ('MeanWellHoleSpacingX', 105.0, 'mm', 'VERIFIED: its four 3.5 mm holes, centre to centre along the long side (datasheet)'),
+    ('MeanWellHoleSpacingY', 52.0, 'mm', 'VERIFIED: the same holes along the short side (datasheet)'),
+    ('MeanWellBossHeight', 4.0, 'mm', 'DESIGN: bosses it stands on, deep enough for the M3 inserts'),
+    # Removable screen: the screen bolts to a carrier that hangs on two hooks in a
+    # pocket in the panel's face, locked by two screws below the screen
+    ('CarrierThickness', 3.0, 'mm', 'DESIGN: the carrier plate; the pocket in the panel is this deep, so it sits flush'),
+    ('CarrierScrewLength', 8.0, 'mm', 'DESIGN: M2.5 screws from the back of the carrier into the screen; '
+                                      'the counterbore depth follows'),
+    ('CarrierLockScrewX', 40.0, 'mm', 'DESIGN: the two M3 lock screws below the screen, this far left and right of centre'),
+    ('CarrierTabDrop', 13.0, 'mm', 'DESIGN: how far the carrier reaches below the screen, for the lock screws'),
+    ('CarrierHookInset', 18.0, 'mm', 'DESIGN: hook centres in from the carrier edges, clear of the cable notch'),
 ]
 
 # Parameters earlier versions made that are no longer used; a rebuild removes them.
 OBSOLETE = ['HingeAxisBelowScreenTop', 'HingeKnuckleRadius', 'HingeKnuckleWidth', 'HingeKnuckleGap',
             'HingeLeftX', 'HingeRightX', 'HingePinHole', 'ScreenPlateThickness', 'RearClearance',
-            'FactoryBracketCenterY', 'LipRadiusTopRight']
+            'FactoryBracketCenterY', 'LipRadiusTopRight', 'ScreenScrewLength']
+
+# Parameters whose default changed: a design made before that version takes the new one.
+RESET_AT = {7: ['AmpBoardWidth', 'AmpBoardHeight', 'AmpHoleSpacingX', 'AmpHoleSpacingY', 'AmpStandoffHeight',
+                'ScreenPostDiameter']}
 
 M3_INSERT = 4.0          # hole for an M3 heat-set insert
 M3_INSERT_DEPTH = 6.5
@@ -126,6 +144,13 @@ PI_PORTS_TOP = (4.2, 46.2)                                     # USB-C power and
 PI_PORTS_LEFT = (19.0, 46.0)                                   # PCIe ribbon and power button: y range
 PI_CASE_GAP = (3.0, 4.0, 3.0, 4.0)                              # board to wall: bottom, right, top, left
 ADAPTER_BASE = 16.0
+POCKET_WALL = 4.0        # panel left around the carrier's pocket
+CARRIER_GAP = 0.3        # carrier to pocket, each side
+LIFT_ROOM = 4.0          # room above the carrier in the pocket, to lift it off its hooks
+HOOK_W = 14.0            # hook width
+HOOK_STEM = 3.0          # hook stem, bottom to top; the carrier rests on it
+HOOK_TIP = 3.0           # how far the hook's tip reaches up in front of the carrier
+SLOT_H = 7.5             # the carrier's hook slots: stem + tip + room to drop it on
 # The screen's driver board, from Waveshare's drawing (reference model only):
 # x0, x1, y0, y1 from the glass centre, seen from the front.
 SCREEN_BOARD = (-53.96, 54.04, -39.21, 32.79)
@@ -331,6 +356,20 @@ def derive(p):
     d.notch = (d.cx + p.PlugAreaLeft - p.CableClearance, d.cx + p.PlugAreaRight + p.CableClearance,
                max(d.scy + p.PlugAreaBottom - p.CableClearance, post_top + 2.0))
     d.adapter_ys = [p.FactoryBracketLowerY, p.FactoryBracketUpperY]
+    # The screen's carrier sits in a pocket in the panel face, hung on two hooks.
+    d.pocket_z = d.face - p.CarrierThickness                  # pocket floor = carrier back
+    d.carrier_x = (p.FitGap + POCKET_WALL + CARRIER_GAP, p.OpeningWidth - p.FitGap - POCKET_WALL - CARRIER_GAP)
+    d.carrier_top = p.OpeningHeight - p.FitGap - POCKET_WALL - LIFT_ROOM - CARRIER_GAP
+    d.carrier_bottom = d.glass_bottom - 1.0                   # beside the tab, clear of the knob
+    d.tab = (d.cx - p.CarrierLockScrewX - 10, d.cx + p.CarrierLockScrewX + 10, d.glass_bottom - p.CarrierTabDrop)
+    d.lock_screws = [(d.cx + k * p.CarrierLockScrewX, d.glass_bottom - p.CarrierTabDrop / 2) for k in (-1, 1)]
+    d.hook_y = d.carrier_top - 8.0                            # bottom of each hook's stem
+    d.hook_xs = [d.carrier_x[0] + p.CarrierHookInset, d.carrier_x[1] - p.CarrierHookInset]
+    nx0, nx1, _ = d.notch
+    if not (d.hook_xs[0] + HOOK_W / 2 < nx0 and d.hook_xs[1] - HOOK_W / 2 > nx1):
+        raise RuntimeError('CarrierHookInset puts a hook in the cable notch')
+    if d.tab[0] < p.KnobX + p.KnobDiameter / 2 + 1:
+        raise RuntimeError('CarrierLockScrewX puts the carrier tab into the knob')
     # The amp rides behind the Pi, on a plate held by four posts on the Pi case.
     d.pi_top = -3 - p.PiStandoffHeight - p.PiStackHeight     # back of the DAC HAT (Z)
     d.amp_z = d.pi_top - p.AmpClearance                      # the amp plate's front face
@@ -396,9 +435,31 @@ def amp_holes(p):
     return [(cx + sx * hx, cy + sy * hy) for sy in (-1, 1) for sx in (-1, 1)]
 
 
+def mean_well_holes(p):
+    (cx, cy), _ = amp_layout(p)
+    hx, hy = p.MeanWellHoleSpacingX / 2, p.MeanWellHoleSpacingY / 2
+    return [(cx + sx * hx, cy + sy * hy) for sy in (-1, 1) for sx in (-1, 1)]
+
+
+def carrier_outline(p, d, grow=0.0, top_extra=0.0):
+    """The carrier seen from the front: a plate behind the screen with a tab
+    below it for the lock screws. `grow` and `top_extra` make the pocket."""
+    x0, x1 = d.carrier_x[0] - grow, d.carrier_x[1] + grow
+    tx0, tx1, ty = d.tab[0] - grow, d.tab[1] + grow, d.tab[2] - grow
+    yb, yt = d.carrier_bottom - grow, d.carrier_top + grow + top_extra
+    r = max(p.CornerRadiusTopLeft + p.CornerClearance - p.FitGap - POCKET_WALL - CARRIER_GAP + grow, 0.0)
+    s = [('L', (x0, yb), (tx0, yb)), ('L', (tx0, yb), (tx0, ty)), ('L', (tx0, ty), (tx1, ty)),
+         ('L', (tx1, ty), (tx1, yb)), ('L', (tx1, yb), (x1, yb)), ('L', (x1, yb), (x1, yt)),
+         ('L', (x1, yt), (x0 + r, yt))]
+    if r > 0:
+        s.append(_arc(x0 + r, yt - r, r, 90))
+    s.append(('L', (x0, yt - r), (x0, yb)))
+    return s
+
+
 def tie_slots(p, d):
     x0, x1, y0 = d.notch
-    return [(x, y0 + dy) for x in (x0 - 6, x1 + 6) for dy in (6.0, 18.0)]
+    return [(x, y0 + dy) for x in (x0 - 6, x1 + 6) for dy in (5.0, 12.0)]
 
 
 # ------------------------------------------------------------ the parts
@@ -423,16 +484,22 @@ def build_panel(design, p, d):
         part.prism('z', 0, lip_t, lambda s: s.draw(
             rrect(x0 - p.LipSide, y0, x1 + p.LipSide, y1 + p.LipTop, lip_radii)), 'join', 'Lip')
 
-    # Screen posts on the front, screwed from the back into the screen's nuts.
-    for x, y, h in d.posts:
-        part.prism('z', d.face - 0.5, d.face + h, lambda s: s.circle(x, y, p.ScreenPostDiameter),
-                   'join', 'Screen post')
-    part.prism('z', -1, d.face + max(h for _, _, h in d.posts) + 1,
-               lambda s: [s.circle(x, y, M25_HOLE) for x, y, _ in d.posts], 'cut', 'Screen screw holes')
-    for x, y, h in d.posts:
-        floor = d.face + h + 3.0 - p.ScreenScrewLength     # leaves 3 mm of thread in the screen's nut
-        if floor > 0.5:
-            part.prism('z', -1, floor, lambda s: s.circle(x, y, M25_HEAD), 'cut', 'Screw counterbore')
+    # Pocket in the face for the screen's carrier, with room above it to lift
+    # the carrier off its hooks.
+    part.prism('z', d.pocket_z, d.face + 1, lambda s: s.draw(carrier_outline(p, d, CARRIER_GAP, LIFT_ROOM)),
+               'cut', 'Carrier pocket')
+    # Two hooks standing out of the pocket floor, through the carrier's slots.
+    # The carrier rests on their stems; their tips reach up in front of it.
+    # The tip's underside slopes at 45 degrees so it prints without supports.
+    y0, z0, zf = d.hook_y, d.pocket_z - 0.5, d.face + HOOK_TIP + 1.3
+    profile = polygon([(y0, z0), (y0 + HOOK_STEM, z0), (y0 + HOOK_STEM, d.face + 0.3),
+                       (y0 + HOOK_STEM + HOOK_TIP, d.face + 0.3 + HOOK_TIP), (y0 + HOOK_STEM + HOOK_TIP, zf),
+                       (y0, zf)])
+    for hx in d.hook_xs:
+        part.prism('x', hx - HOOK_W / 2, hx + HOOK_W / 2, lambda s: s.draw(profile), 'join', 'Carrier hook')
+    # M3 inserts for the two lock screws, below the screen.
+    part.prism('z', d.pocket_z - M3_INSERT_DEPTH, d.face, lambda s: [
+        s.circle(x, y, M3_INSERT) for x, y in d.lock_screws], 'cut', 'Lock screw inserts')
 
     # Notch in the top edge where the screen's plugs and cables go back into the dash.
     nx0, nx1, ny0 = d.notch
@@ -449,10 +516,51 @@ def build_panel(design, p, d):
     holes = adapter_base_holes(p, d) + pi_plate_holes(p)
     part.prism('z', -1, M3_INSERT_DEPTH, lambda s: [s.circle(x, y, M3_INSERT) for x, y in holes],
                'cut', 'Heat-set insert holes')
+    return part
 
-    # Zip-tie slots beside the notch (strain relief for the screen cables).
-    part.prism('z', -1, d.face + 1, lambda s: [
-        s.draw(centred_rect(x, y, 2.4, 5.5, 0.5)) for x, y in tie_slots(p, d)], 'cut', 'Zip-tie slots')
+
+def build_carrier(design, p, d):
+    """The plate the screen bolts to. It hangs on the panel's two hooks and two
+    screws below the screen lock it, so the screen comes off from the front."""
+    part = Part(design, 'Screen carrier')
+    t = p.CarrierThickness
+    zb = d.pocket_z
+    part.prism('z', zb, d.face, lambda s: s.draw(carrier_outline(p, d)), 'new', 'Carrier')
+    part.name_body('Screen carrier')
+    # Screen posts, screwed from the back of the carrier into the screen's nuts.
+    for x, y, h in d.posts:
+        part.prism('z', d.face - 0.5, d.face + h, lambda s: s.circle(x, y, p.ScreenPostDiameter),
+                   'join', 'Screen post')
+    part.prism('z', zb - 1, d.face + max(h for _, _, h in d.posts) + 1,
+               lambda s: [s.circle(x, y, M25_HOLE) for x, y, _ in d.posts], 'cut', 'Screen screw holes')
+    for x, y, h in d.posts:
+        floor = d.face + h + 3.0 - p.CarrierScrewLength     # leaves 3 mm of thread in the screen's nut
+        if floor < zb + 0.5:
+            raise RuntimeError('CarrierScrewLength is too long: the screw would bottom out in the screen')
+        if floor > d.face + h - 2.0:
+            raise RuntimeError('CarrierScrewLength is too short to reach the screen')
+        part.prism('z', zb - 1, floor, lambda s: s.circle(x, y, M25_HEAD), 'cut', 'Screw counterbore')
+    # Slots the hooks come through. The carrier drops onto the stems, so the
+    # slot's top edge rests on them.
+    top = d.hook_y + HOOK_STEM
+    part.prism('z', zb - 1, d.face + 1, lambda s: [
+        s.draw(rrect(hx - HOOK_W / 2 - 0.4, top - SLOT_H, hx + HOOK_W / 2 + 0.4, top, 0.5)) for hx in d.hook_xs],
+        'cut', 'Hook slots')
+    part.prism('z', zb - 1, d.face + 1, lambda s: [s.circle(x, y, 3.4) for x, y in d.lock_screws],
+               'cut', 'Lock screw holes')
+    # The cable notch, the same as the panel's.
+    nx0, nx1, ny0 = d.notch
+    part.prism('z', zb - 1, d.face + 1, lambda s: s.draw(
+        rrect(nx0, ny0, nx1, d.carrier_top + 5, (4, 4, 0, 0))), 'cut', 'Cable notch')
+    # Zip-tie slots beside the notch (strain relief for the screen cables, which
+    # come off with the screen), and a groove behind each pair so the tie can
+    # pass between the carrier and the pocket floor into the notch.
+    slots = tie_slots(p, d)
+    part.prism('z', zb - 1, d.face + 1, lambda s: [
+        s.draw(centred_rect(x, y, 2.4, 5.5, 0.5)) for x, y in slots], 'cut', 'Zip-tie slots')
+    part.prism('z', zb - 1, zb + 1.5, lambda s: [
+        s.draw(rrect(min(x, nx0 if x < nx0 else nx1) - 1.2, y - 2.75, max(x, nx0 if x < nx0 else nx1) + 1.2, y + 2.75))
+        for x, y in slots], 'cut', 'Zip-tie grooves')
     return part
 
 
@@ -530,11 +638,8 @@ def build_pi_case(design, p, d):
                'join', 'Standoffs')
     part.prism('z', -3 - h - 1, -3 - h + 5.5, lambda s: [
         s.circle(px + hx, py + hy, M25_INSERT) for hx, hy in PI_HOLES], 'cut', 'Insert holes')
-    # Floor: a vent, and access to the screen screws behind it.
+    # A vent in the floor.
     part.prism('z', -4, 1, lambda s: s.draw(rrect(px + 10, py + 10, px + 55, py + PI_H - 10, 3.0)), 'cut', 'Vent')
-    access = [(x, y) for x, y, _ in d.posts if x0 < x < x1 and y0 < y < y1]
-    if access:
-        part.prism('z', -4, 1, lambda s: [s.circle(x, y, 7.0) for x, y in access], 'cut', 'Screen screw access')
     # Port openings, from just below the board to the open back.
     z_port = -3 - h + 0.6
     part.prism('x', x1 - 1, x1 + w + 1, lambda s: [
@@ -567,12 +672,20 @@ def build_amp_plate(design, p, d):
     zb = zf - t                        # back face; the amp sits on posts here, its parts facing into the dash
     part.prism('z', zb, zf, lambda s: s.draw(rrect(x0, y0, x1, y1, 4.0)), 'new', 'Plate')
     part.name_body('Amp plate')
-    part.prism('z', zb - h, zb + 0.5, lambda s: [s.circle(x, y, 7.0) for x, y in amp_holes(p)],
+    part.prism('z', zb - h, zb + 0.5, lambda s: [s.circle(x, y, 8.0) for x, y in amp_holes(p)],
                'join', 'Amp standoffs')
     part.prism('z', zb - h - 1, zb - h + M2_INSERT_DEPTH, lambda s: [
         s.circle(x, y, M2_INSERT) for x, y in amp_holes(p)], 'cut', 'Amp insert holes')
     part.prism('z', zb - 1, zf + 1, lambda s: [s.circle(x, y, 3.4) for x, y in amp_posts(p)],
                'cut', 'Post screw holes')
+    # Bosses and M3 inserts for the Mean Well, which sits under the amp board.
+    mw = p.MeanWellBossHeight
+    if p.AmpStandoffHeight < mw + p.MeanWellHeight + 2:
+        raise RuntimeError('AmpStandoffHeight is too short for the Mean Well under the amp')
+    part.prism('z', zb - mw, zb + 0.5, lambda s: [s.circle(x, y, 8.0) for x, y in mean_well_holes(p)],
+               'join', 'Mean Well bosses')
+    part.prism('z', zb - mw - 1, zb - mw + M3_INSERT_DEPTH, lambda s: [
+        s.circle(x, y, M3_INSERT) for x, y in mean_well_holes(p)], 'cut', 'Mean Well insert holes')
     # Vents, so the air behind the Pi isn't closed in.
     (cx, _), _ = amp_layout(p)
     part.prism('z', zb - 1, zf + 1, lambda s: [
@@ -604,6 +717,11 @@ def build_references(design, p, d):
     amp.prism('z', zb - p.AmpTotalHeight, zb - 1.6, lambda k: k.draw(
         centred_rect(acx, acy, p.AmpBoardWidth, p.AmpBoardHeight, 2.0)), 'new')
 
+    mw = Part(design, 'Mean Well RSD-30G-5 (reference)')
+    zm = d.amp_z - p.AmpPlateThickness - p.MeanWellBossHeight
+    mw.prism('z', zm - p.MeanWellHeight, zm, lambda k: k.draw(
+        centred_rect(acx, acy, p.MeanWellLength, p.MeanWellWidth, 1.0)), 'new')
+
     cl = None
     if p.ClimateGap > 0:
         cl = Part(design, 'Climate controls (space)')
@@ -623,7 +741,7 @@ def build_references(design, p, d):
             for yc in d.adapter_ys
             for dy in (-p.FactoryBracketHoleSpacing / 2, p.FactoryBracketHoleSpacing / 2)], 'cut')
 
-    for part in [x for x in (s, pi, amp, cl, fb) if x]:
+    for part in [x for x in (s, pi, amp, mw, cl, fb) if x]:
         for body in part.bodies:
             try:
                 body.opacity = 0.35
@@ -665,14 +783,23 @@ def read_parameters(design, log):
                 log.append('removed unused parameter ' + name)
             except Exception:
                 pass
+    version_param = ups.itemByName('BajaCaseVersion')
+    made_at = int(round(version_param.value)) if version_param else VERSION
+    reset = set(n for v, names in RESET_AT.items() if made_at < v for n in names)
     p = Params()
     for name, default, unit, note in PARAMETERS:
         param = ups.itemByName(name)
+        expr = '%g %s' % (default, unit) if unit else '%g' % default
+        if param is not None and name in reset:
+            param.expression = expr
+            param.comment = note
+            log.append('set %s to the new default, %s' % (name, expr))
         if param is None:
-            expr = '%g %s' % (default, unit) if unit else '%g' % default
             param = ups.add(name, adsk.core.ValueInput.createByString(expr), unit, note)
         v = param.value
         p[name] = math.degrees(v) if unit == 'deg' else (v * 10.0 if unit == 'mm' else v)
+    if version_param and made_at < VERSION:
+        version_param.expression = str(VERSION)
     return p
 
 
@@ -708,6 +835,7 @@ def build(log):
     d = derive(p)
 
     steps = [('panel', lambda: build_panel(design, p, d)),
+             ('screen carrier', lambda: build_carrier(design, p, d)),
              ('knob', lambda: build_knob(design, p, d))]
     for side in ('left', 'right'):
         for level, yc in zip(('lower', 'upper'), d.adapter_ys):
@@ -730,6 +858,7 @@ def build(log):
     if not failed:
         try:
             export(design, [(built['panel'], 'dash-panel.stl'),
+                            (built['screen carrier'], 'screen-carrier.stl'),
                             (built['knob'], 'volume-knob.stl'),
                             (built['adapter upper left'], 'adapter-plate-left.stl'),
                             (built['adapter upper right'], 'adapter-plate-right.stl'),

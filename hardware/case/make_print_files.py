@@ -19,7 +19,8 @@ BED = 256.0      # a common bed size (Bambu, Prusa MK4/XL is bigger); just a war
 
 # (exported file, print file, copies, turns as (axis, degrees), how it sits)
 PARTS = [
-    ('dash-panel.stl', 'dash-panel.stl', 1, [], 'back face down, screen posts up'),
+    ('dash-panel.stl', 'dash-panel.stl', 1, [], 'back face down, pocket and hooks up'),
+    ('screen-carrier.stl', 'screen-carrier.stl', 1, [], 'back face down, screen posts up'),
     ('pi-case.stl', 'pi-case.stl', 1, [('x', 180)], 'floor down, open back and amp posts up'),
     ('volume-knob.stl', 'volume-knob.stl', 1, [('x', 180)], 'top down, shaft hole up'),
     ('amp-plate.stl', 'amp-plate.stl', 1, [('x', 180)], 'flat, the amp posts up'),

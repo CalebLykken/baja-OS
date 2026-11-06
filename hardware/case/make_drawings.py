@@ -94,7 +94,9 @@ TAGS = {'UNKNOWN': 'U', 'ESTIMATED': 'E', 'MEASURED': 'M', 'DESIGN': 'D'}
 # The script's fixed tables that aren't parameters: (names, sureness).
 CONSTANTS = {'PI_HOLES': 'MEASURED', 'PI_W': 'MEASURED', 'PI_H': 'MEASURED',       # Raspberry Pi drawing
              'PI_PORTS_RIGHT': 'ESTIMATED', 'PI_PORTS_TOP': 'ESTIMATED',            # "approximate"
-             'PI_PORTS_LEFT': 'ESTIMATED'}
+             'PI_PORTS_LEFT': 'ESTIMATED',
+             'POCKET_WALL': 'DESIGN', 'CARRIER_GAP': 'DESIGN', 'LIFT_ROOM': 'DESIGN', 'HOOK_W': 'DESIGN',
+             'HOOK_STEM': 'DESIGN', 'HOOK_TIP': 'DESIGN', 'SLOT_H': 'DESIGN'}
 
 
 class Shape:
@@ -217,7 +219,8 @@ def load_model():
         return made[-1]
     mod.Part = record
     d = mod.derive(p)
-    parts = {'panel': mod.build_panel(None, p, d), 'knob': mod.build_knob(None, p, d),
+    parts = {'panel': mod.build_panel(None, p, d), 'screen carrier': mod.build_carrier(None, p, d),
+             'knob': mod.build_knob(None, p, d),
              'pi case': mod.build_pi_case(None, p, d), 'amp plate': mod.build_amp_plate(None, p, d)}
     for side in ('left', 'right'):
         for level, yc in zip(('lower', 'upper'), d.adapter_ys):
@@ -693,8 +696,8 @@ class View:
 
 # ------------------------------------------------------------- the sheets
 
-FRONT_SHEET, LIP_SHEET, BACK_SHEET = 1, 2, 3
-PI_SHEET, AMP_SHEET = 5, 6
+FRONT_SHEET, LIP_SHEET, BACK_SHEET, CARRIER_SHEET = 1, 2, 3, 4
+ADAPTER_SHEET, PI_SHEET, AMP_SHEET, KNOB_SHEET, ASSEMBLY_SHEET = 5, 6, 7, 8, 9
 
 
 def lip_box(m):
@@ -730,57 +733,69 @@ def sheet_panel_front(m, number, total):
     p = m.p
     pan, box, outline = panel_parts(m)
     s = Sheet(m, number, total, 'Dash panel: front',
-              'Print 1, back face down. This is the face toward you;\nthe screen bolts onto the four posts.', '1:1')
+              'Print 1, back face down. This is the face toward you: the screen\'s carrier hangs\non the two hooks in the pocket and two screws lock it (sheet %d).' % CARRIER_SHEET, '1:1')
     v = View(s, at=(36, 54), ref=(box.u0, box.v0))
     v.shape(outline, fill=PART)
     lip, lip_pr = lip_box(m)
     if lip:                                   # the wider back part shows past the sides
         v.shape(notched_top(lip_pr.paths()[0], pan.one('Cable notch').paths()[0]), fill=BLIND, lw=MID, z=2)
-    posts = [c for pr in pan.get('Screen post') for c in pr.circles()]
-    holes = pan.one('Screen screw holes').circles()
     collar = pan.one('Encoder collar hole').circles()[0]
-    slots = [Box(path) for path in pan.one('Zip-tie slots').paths()]
     notch = Box(pan.one('Cable notch').paths()[0])
-    for x, y, dia in posts:
-        v.circle(x, y, dia, lw=THICK, fill=PART, z=4)
-    for x, y, dia in holes + [collar]:
-        v.circle(x, y, dia, fill='white', z=4)
+    pocket_pr = pan.one('Carrier pocket')
+    pocket = bounds(pocket_pr.paths()[0])
+    hooks = [hook_box(pr) for pr in pan.get('Carrier hook')]
+    locks = pan.one('Lock screw inserts').circles()
+    lock_pr = pan.one('Lock screw inserts')
+    v.shape(path_points(pocket_pr.paths()[0]), lw=MID, fill=BLIND, z=3)     # z 3 and drawn first: under the sizes
+    v.shape(path_points(pan.one('Cable notch').paths()[0]), lw=0, fill='white', z=3)
+    v.shape(outline, lw=THICK, z=3)
+    for h in hooks:
+        v.shape([(h.x0, h.y0), (h.x1, h.y0), (h.x1, h.y1), (h.x0, h.y1)], lw=THICK, fill=PART, z=4)
+        v.line([(h.x0, h.y0 + h.stem), (h.x1, h.y0 + h.stem)], lw=THIN, color=SOFT, z=4.1)
+    for x, y, dia in locks:
+        v.circle(x, y, dia, fill=BLIND, z=4)
         v.centre(x, y, dia)
-    for sl in slots:
-        v.shape(path_points(sl.segs), lw=MID, fill='white', z=4)
+    v.circle(collar[0], collar[1], collar[2], fill='white', z=4)
+    v.centre(collar[0], collar[1], collar[2])
 
     # where things are, from the bottom-left corner
-    lower = [c for c in posts if float(c[1]) < float(box.cv)]
+    tab_y = pocket.v0
     v.ord_x(box.u0, [(collar[0], collar[1] - collar[2] / 2)] +
-            [(sl.cu, sl.v0) for sl in slots if float(sl.cv) < float(notch.v0) + 10] +
-            [(x, y - dia / 2) for x, y, dia in lower] +
+            [(x, y - dia / 2) for x, y, dia in locks] + [(h.cx, h.y0) for h in hooks] +
+            [(pocket.u0, pocket.v1), (pocket.u1, pocket.v1)] +
             [(notch.u0, notch.v0), (notch.u1, notch.v0)], y=50)
-    left_slots = [sl for sl in slots if float(sl.cu) < float(box.cu)]
-    left_posts = [c for c in posts if float(c[0]) < float(box.cu)]
-    v.ord_y(box.v0, [(collar[0] - collar[2] / 2, collar[1]), (notch.u0, notch.v0)] +
-            [(sl.u0, sl.cv) for sl in left_slots] +
-            [(x - dia / 2, y) for x, y, dia in left_posts], x=32)
+    tab_u0 = min((q[0] for q in path_points(pocket_pr.paths()[0]) if abs(float(q[1]) - float(tab_y)) < 1e-6),
+                  key=float)
+    main_v0 = min((q[1] for q in path_points(pocket_pr.paths()[0]) if abs(float(q[0]) - float(pocket.u0)) < 1e-6),
+                  key=float)
+    v.ord_y(box.v0, [(collar[0] - collar[2] / 2, collar[1]), (notch.u0, notch.v0), (tab_u0, tab_y),
+                     (pocket.u0, main_v0), (pocket.u0, pocket.v1)] +
+            [(hooks[0].x0, hooks[0].y0), (hooks[0].x0, hooks[0].y1)] +
+            [(min(locks, key=lambda c: float(c[0]))[0] - locks[0][2] / 2, locks[0][1])], x=32)
     v.hdim((box.u0, box.v0), (box.u1, box.v0), 35.0, inch=True)
     v.vdim((box.u0 + box.r['tl'][0], box.v1), (box.u0, box.v0), 15.0, inch=True)
     v.hdim((notch.u0, box.v1), (notch.u1, box.v1), 199.0)
     v.vdim((notch.cu, notch.v0), (notch.cu, box.v1), v.X(notch.cu) + 0.0, side=-1)
 
     # what things are
-    post = sorted(lower, key=lambda c: float(c[0]))[0]
-    hole = [h for h in holes if abs(float(h[0]) - float(post[0])) < 1e-6][0]
-    spacing = (p.ScreenMountHoleSpacing, p.ScreenMountHoleSpacingV)
-    v.note(('paper',) + v.edge(post[0], post[1], post[2], v.P(post[0] + 8, post[1] - 14)),
-           v.P(post[0] + 8, post[1] - 14),
-           '4 screen posts Ø{}, {} tall,\nØ{} hole through each.\nCentres {} × {} apart (Raspberry Pi pattern)',
-           post[2], p.ScreenStandoffHeight, hole[2], spacing[0], spacing[1])
-    v.note(('paper',) + v.edge(collar[0], collar[1], collar[2], v.P(collar[0] + 14, collar[1])),
-           v.P(collar[0] + 14, collar[1]), 'Knob hole Ø{} for the encoder\'s threaded collar', collar[2])
-    right_slot = sorted(slots, key=lambda b: (-float(b.cu), float(b.cv)))[0]
-    v.note((right_slot.cu, right_slot.v0), v.P(right_slot.u1 + 6, right_slot.v0 - 12),
-           '4 zip-tie slots\n{} × {}, through', right_slot.w, right_slot.h)
+    v.note(('paper',) + v.P(pocket.cu, (pocket.v1 + main_v0) / 2 - 20), v.P(pocket.cu, (pocket.v1 + main_v0) / 2 - 8),
+           'Carrier pocket (grey), {} deep:\nthe screen carrier (sheet %d) sits in it, flush.\n'
+           '{} of room above the carrier to lift it off the hooks' % CARRIER_SHEET,
+           pocket_pr.hi - 1 - pocket_pr.lo, m.mod.LIFT_ROOM, ha='center')
+    h = hooks[-1]
+    v.note((h.x0, h.cy), v.P(h.x0 - 8, h.y0 - 20),
+           '2 hooks {} wide, standing {} out\nof the pocket floor (side view)', h.x1 - h.x0, h.z1 - pocket_pr.lo,
+           ha='right')
+    lk = max(locks, key=lambda c: float(c[0]))
+    at = v.P(lk[0] + 12, lk[1] + 12)
+    v.note(('paper',) + v.edge(lk[0], lk[1], lk[2], at), at,
+           '2 holes Ø{}, {} deep, for M3 inserts:\nthe lock screws through the carrier\'s tab', lk[2],
+           pocket_pr.lo - lock_pr.lo)
+    v.note(('paper',) + v.edge(collar[0], collar[1], collar[2], v.P(collar[0] + 4, collar[1] - 8)),
+           v.P(collar[0] + 4, collar[1] - 8), 'Knob hole Ø{} for the encoder\'s threaded collar', collar[2])
     r_br, mid = notch.r['br']
     v.note(mid, v.P(notch.cu, notch.v0 - 9), 'Cable notch, R{} corners', r_br, ha='center')
-    for key, at, ha in (('tl', (box.u0 + 16, box.v1 - 16), 'left'), ('tr', (box.u1 - 14, box.v1 - 12), 'right')):
+    for key, at, ha in (('tl', (box.u0 + 16, box.v1 + 6), 'left'), ('tr', (box.u1 - 8, box.v1 + 6), 'right')):
         r, mid = box.r[key]
         v.note(mid, v.P(*at), 'R{}', r, ha=ha)
     if lip:
@@ -791,6 +806,7 @@ def sheet_panel_front(m, number, total):
 
     # side view from the passenger side: Z to the left
     face = pan.one('Panel').hi
+    pz = pocket_pr.lo
     sv = View(s, at=(240, 54), ref=(0, box.v0), flip_u=True)
     if lip and float(lip.v1) > float(box.v1) + 1e-6:      # the top lip steps up at the back
         lip_t = lip_pr.hi
@@ -799,35 +815,53 @@ def sheet_panel_front(m, number, total):
         sv.note((lip_t / 2, lip.v1), (246, sv.Y(lip.v1) + 8), 'top lip, {} up', lip.v1 - box.v1)
     else:
         sv.shape([(0, box.v0), (face, box.v0), (face, box.v1), (0, box.v1)], fill=PART)
-    tops = {}
-    for pr in pan.get('Screen post'):
-        x, y, dia = pr.circles()[0]
-        tops[float(y)] = (y, dia, pr.hi)
-    for y, dia, top in tops.values():
-        sv.shape([(face, y - dia / 2), (top, y - dia / 2), (top, y + dia / 2), (face, y + dia / 2)], fill=PART)
-    cb = pan.get('Screw counterbore')[0]
-    cb_d = cb.circles()[0][2]
-    for y, dia, top in tops.values():
-        for dy in (-hole[2] / 2, hole[2] / 2):
-            sv.line([(cb.hi, y + dy), (top, y + dy)], lw=THIN, color=SOFT, dash=HIDDEN)
-        sv.shape([(0, y - cb_d / 2), (cb.hi, y - cb_d / 2), (cb.hi, y + cb_d / 2), (0, y + cb_d / 2)],
-                 lw=THIN, color=SOFT, dash=HIDDEN)
-        sv.line([(top + 1.2, y), (-1.2, y)], lw=HAIR, color=SOFT, dash=CENTRE)
+    sv.shape([(pz, pocket.v0), (face, pocket.v0), (face, pocket.v1), (pz, pocket.v1)], lw=THIN, color=SOFT,
+             dash=HIDDEN, z=3.5)
+    h = hooks[0]
+    sv.shape([(z, y) for y, z in h.profile], fill=PART, z=4)
     sv.line([(0, notch.v0), (face, notch.v0)], lw=THIN, color=SOFT, dash=HIDDEN)
-    top_post = max(tops.values(), key=lambda t: float(t[0]))
+    for x, y, dia in locks[:1]:
+        for dy in (-dia / 2, dia / 2):
+            sv.line([(lock_pr.lo, y + dy), (pz, y + dy)], lw=THIN, color=SOFT, dash=HIDDEN)
     sv.hdim((0, box.v0), (face, box.v0), 46.0)
-    sv.hdim((face, top_post[0] - top_post[1] / 2), (top_post[2], top_post[0] - top_post[1] / 2), 46.0, out=-1)
-    sv.hdim((0, box.v0), (top_post[2], top_post[0] - top_post[1] / 2), 39.0)
-    # The two labels share one column: keep them in the order of what they
-    # point at, and push the upper one clear of the lower.
-    label_y = {'notch': sv.Y(notch.v0) + 9, 'cb': sv.Y(top_post[0]) + 14}
-    lower, upper = sorted(label_y, key=lambda k: float(notch.v0) if k == 'notch' else float(top_post[0]))
-    label_y[upper] = max(label_y[upper], label_y[lower] + 14.0)
-    sv.note((face / 2, notch.v0), (246, label_y['notch']), 'bottom of\nthe notch')
-    sv.note((cb.hi / 2, top_post[0] + cb_d / 2), (246, label_y['cb']),
-            'counterbores\n(see sheet %d)' % BACK_SHEET)
+    sv.hdim((face, h.y0), (h.z1, h.y0), 46.0, out=-1)
+    sv.hdim((0, box.v0), (h.z1, h.y0), 39.0)
+    sv.hdim((pz, pocket.v0), (face, pocket.v0), sv.Y(pocket.v0) - 5, out=1, side=-1)
+    sv.note((face / 2, notch.v0), (246, sv.Y(notch.v0) - 10), 'bottom of\nthe notch')
+    sv.note(((pz + face) / 2, pocket.v0), (246, sv.Y(pocket.v0) + 12), 'carrier\npocket')
+    sv.note((h.z1, h.cy), (246, sv.Y(h.y1) + 12), 'hook (detail\non sheet %d)' % CARRIER_SHEET)
     s.view_title((sv.X(face / 2), 205.5), 'SIDE', '(from the\npassenger side)', ha='center')
     return s
+
+
+def span_at(pts, u):
+    """Lowest and highest v where the upright line at u crosses a closed outline, or None."""
+    vs = []
+    n = len(pts)
+    for i in range(n):
+        (u0, v0), (u1, v1) = [(float(a), float(b)) for a, b in (pts[i], pts[(i + 1) % n])]
+        if (u0 - float(u)) * (u1 - float(u)) <= 0 and abs(u1 - u0) > 1e-9:
+            vs.append(v0 + (v1 - v0) * (float(u) - u0) / (u1 - u0))
+    return (min(vs), max(vs)) if vs else None
+
+
+def hook_section(h, pz):
+    """A hook cut lengthwise, as (Z, Y) points walking up the pocket floor at pz.
+
+    build_panel() draws its profile (Y, Z) as: stem bottom at the floor, stem top at
+    the floor, stem top under the tip, the tip's 45-degree underside, tip top, tip front."""
+    q = h.profile
+    return [(pz, q[0][0])] + [(q[i][1], q[i][0]) for i in (5, 4, 3, 2)] + [(pz, q[2][0])]
+
+
+def hook_box(pr):
+    """A hook on the panel, from its side profile (Y, Z) and its width along X."""
+    prof = [seg[1] for seg in pr.paths()[0]]
+    ys, zs = [q[0] for q in prof], [q[1] for q in prof]
+    y0, y1 = min(ys, key=float), max(ys, key=float)
+    stem = sorted({round(float(q[0]), 6): q[0] for q in prof}.values(), key=float)[1] - y0
+    return types.SimpleNamespace(x0=pr.lo, x1=pr.hi, cx=(pr.lo + pr.hi) / 2, y0=y0, y1=y1, cy=(y0 + y1) / 2,
+                                 z0=min(zs, key=float), z1=max(zs, key=float), stem=stem, profile=prof)
 
 
 def sheet_panel_lip(m, number, total):
@@ -844,17 +878,18 @@ def sheet_panel_lip(m, number, total):
               '1:1, detail 4:1')
     stepped = [(l0, 0), (l1, 0), (l1, lip_t), (box.u1, lip_t), (box.u1, face), (box.u0, face),
                (box.u0, lip_t), (l0, lip_t)]
-    posts = {}
-    for pr in pan.get('Screen post'):
-        x, y, dia = pr.circles()[0]
-        posts[round(float(x), 3)] = (x, dia, pr.hi)
+    hooks = [hook_box(pr) for pr in pan.get('Carrier hook')]
+    pz = pan.one('Carrier pocket').lo
     notch = Box(pan.one('Cable notch').paths()[0])
 
     # top view: back of the panel at the top, the front toward the bottom
     v = View(s, at=(40, 188), ref=(l0, 0), flip_v=True)
     v.shape(stepped, fill=PART)
-    for x, dia, top in posts.values():
-        v.shape([(x - dia / 2, face), (x + dia / 2, face), (x + dia / 2, top), (x - dia / 2, top)], fill=PART)
+    for h in hooks:                                  # the hooks stand out of the pocket below the top edge
+        v.shape([(h.x0, pz), (h.x1, pz), (h.x1, h.z1), (h.x0, h.z1)], lw=THIN, color=SOFT, dash=HIDDEN, z=2.5)
+        v.shape([(h.x0, face), (h.x1, face), (h.x1, h.z1), (h.x0, h.z1)], fill=PART)
+    v.label(v.P(hooks[-1].cx, hooks[-1].z1 + 1), 'hook', ha='center', va='top', size=6.0)
+    v.line([(box.u0 + 4, pz), (box.u1 - 4, pz)], lw=THIN, color=SOFT, dash=HIDDEN)
     for u in (notch.u0, notch.u1):
         v.line([(u, 0), (u, face)], lw=THIN, color=SOFT, dash=HIDDEN)
     v.label(v.P(notch.cu, face / 2), 'cable notch', ha='center', size=6.0)
@@ -863,7 +898,7 @@ def sheet_panel_lip(m, number, total):
         v.shape([(edge, lip_t), (edge + side * 10, lip_t), (edge + side * 10, face), (edge, face)],
                 lw=THIN, color=GHOST, dash=(5, 2.5), hatch='////', z=2)
     v.hdim((l0, 0), (l1, 0), v.Y(0) + 9, inch=False)
-    v.hdim((box.u0, face), (box.u1, face), v.Y(max(t for _, _, t in posts.values())) - 7, inch=True, side=-1)
+    v.hdim((box.u0, face), (box.u1, face), v.Y(max((h.z1 for h in hooks), key=float)) - 7, inch=True, side=-1)
     v.vdim((l1, 0), (l1, face), v.X(l1) + 16)
     v.vdim((box.u1, lip_t), (box.u1, face), v.X(l1) + 7, side=-1)
     v.label(v.P(l0, -2.5), 'back (inside the dash)', ha='left', va='bottom', size=6.0)
@@ -913,6 +948,154 @@ def sheet_panel_lip(m, number, total):
     return s
 
 
+def sheet_carrier(m, number, total):
+    p = m.p
+    mod = m.mod
+    car = m.parts['screen carrier']
+    pan, box, _ = panel_parts(m)
+    cpr = car.one('Carrier')
+    segs = cpr.paths()[0]
+    cbox = Box(segs)
+    notch_path = car.one('Cable notch').paths()[0]
+    notch = Box(notch_path)
+    posts = [c for pr in car.get('Screen post') for c in pr.circles()]
+    post_top = max((pr.hi for pr in car.get('Screen post')), key=float)
+    holes = car.one('Screen screw holes').circles()
+    cbs = car.get('Screw counterbore')
+    hook_slots = [Box(q) for q in car.one('Hook slots').paths()]
+    locks = car.one('Lock screw holes').circles()
+    ties = [Box(q) for q in car.one('Zip-tie slots').paths()]
+    grooves = [Box(q) for q in car.one('Zip-tie grooves').paths()]
+    groove_pr = car.one('Zip-tie grooves')
+    s = Sheet(m, number, total, 'Screen carrier',
+              'Print 1, back face down, posts up. The screen screws onto its posts from the back; it hangs on\n'
+              "the panel's two hooks, in the pocket in the panel's face (sheet %d), and two screws lock it." % FRONT_SHEET,
+              '1:1, detail 2.5:1')
+
+    # front: the side the screen goes on
+    v = View(s, at=(36, 54), ref=(cbox.u0, cbox.v0))
+    v.shape(notched_top(segs, notch_path), fill=PART)
+    for g in grooves:
+        v.shape(path_points(g.segs), lw=THIN, color=SOFT, dash=HIDDEN, z=3.5)
+    for pr in cbs:
+        x, y, dd = pr.circles()[0]
+        v.circle(x, y, dd, lw=THIN, color=SOFT, dash=HIDDEN, z=3.5)
+    for x, y, dd in posts:
+        v.circle(x, y, dd, lw=THICK, fill=PART, z=4)
+    for x, y, dd in holes + locks:
+        v.circle(x, y, dd, fill='white', z=4.5)
+        v.centre(x, y, dd)
+    for b in hook_slots + ties:
+        v.shape(path_points(b.segs), lw=MID, fill='white', z=4)
+
+    # where things are, from the bottom-left corner
+    tab = [q for q in path_points(segs) if abs(float(q[1]) - float(cbox.v0)) < 1e-6]
+    tab_u0, tab_u1 = min((q[0] for q in tab), key=float), max((q[0] for q in tab), key=float)
+    main_v0 = min((q[1] for q in path_points(segs) if abs(float(q[0]) - float(cbox.u0)) < 1e-6), key=float)
+    low_posts = [c for c in posts if float(c[1]) < float(cbox.cv)]
+    left_posts = [c for c in posts if float(c[0]) < float(notch.cu)]
+    left_ties = [t for t in ties if float(t.cu) < float(notch.cu)]
+    v.ord_x(cbox.u0, [(tab_u0, cbox.v0), (tab_u1, cbox.v0)] + [(x, y - dd / 2) for x, y, dd in locks + low_posts] +
+            [(b.cu, b.v0) for b in hook_slots] + [(notch.u0, notch.v0), (notch.u1, notch.v0)] +
+            [(t.cu, t.v0) for t in ties if float(t.cv) < float(notch.v0) + 8], y=50)
+    v.ord_y(cbox.v0, [(cbox.u0, main_v0), (locks[0][0] - locks[0][2] / 2, locks[0][1])] +
+            [(x - dd / 2, y) for x, y, dd in left_posts] +
+            [(hook_slots[0].u0, hook_slots[0].v0), (hook_slots[0].u0, hook_slots[0].v1), (cbox.u0, cbox.v1)] +
+            [(t.u0, t.cv) for t in left_ties], x=32)
+    v.hdim((cbox.u0, cbox.v0), (cbox.u1, cbox.v0), 35.0)
+    v.vdim((cbox.u0 + cbox.r['tl'][0], cbox.v1), (cbox.u0, cbox.v0), 15.0)
+    v.hdim((notch.u0, cbox.v1), (notch.u1, cbox.v1), v.Y(cbox.v1) + 6)
+
+    # what things are
+    post = min(low_posts, key=lambda c: float(c[0]))
+    at = v.P(notch.cu, (ys_mid := sum(float(c[1]) for c in posts) / len(posts)) - 3)
+    xs = sorted({round(float(c[0]), 6): c[0] for c in posts}.values(), key=float)
+    ys = sorted({round(float(c[1]), 6): c[1] for c in posts}.values(), key=float)
+    cb_d = cbs[0].circles()[0][2]
+    v.note(('paper',) + v.edge(post[0], post[1], post[2], at), at,
+           '4 screen posts Ø{}, {} tall, Ø{} hole through each;\ncentres {} × {} (Raspberry Pi pattern).\n'
+           'On the back (dashed): counterbores Ø{}, {} deep,\nfor M2.5 × {} screws into the screen',
+           post[2], post_top - cpr.hi, holes[0][2], xs[-1] - xs[0], ys[-1] - ys[0], cb_d,
+           cbs[0].hi - cpr.lo, p.CarrierScrewLength, ha='center')
+    hs = hook_slots[-1]
+    rx = max((c[0] for c in posts), key=float)
+    v.note((hs.cu, hs.v0), v.P(rx + 7, ys_mid + 4), '2 hook slots {} × {}:\nthe panel\'s hooks come\n'
+           'through and the carrier\nrests on them', hs.w, hs.h, ha='left')
+    lk = max(locks, key=lambda c: float(c[0]))
+    at = v.P(lk[0] - 6, lk[1] + 14)
+    v.note(('paper',) + v.edge(lk[0], lk[1], lk[2], at), at, '2 holes Ø{} for the M3 × 8\n'
+           "lock screws into the panel", lk[2], ha='right')
+    t = min(ties, key=lambda b: (float(b.cv), float(b.cu)))
+    v.note((t.cu, t.v0), v.P(notch.cu, notch.v0 - 15), '4 zip-tie slots {} × {}; behind each, a groove\n'
+           '{} deep into the notch (dashed)', t.w, t.h, groove_pr.hi - cpr.lo, ha='center')
+    r_bl, mid = notch.r['bl']
+    v.note(mid, v.P(notch.cu, notch.v0 - 22), 'Cable notch, the same as the panel\'s', ha='center')
+    v.note((tab_u0 + 6, cbox.v0), v.P(tab_u0 - 4, cbox.v0 + 6), 'tab below the screen,\nclear of the knob',
+           ha='right')
+    s.view_title((36, 205.5), 'FRONT', '(the screen side, from the driver\'s seat)')
+
+    # detail: cut through a hook, carrier in place
+    k = 2.5
+    h = hook_box(pan.get('Carrier hook')[0])
+    face = pan.one('Panel').hi
+    pz = cpr.lo
+    lip, lip_pr = lip_box(m)
+    pocket_pts = path_points(pan.one('Carrier pocket').paths()[0])
+    p_top = span_at(pocket_pts, h.cx)[1]
+    panel_top = span_at(path_points(pan.one('Panel').paths()[0]), h.cx)[1]
+    lip_t = lip_pr.hi if lip else face
+    lip_top = span_at(path_points(lip_pr.paths()[0]), h.cx)[1] if lip else panel_top
+    y0 = h.y0 - 12
+    sv = View(s, at=(214, 98), ref=(0, y0), scale=k)
+    panel_cut = [(0, y0), (pz, y0)] + hook_section(h, pz) + [(pz, p_top), (face, p_top), (face, panel_top),
+                                                              (lip_t, panel_top), (lip_t, lip_top), (0, lip_top)]
+    sv.shape(panel_cut, fill=PART, hatch='////', lw=MID, color=SOFT, z=3)
+    sv.shape(panel_cut, z=4)
+    slot = hook_slots[0]
+    ctop = cbox.v1
+    CARRIER = '#e4e1d8'
+    for lo, hi in ((y0, slot.v0), (slot.v1, ctop)):
+        pts = [(pz, lo), (face, lo), (face, hi), (pz, hi)]
+        sv.shape(pts, fill=CARRIER, hatch='\\\\\\\\', lw=MID, color=SOFT, z=3)
+        sv.shape(pts, z=4)
+    lift = mod.LIFT_ROOM
+    for lo, hi in ((y0 + lift, slot.v0 + lift), (slot.v1 + lift, ctop + lift)):
+        sv.shape([(pz, lo), (face, lo), (face, hi), (pz, hi)], lw=THIN, color=GHOST, dash=(3, 1.6), z=5)
+    for y in (y0,):
+        sv.line([(-1.5, y), (face + 1.5, y)], lw=HAIR, color=SOFT, dash=(6, 2), z=5)
+    right = sv.X(h.z1) + 5
+    sv.vdim((h.z1, h.y0), (h.z1, h.y0 + h.stem), right, side=-1, out=-1)
+    sv.vdim((h.z1, h.y0 + h.stem), (h.z1, h.y1), right, side=-1, out=1)
+    sv.vdim((face, ctop), (face, p_top), right + 9, side=-1, out=1)
+    sv.vdim((pz, slot.v0), (pz, slot.v1), sv.X(0) - 5)
+    sv.hdim((pz, y0), (face, y0), sv.Y(y0) - 5, side=-1, out=-1)
+    sv.hdim((face, h.y0), (h.z1, h.y0), sv.Y(y0) - 5, side=-1, out=1)
+    sv.label((sv.X(pz / 2), sv.Y(y0 + 6)), 'panel', ha='center', size=6.0)
+    sv.label((sv.X((pz + face) / 2) + 4, sv.Y(y0 + 3)), 'carrier', ha='left', size=6.0)
+    sv.note((h.z1, (h.y0 + h.y1) / 2 + 1), (sv.X(h.z1) + 4, sv.Y(h.y1) + 16), 'hook', ha='left')
+    sv.label((sv.X(h.z1) - 1.5, sv.Y(h.y0 + h.stem) + 2.0), '45°', ha='right', va='top', size=5.8)
+    s.text((sv.X(face) + 1.5, sv.Y((ctop + p_top) / 2)), 'lift room', 5.8, SOFT, ha='left', va='center')
+    s.text((sv.X(-1), sv.Y(y0) - 13), 'Dashed blue: the carrier lifted %s mm; the slot\nclears the hook and '
+           'it comes off. The tip\'s 45° underside\nlets the panel print without supports.' % num(lift),
+           6.0, SOFT, ha='left', va='top')
+    s.text((sv.X(-1), sv.Y(p_top) + 23), 'DETAIL: A HOOK', 8.2, INK, ha='left', va='bottom', weight='bold')
+    s.text((sv.X(-1), sv.Y(p_top) + 22.2), '(cut through it; 2.5 times\nsize; front on the right)', 6.4, SOFT,
+           ha='left', va='top')
+
+    lines = [('Hang it:', True),
+             ('1. Screw the screen to the carrier on the bench:', False),
+             ('    4 × M2.5 × %s from the back.' % num(p.CarrierScrewLength), False),
+             ('2. Hold it about %s mm high, push it flat into the' % num(lift), False),
+             ('    pocket over the hooks, and let it drop on them.', False),
+             ('3. Two M3 × 8 screws through the tab lock it.', False),
+             ('Take it off:', True),
+             ('Undo the 2 screws, lift about %s mm, and tilt' % num(lift), False),
+             ('it toward you. Unplug the cables behind it.', False)]
+    for i, (line, bold) in enumerate(lines):
+        s.text((206, 68 - i * 4.0), line, 6.3, INK, ha='left', va='top', weight='bold' if bold else 'normal')
+    return s
+
+
 def adapter_footprints(m):
     """Where each adapter plate's base sits on the panel's back: (x0, x1, y0, y1)."""
     out = []
@@ -942,10 +1125,7 @@ def sheet_panel_back(m, number, total):
     collar = pan.one('Encoder collar hole').circles()[0]
     inserts = pan.one('Heat-set insert holes').circles()
     insert_pr = pan.one('Heat-set insert holes')
-    cbs = [pr.circles()[0] for pr in pan.get('Screw counterbore')]
-    cb_pr = pan.get('Screw counterbore')[0]
-    holes = pan.one('Screen screw holes').circles()
-    slots = [Box(path) for path in pan.one('Zip-tie slots').paths()]
+    pocket_path = pan.one('Carrier pocket').paths()[0]
 
     # where the Pi case and the adapter plates sit
     case = m.parts['pi case']
@@ -955,28 +1135,22 @@ def sheet_panel_back(m, number, total):
     for x0, x1, y0, y1 in feet:
         v.shape([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], lw=THIN, color=GHOST, dash=(5, 2.5), z=3.5)
 
+    v.shape(path_points(pocket_path), lw=THIN, color=SOFT, dash=HIDDEN, z=3.4)
     v.shape(path_points(pocket.segs), lw=MID, fill=BLIND, z=4)
     v.circle(collar[0], collar[1], collar[2], fill='white', z=5)
     v.centre(collar[0], collar[1], pocket.w)
     for x, y, dia in inserts:
         v.circle(x, y, dia, fill=BLIND, z=4)
         v.centre(x, y, dia)
-    for x, y, dia in cbs:
-        v.circle(x, y, dia, fill=BLIND, z=4)
-        v.centre(x, y, dia)
-    for x, y, dia in holes:
-        v.circle(x, y, dia, fill='white', lw=THIN, z=5)
-    for sl in slots:
-        v.shape(path_points(sl.segs), lw=MID, fill='white', z=4)
 
     # where things are, from this view's bottom-left corner
     lowest = {}
-    for x, y, dia in inserts + cbs:
+    for x, y, dia in inserts:
         if float(x) not in lowest or float(y) < float(lowest[float(x)][1]):
             lowest[float(x)] = (x, y - dia / 2)
     v.ord_x(box.u1, list(lowest.values()) + [(pocket.cu, pocket.v0)], y=50)
     nearest = {}
-    for x, y, dia in inserts + cbs:
+    for x, y, dia in inserts:
         key = round(float(y), 3)
         if key not in nearest or float(x) > float(nearest[key][0]):
             nearest[key] = (x + dia / 2, y)
@@ -996,11 +1170,10 @@ def sheet_panel_back(m, number, total):
                   key=lambda c: (float(c[1]), float(c[0])))
     v.note(('paper',) + v.edge(pi_hole[0], pi_hole[1], pi_hole[2], v.P(pi_hole[0] + 6, pi_hole[1] + 14)),
            v.P(pi_hole[0] + 6, pi_hole[1] + 14), 'insert hole\n(Pi case)', ha='right')
-    cb = max(cbs, key=lambda c: (float(c[1]), float(c[0])))
-    notch = Box(pan.one('Cable notch').paths()[0])
-    at = (v.X(notch.cu), v.Y(notch.v0) - 9)
-    v.note(('paper',) + v.edge(cb[0], cb[1], cb[2], at), at,
-           '4 counterbores Ø{}, {} deep,\nØ{} through (screen screws)', cb[2], cb_pr.hi, holes[0][2], ha='center')
+    pb = bounds(pocket_path)
+    v.note((pb.cu, pb.v1), (v.X(pb.cu), v.Y(pb.v1) - 32),
+           'dashed: the carrier pocket in the front face\n(sheet %d); nothing goes through' % FRONT_SHEET,
+           ha='center')
     at = (v.X(pocket.u1) - 5, v.Y(pocket.cv) + 1)
     v.note(('paper',) + v.P(pocket.u1, pocket.cv + 1), at,
            'Encoder pocket {} × {}, {} deep\n(leaves {} in front), Ø{} hole through', pocket.w, pocket.h,
@@ -1030,7 +1203,16 @@ def sheet_panel_back(m, number, total):
     lower = [(0, box.v0), (face, box.v0), (face, collar[1] - collar[2] / 2), (pocket_pr.hi, collar[1] - collar[2] / 2),
              (pocket_pr.hi, pocket.v0), (0, pocket.v0)]
     upper = [(0, pocket.v1), (pocket_pr.hi, pocket.v1), (pocket_pr.hi, collar[1] + collar[2] / 2),
-             (face, collar[1] + collar[2] / 2), (face, box.v1), (0, box.v1)]
+             (face, collar[1] + collar[2] / 2)]
+    cut = span_at(path_points(pocket_path), collar[0])     # the carrier pocket, and a hook if the cut meets one
+    pz = pan.one('Carrier pocket').lo
+    if cut:
+        upper += [(face, cut[0]), (pz, cut[0])]
+        for h in (hook_box(pr) for pr in pan.get('Carrier hook')):
+            if float(h.x0) < float(collar[0]) < float(h.x1):
+                upper += hook_section(h, pz)
+        upper += [(pz, cut[1]), (face, cut[1])]
+    upper += [(face, box.v1), (0, box.v1)]
     for pts in (lower, upper):
         sv.shape(pts, fill=PART, hatch='////', lw=MID, color=SOFT, z=3)
         sv.shape(pts, lw=THICK, z=4)
@@ -1041,7 +1223,8 @@ def sheet_panel_back(m, number, total):
     sv.vdim((0, pocket.v0), (0, pocket.v1), sv.X(0) - 5)
     sv.vdim((face, collar[1] - collar[2] / 2), (face, collar[1] + collar[2] / 2), sv.X(face) + 5,
             template='Ø{}', side=-1)
-    s.view_title((sv.X(face / 2), 205.5), 'SECTION A–A', '(through the knob;\nfront face on the right)', ha='center')
+    s.view_title((sv.X(face / 2), 205.5), 'SECTION A–A', '(through the knob%s;\nfront face on the right)'
+                 % (' and a hook' if cut else ''), ha='center')
     return s
 
 
@@ -1194,13 +1377,6 @@ def sheet_pi_case(m, number, total):
     ins_d = ins_pr.circles()[0][2]
     ear_holes = case.one('Panel screw holes').circles()
     vent = Box(case.one('Vent').paths()[0])
-
-    def in_vent(c):
-        x, y, dd = [float(q) for q in c]
-        return (float(vent.u0) <= x - dd / 2 and x + dd / 2 <= float(vent.u1) and
-                float(vent.v0) <= y - dd / 2 and y + dd / 2 <= float(vent.v1))
-    reach = case.one('Screen screw access').circles()
-    access = [c for c in reach if not in_vent(c)]    # one falls inside the vent and leaves no edge
     usb = case.one('USB and Ethernet').paths()
     hdmi = case.one('Power and HDMI').paths()
     pcie = case.one('PCIe and power button').paths()
@@ -1224,7 +1400,7 @@ def sheet_pi_case(m, number, total):
     v.shape(path_points(outer.segs), fill=PART, z=3)
     v.shape(path_points(inner.segs), lw=MID, fill=PART, z=4)
     v.shape(path_points(vent.segs), lw=MID, fill='white', z=5)
-    for x, y, dd in access + ear_holes:
+    for x, y, dd in ear_holes:
         v.circle(x, y, dd, fill='white', z=5)
         v.centre(x, y, dd)
     for x, y, dd in stands:
@@ -1247,12 +1423,11 @@ def sheet_pi_case(m, number, total):
 
     # where things are, from the outside of the USB wall and of the plain wall
     low = sorted((c for c in stands if float(c[1]) < float(inner.cv)), key=lambda c: -float(c[0]))
-    v.ord_x(outer.u1, [(inner.u1, inner.v0)] + [(x, y - dd / 2) for x, y, dd in access + low] +
+    v.ord_x(outer.u1, [(inner.u1, inner.v0)] + [(x, y - dd / 2) for x, y, dd in low] +
             [(vent.u0, vent.v0), (vent.u1, vent.v0), (outer.u0, outer.v0)], y=100)
     near = [c for c in stands if abs(float(c[0]) - float(low[0][0])) < 1e-6]
     usb_ear = ears[-1]
     v.ord_y(outer.v0, [(x + dd / 2, y) for x, y, dd in near] + [(vent.u1, vent.v0), (vent.u1, vent.v1)] +
-            [(x + dd / 2, y) for x, y, dd in access] +
             [(usb_ear.u1, usb_ear.v0), (usb_ear.u1, usb_ear.v1), (outer.u1, outer.v1)], x=26)
     v.hdim((ears[-1].u1, ears[-1].cv), (ears[0].u0, ears[0].cv), 198.5, value=ears[-1].u1 - ears[0].u0)
     hx = sorted(ear_holes, key=lambda c: (float(c[1]), float(c[0])))
@@ -1261,12 +1436,6 @@ def sheet_pi_case(m, number, total):
     # notes, written in the vent
     v.label((v.X(vent.cu), v.Y(vent.v1) - 2.5), 'vent {} × {}, R{} corners', vent.w, vent.h, vent.r['tr'][0],
             ha='center', va='top', size=6.2)
-    if access:
-        acc = access[0]
-        at = (v.X(vent.cu), v.Y(vent.cv) + 5)
-        v.note(('paper',) + v.edge(acc[0], acc[1], acc[2], at), at,
-               'Ø{} hole to reach a screen screw;\nthe other one is reached\nthrough the vent', acc[2],
-               ha='center')
     st = low[0]
     at = (v.X(vent.cu), v.Y(vent.v0) + 7)
     v.note(('paper',) + v.edge(st[0], st[1], st[2], at), at,
@@ -1360,12 +1529,17 @@ def sheet_amp_plate(m, number, total):
     screws = part.one('Post screw holes').circles()
     vents = sorted((bounds(q) for q in part.one('Vents').paths()), key=lambda b: float(b.cu))
     board = Box(m.parts['Amp (reference)'].prisms[0].paths()[0])
+    mw_pr = part.one('Mean Well bosses')
+    mw = mw_pr.circles()
+    mw_ins = part.one('Mean Well insert holes')
+    mw_box = Box(m.parts['Mean Well RSD-30G-5 (reference)'].prisms[0].paths()[0])
     s = Sheet(m, number, total, 'Amp plate',
-              'Print 1, flat, the posts up. The amp screws onto its four posts; the plate screws onto\n'
-              "the four tall posts on the Pi case (sheet %d), behind the Pi." % PI_SHEET, '1:1')
+              'Print 1, flat, the posts up. The Mean Well screws onto the four short bosses and the amp onto\n'
+              "the four tall posts, over it; the plate screws onto the Pi case's tall posts (sheet %d)." % PI_SHEET,
+              '1:1')
 
     # the side the amp sits on, seen from behind the dash
-    v = View(s, at=(40, 98), ref=(pl.u1, pl.v0), flip_u=True)
+    v = View(s, at=(40, 92), ref=(pl.u1, pl.v0), flip_u=True)
     v.shape(path_points(pl.segs), fill=PART)
     for b in vents:
         v.shape(path_points(b.segs), lw=MID, fill='white', z=4)
@@ -1376,7 +1550,12 @@ def sheet_amp_plate(m, number, total):
         v.circle(x, y, dd, lw=THICK, fill=PART, z=4)
         v.circle(x, y, ins_d, fill=BLIND, z=5)
         v.centre(x, y, dd)
+    for x, y, dd in mw:
+        v.circle(x, y, dd, lw=THICK, fill=PART, z=4)
+        v.circle(x, y, mw_ins.circles()[0][2], fill=BLIND, z=5)
+        v.centre(x, y, dd)
     v.shape(path_points(board.segs), lw=THIN, color=GHOST, dash=(5, 2.5), z=6)
+    v.shape(path_points(mw_box.segs), lw=THIN, color='#9a8a2a', dash=(2.5, 1.5), z=6)
 
     def pair(holes, key):
         lo = min(holes, key=lambda c: (float(c[1]), -float(c[0])))
@@ -1393,21 +1572,31 @@ def sheet_amp_plate(m, number, total):
     v.vdim(st_side[0][:2], st_side[1][:2], right + 6, side=-1)
     v.vdim(sc_side[0][:2], sc_side[1][:2], right + 13, side=-1)
     v.vdim((pl.u0, pl.v0), (pl.u0, pl.v1), right + 20, side=-1)
-    v.label((v.X(board.cu), v.Y(board.v1) - 4.5), 'amp board {} × {} (dashed)', board.w, board.h,
-            ha='center', size=6.0)
+    v.label((v.X(board.cu), v.Y(board.v1) - 2.0), 'amp board {} × {} (dashed blue)', board.w, board.h,
+            ha='center', va='top', size=6.0)
+    v.label((v.X(mw_box.cu), v.Y(mw_box.v1) - 2.0), 'Mean Well {} × {} (dashed yellow)', mw_box.w, mw_box.h,
+            ha='center', va='top', size=6.0)
 
     # what things are
     st = max(stands, key=lambda c: (-float(c[1]), float(c[0])))       # lower, on the paper's left
-    at = (52, 84)
+    at = (52, 80)
     v.note(('paper',) + v.edge(st[0], st[1], st[2], at), at,
-           '4 posts Ø{}, {} tall,\nØ{} holes {} deep for M2\nheat-set inserts (the amp\'s\nholes are about 2.5)',
+           '4 amp posts Ø{}, {} tall,\nØ{} holes {} deep for M2\nheat-set inserts (the amp\'s\nholes are about 2.5)',
            st_d, zb - st_pr.lo, ins_d, ins_pr.hi - st_pr.lo)
+    mb = max(mw, key=lambda c: (float(c[1]), -float(c[0])))       # upper, on the paper's right
+    at = (v.X(mw_box.cu), v.Y(mw_box.cv) + 9)
+    xs = sorted({round(float(c[0]), 6): c[0] for c in mw}.values(), key=float)
+    ys = sorted({round(float(c[1]), 6): c[1] for c in mw}.values(), key=float)
+    v.note(('paper',) + v.edge(mb[0], mb[1], mb[2], at), at,
+           '4 Mean Well bosses Ø{}, {} tall, centres {} × {},\nØ{} holes {} deep for M3 inserts',
+           mb[2], zb - mw_pr.lo, xs[-1] - xs[0], ys[-1] - ys[0], mw_ins.circles()[0][2], mw_ins.hi - mw_pr.lo,
+           ha='center')
     sc = min(sc_side, key=lambda c: float(c[1]))
-    at = (164, 84)
+    at = (164, 80)
     v.note(('paper',) + v.edge(sc[0], sc[1], sc[2], at), at,
            "4 holes Ø{} for M3 × 8 screws\ninto the Pi case's posts", sc[2], ha='right')
     mid = vents[len(vents) // 2]
-    at = (v.X(mid.cu), 66)
+    at = (v.X(mid.cu), 64)
     v.note(('paper',) + v.P(mid.cu, mid.v0), at, '%d vents {} × {}, {} apart' % len(vents), mid.w, mid.h,
            vents[1].cu - vents[0].cu, ha='center')
     s.text((v.X(pl.u1), 206.5), 'BACK', 8.2, INK, ha='left', va='bottom', weight='bold')
@@ -1423,7 +1612,7 @@ def sheet_amp_plate(m, number, total):
         s.line([(a_x, yy), (a_x - 5, yy)], lw=MID)
         s.arrowhead((a_x - 5, yy), (1, 0))
         s.text((a_x + 1.5, yy), 'A', 8, INK, ha='left', va='center', weight='bold')
-    sv = View(s, at=(222, 98), ref=(zf, pl.v0), flip_u=True)
+    sv = View(s, at=(222, 92), ref=(zf, pl.v0), flip_u=True)
     zt, zi = st_pr.lo, ins_pr.hi
     r, ri = st_d / 2, ins_d / 2
     sec = [(zf, pl.v0), (zb, pl.v0)]
@@ -1445,13 +1634,15 @@ def sheet_amp_plate(m, number, total):
     s.text((sv.X(zt) + 2, sv.Y(pl.cv)), 'the amp goes here', 6.0, SOFT, ha='left', rot=90, va='top')
 
     lines = [('Put it together:', INK),
-             ("1. Press M2 inserts into this plate's four posts, and M3 inserts into the Pi case's tall posts.", INK),
+             ("1. Press M2 inserts into the four tall posts, M3 inserts into the four bosses and the Pi case's tall posts.",
+              INK),
              ("2. Screw the plate onto the Pi case's posts (M3 × 8), this side facing away from the Pi.", INK),
-             ("3. Screw the amp onto the posts (M2 × 6), its parts facing away from the Pi.", INK),
-             ("The amp's hole spacing is a guess (E): measure it, centre to centre, before printing.",
-              TAG_COLOUR['E'])]
+             ("3. Screw the Mean Well onto its bosses (M3 × 6), and wire it now: the amp covers its terminals.", INK),
+             ("4. Screw the amp onto the tall posts (M2 × 6), over the Mean Well, its parts facing away from the Pi.",
+              INK),
+             ("The amp's holes are measured (118 × 76); its outside size is a guess (E).", TAG_COLOUR['E'])]
     for i, (line, colour) in enumerate(lines):
-        s.text((8, 52 - i * 4.6), line, 6.6, colour, ha='left', va='top', weight='bold' if i == 0 else 'normal')
+        s.text((8, 50 - i * 3.9), line, 6.4, colour, ha='left', va='top', weight='bold' if i == 0 else 'normal')
     return s
 
 
@@ -1527,9 +1718,9 @@ def sheet_assembly(m, number, total):
     pan, box, outline = panel_parts(m)
     face = pan.one('Panel').hi
     s = Sheet(m, number, total, 'Assembly: side view',
-              'Everything in place, seen from the driver\'s door. Blue: screen. Green: Pi + DAC HAT.\n'
-              'Orange: amp. Pink: climate controls. Red: factory bracket (placeholder; shape unknown).', '1:1')
-    v = View(s, at=(150, 56), ref=(0, box.v0))           # across: Z (toward you); up: Y
+              'Everything in place, seen from the driver\'s door. Blue: screen. Green: Pi + DAC HAT. Orange: amp.\n'
+              'Yellow: Mean Well. Pink: climate controls. Red: factory bracket (placeholder; shape unknown).', '1:1')
+    v = View(s, at=(164, 56), ref=(0, box.v0))           # across: Z (toward you); up: Y
     BLUE, GREEN, PINK, RED = '#cfe0f3', '#d8ecc8', '#f3d6dc', '#f4cccc'
     HID = (4.0, 2.0)
 
@@ -1574,6 +1765,10 @@ def sheet_assembly(m, number, total):
         v.shape(pts, lw=0, fill=PART, z=2)
     amp_pts = [(amp_lo, abox.v0), (amp_hi, abox.v0), (amp_hi, abox.v1), (amp_lo, abox.v1)]
     v.shape(amp_pts, lw=0, fill=ORANGE, z=1.8)
+    mwr = m.parts['Mean Well RSD-30G-5 (reference)'].prisms[0]
+    mwb = Box(mwr.paths()[0])
+    mw_pts = [(mwr.lo, mwb.v0), (mwr.hi, mwb.v0), (mwr.hi, mwb.v1), (mwr.lo, mwb.v1)]
+    v.shape(mw_pts, lw=0, fill='#f1ebb8', z=1.9)
 
     adapters = [m.parts[key].one('Adapter') for key in ('adapter lower left', 'adapter upper left')]
     for key, pr in zip(('adapter lower left', 'adapter upper left'), adapters):
@@ -1589,6 +1784,7 @@ def sheet_assembly(m, number, total):
     for pts in behind:
         v.shape(pts, lw=MID, dash=HID, z=3.5)
     v.shape(amp_pts, lw=THIN, color='#b07a3a', dash=HID, z=3.5)
+    v.shape(mw_pts, lw=THIN, color='#9a8a2a', dash=HID, z=3.5)
 
     fb = m.parts['Factory radio brackets (placeholder)']
     fbb = Box([pr for pr in fb.prisms if pr.op == 'new'][0].paths()[0])      # (y, z)
@@ -1598,8 +1794,14 @@ def sheet_assembly(m, number, total):
             size=6.0)
 
     v.shape([(0, box.v0), (face, box.v0), (face, box.v1), (0, box.v1)], fill=PART, z=6)
+    carrier = m.parts['screen carrier']
+    cpr = carrier.one('Carrier')
+    cb = bounds(cpr.paths()[0])
+    v.shape([(cpr.lo, cb.v0), (cpr.hi, cb.v0), (cpr.hi, cb.v1), (cpr.lo, cb.v1)], fill='#e4e1d8', lw=MID, z=6.2)
+    hook = hook_box(pan.get('Carrier hook')[0])
+    v.shape(hook_section(hook, cpr.lo), fill=PART, lw=MID, z=6.3)
     posts = {}
-    for pr in pan.get('Screen post'):
+    for pr in carrier.get('Screen post'):
         x, y, dd = pr.circles()[0]
         posts[float(y)] = (y, dd, pr.hi)
     for y, dd, ptop in posts.values():
@@ -1618,6 +1820,8 @@ def sheet_assembly(m, number, total):
             fill=PART, z=6)
     v.label((v.X(knob.hi) + 2, v.Y(ky)), 'knob', ha='left', size=6.0)
     v.label((v.X(glass.hi) + 2, v.Y(gb.cv) - 20), 'screen', ha='left', size=6.0)
+    v.note(((cpr.lo + cpr.hi) / 2, cb.v0 + 2), (v.X(knob.hi) + 8, v.Y(cb.v0) - 9),
+           'screen carrier, in its\npocket (sheet %d)' % CARRIER_SHEET, ha='left')
     s.text((v.X(face / 2), v.Y(box.v1) + 1.2), 'panel', 6.0, SOFT, va='bottom')
 
     # labels for what's behind
@@ -1629,6 +1833,7 @@ def sheet_assembly(m, number, total):
     v.note(((ppr.lo + ppr.hi) / 2, gap_hi - 3), (left, v.Y(mid) + 18), 'amp plate', ha='right')
     v.note(((amp_lo + amp_hi) / 2, mid + 6), (left, v.Y(mid) + 30), 'amp (its height is\nfrom the listing)',
            ha='right')
+    v.note(((mwr.lo + mwr.hi) / 2, mwb.v1 - 4), (left, v.Y(mid) + 44), 'Mean Well,\nunder the amp', ha='right')
     s.text((14, 199.5), 'Dashed: hidden behind the adapter plates.', 6.4, SOFT, ha='left', va='top')
 
     # front to back (Z), from the back face of the panel
@@ -1665,7 +1870,8 @@ def check_print_files(m):
     """Warn when print/ was made from other sizes than the script's defaults (say, changed in Fusion)."""
     sys.path.insert(0, HERE)
     from make_print_files import read_stl
-    parts = {'dash-panel.stl': ['panel'], 'pi-case.stl': ['pi case'], 'volume-knob.stl': ['knob'],
+    parts = {'dash-panel.stl': ['panel'], 'screen-carrier.stl': ['screen carrier'],
+             'pi-case.stl': ['pi case'], 'volume-knob.stl': ['knob'],
              'adapter-plate.stl': ['adapter upper left'], 'amp-plate.stl': ['amp plate']}
     warnings = []
     for name, keys in parts.items():
@@ -1731,15 +1937,16 @@ def main():
     m = load_model()
     for warning in check_print_files(m):
         print('warning: ' + warning + '; the drawings follow the script')
-    total = 8
+    total = 9
     sheets = [('1-dash-panel-front', sheet_panel_front(m, FRONT_SHEET, total)),
               ('2-dash-panel-top-and-lip', sheet_panel_lip(m, LIP_SHEET, total)),
               ('3-dash-panel-back', sheet_panel_back(m, BACK_SHEET, total)),
-              ('4-adapter-plate', sheet_adapter(m, 4, total)),
-              ('5-pi-case', sheet_pi_case(m, PI_SHEET, total)),
-              ('6-amp-plate', sheet_amp_plate(m, AMP_SHEET, total)),
-              ('7-volume-knob', sheet_knob(m, 7, total)),
-              ('8-assembly-side', sheet_assembly(m, 8, total))]
+              ('4-screen-carrier', sheet_carrier(m, CARRIER_SHEET, total)),
+              ('5-adapter-plate', sheet_adapter(m, ADAPTER_SHEET, total)),
+              ('6-pi-case', sheet_pi_case(m, PI_SHEET, total)),
+              ('7-amp-plate', sheet_amp_plate(m, AMP_SHEET, total)),
+              ('8-volume-knob', sheet_knob(m, KNOB_SHEET, total)),
+              ('9-assembly-side', sheet_assembly(m, ASSEMBLY_SHEET, total))]
     render(sheets)
 
 

@@ -10,7 +10,7 @@ import unittest
 from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
 from backend.gps import Gps
-from backend.vehicle import GEARS, LIMITS, VOLTS_MS, VehicleData, estimate_gear, warnings
+from backend.vehicle import GEARS, LIMITS, VOLTS_MS, VehicleData, estimate_gear, settled_gear, warnings
 
 # apply_obd restarts a QTimer, which wants an application object (no event loop).
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -596,3 +596,29 @@ class CodesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettledGearTest(unittest.TestCase):
+    def run_samples(self, gear, estimates, mph=40.0, rpm=2500):
+        seen, count = gear, 5
+        out = []
+        for e in estimates:
+            gear, seen, count = settled_gear(gear, seen, count, e, mph, rpm)
+            out.append(gear)
+        return out
+
+    def test_a_stable_gear_stays_through_one_zero(self):
+        self.assertEqual(self.run_samples(3, [0, 3, 3]), [3, 3, 3])
+
+    def test_a_lone_other_gear_is_ignored(self):
+        self.assertEqual(self.run_samples(3, [3, 4, 3]), [3, 3, 3])
+
+    def test_two_in_a_row_switch(self):
+        self.assertEqual(self.run_samples(3, [4, 4]), [3, 4])
+
+    def test_three_zeros_switch_to_zero(self):
+        self.assertEqual(self.run_samples(3, [0, 0, 0]), [3, 3, 0])
+
+    def test_a_stop_goes_to_zero_at_once(self):
+        self.assertEqual(settled_gear(3, 3, 5, 0, 0.0, 800), (0, 0, 1))
+        self.assertEqual(settled_gear(3, 3, 5, 0, 40.0, 0), (0, 0, 1))

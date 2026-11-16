@@ -92,6 +92,22 @@ def estimate_gear(mph, rpm):
     return best + 1 if abs(per_k - GEARS[best]) / GEARS[best] < 0.12 else 0
 
 
+def settled_gear(current, seen, count, estimate, mph, rpm):
+    """Steady the gear readout through shifts. `seen` is the last raw
+    estimate and `count` how many samples in a row gave it. A new gear takes
+    2 in a row, a drop to 0 (clutch in, between gears) takes 3, unless the
+    car is stopped or the engine is off, which shows at once. Returns
+    (gear, seen, count)."""
+    count = count + 1 if estimate == seen else 1
+    if estimate == current:
+        return current, estimate, count
+    if estimate == 0 and (mph < 3 or rpm < 500):
+        return 0, estimate, count
+    if count >= (3 if estimate == 0 else 2):
+        return estimate, estimate, count
+    return current, estimate, count
+
+
 class VehicleData(QObject):
     changed = pyqtSignal()
     liveChanged = pyqtSignal()
@@ -118,6 +134,7 @@ class VehicleData(QObject):
         self._intake = 72.0
         self._voltage = 14.2
         self._gear = 1
+        self._gear_seen, self._gear_count = 1, 0   # see settled_gear
         self._live = False
         self._active = []         # the warnings now latched (see CLEAR)
         self._volts_real = False  # `_voltage` is the adapter's reading, current
@@ -214,7 +231,13 @@ class VehicleData(QObject):
         if "voltage" in values:
             self._take_voltage(float(values["voltage"]))
         if answering:
-            self._gear = estimate_gear(self._speed, self._rpm)
+            estimate = estimate_gear(self._speed, self._rpm)
+            if self._live:
+                self._gear, self._gear_seen, self._gear_count = settled_gear(
+                    self._gear, self._gear_seen, self._gear_count,
+                    estimate, self._speed, self._rpm)
+            else:       # the first reading after quiet is taken as it comes
+                self._gear, self._gear_seen, self._gear_count = estimate, estimate, 1
             self._stale.start()
             self._live = True
             if not self._answered:

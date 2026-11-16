@@ -21,7 +21,7 @@ Item {
     signal navigate(int index)
 
     property bool eqOpen: false
-    property string tab: "playing"             // "playing", "next", "albums" or "spotify"
+    property string tab: "playing"             // "playing", "next", "albums", "songs" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
     property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     property bool searchOpen: false            // the Spotify tab shows search rather than recents
@@ -104,6 +104,7 @@ Item {
                 options: [{ label: "Playing", value: "playing" },
                           { label: "Up next", value: "next" },
                           { label: "Albums", value: "albums" },
+                          { label: "Songs", value: "songs" },
                           { label: "Spotify", value: "spotify" }]
                 current: page.tab
                 onPicked: (v) => page.show(v)
@@ -403,7 +404,6 @@ Item {
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
                                                   : "All songs on this Pi")
-                         : page.tab === "albums" ? ("")
                          : ""
 
                 // ---- Up next ------------------------------------------------
@@ -537,6 +537,64 @@ Item {
                                 anchors.fill: parent
                                 enabled: modelData.index >= 0
                                 onClicked: albumGrid.positionViewAtIndex(Math.floor(modelData.index / 5) * 5, GridView.Beginning)
+                            }
+                        }
+                    }
+                }
+
+                // ---- Songs: every song, A to Z ------------------------------
+                // Tap one to play it; the rest of the library follows.
+                ListView {
+                    id: songList
+                    visible: page.tab === "songs" && !page.eqOpen
+                    anchors { fill: parent; margins: 10
+                              rightMargin: songRail.visible ? songRail.width + 24 : 10 }
+                    clip: true
+                    model: media.songs
+                    boundsBehavior: Flickable.StopAtBounds
+                    delegate: SongRow {
+                        width: songList.width
+                        numbered: false
+                        current: media.source === "local" && media.title === modelData.title
+                                 && media.artist === modelData.artist
+                        title: modelData.title
+                        subtitle: modelData.artist
+                        onHit: media.playSong(modelData.index)
+                    }
+                    EmptyState {
+                        visible: songList.count === 0
+                        width: parent.width
+                        height: songList.height
+                        icon: media.scanning ? "refresh" : "music"
+                        title: media.scanning ? "Reading your music" : "No songs yet"
+                        hint: media.scanning ? "Songs show up as they're found" : "Copy albums into ~/Music on the Pi"
+                    }
+                }
+
+                // The same jump rail as Albums, on the song titles.
+                Column {
+                    id: songRail
+                    visible: page.tab === "songs" && !page.eqOpen && media.songs.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(media.songs.map(function (s) { return s.title }), true)
+                    width: 64
+                    anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
+                    Repeater {
+                        model: songRail.buckets
+                        delegate: Item {
+                            width: songRail.width
+                            height: Math.max(56, songRail.height / 9)
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                font.pixelSize: Theme.fontSmall
+                                font.bold: modelData.index >= 0
+                                color: Theme.text
+                                opacity: modelData.index >= 0 ? 1 : 0.3
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: modelData.index >= 0
+                                onClicked: songList.positionViewAtIndex(modelData.index, ListView.Beginning)
                             }
                         }
                     }
@@ -1090,6 +1148,7 @@ Item {
     component SongRow: Rectangle {
         id: row
         property int number
+        property bool numbered: true           // false: no number column, the title starts at the edge
         property bool current: false
         property string title
         property string subtitle
@@ -1101,18 +1160,18 @@ Item {
         color: current || rowTap.pressed ? Theme.panelHi : "transparent"
         Item {
             id: num
-            width: 52
+            width: row.numbered ? 52 : 6
             height: parent.height
             anchors { left: parent.left; leftMargin: 10 }
             Icon {
-                visible: row.current
+                visible: row.numbered && row.current
                 anchors.verticalCenter: parent.verticalCenter
                 name: "equalizer"
                 size: 24
                 color: Theme.accent
             }
             Label {
-                visible: !row.current
+                visible: row.numbered && !row.current
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.number
                 color: Theme.textDim

@@ -177,6 +177,23 @@ class MediaPlayer(QObject):
                  "duration": sum(t["duration"] for t in a["tracks"])}
                 for a in self._albums]
 
+    @pyqtProperty("QVariantList", constant=True)
+    def songs(self):
+        order = sorted(range(len(DEMO_QUEUE)), key=lambda i: DEMO_QUEUE[i]["title"].casefold())
+        return [{"title": DEMO_QUEUE[i]["title"], "artist": DEMO_QUEUE[i]["artist"], "index": i}
+                for i in order] if self._albums else []
+
+    @pyqtSlot(int)
+    def playSong(self, index):
+        """Play one song with every song queued after it."""
+        if not self._albums or not 0 <= index < len(DEMO_QUEUE):
+            return
+        self._queue = list(DEMO_QUEUE)
+        self._album = -1
+        self.queueChanged.emit()
+        self.upNextChanged.emit()
+        self.playIndex(index)
+
     @pyqtProperty(int, notify=queueChanged)
     def album(self):
         return self._album

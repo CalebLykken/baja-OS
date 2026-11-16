@@ -743,6 +743,14 @@ class LibraryPlayer(QObject):
                  "duration": sum(self._all[i]["duration"] for i in a["tracks"])}
                 for a in self._albums]
 
+    @pyqtProperty("QVariantList", notify=libraryChanged)
+    def songs(self):
+        """Every song by title, A to Z: [{title, artist, index}], where `index`
+        is the song's place in the folder-order list playSong takes."""
+        order = sorted(range(len(self._all)), key=lambda i: self._all[i]["title"].casefold())
+        return [{"title": self._all[i]["title"], "artist": self._all[i]["artist"], "index": i}
+                for i in order]
+
     @pyqtProperty(bool, notify=scanningChanged)
     def scanning(self):
         """The first read of the music folder is still going."""
@@ -865,6 +873,18 @@ class LibraryPlayer(QObject):
         self._reorder()
         self.queueChanged.emit()
         self.playIndex(0)
+
+    @pyqtSlot(int)
+    def playSong(self, all_index):
+        """Play one song from the Songs list (`index` there); every song is the
+        queue, so the library keeps playing after it. Out of range does nothing."""
+        if not 0 <= all_index < len(self._all):
+            return
+        self._queue = list(self._all)
+        self._album = -1
+        self._reorder()
+        self.queueChanged.emit()
+        self.playIndex(all_index)
 
     @pyqtSlot()
     def shuffleAll(self):

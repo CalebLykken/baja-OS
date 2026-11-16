@@ -600,6 +600,11 @@ class MediaHub(QObject):
         """Albums of the Pi's own songs: [{title, artist, art, count, duration}]."""
         return self._sources["local"].albums
 
+    @pyqtProperty("QVariantList", notify=albumsChanged)
+    def songs(self):
+        """Every song of the Pi's own music by title: [{title, artist, index}]."""
+        return getattr(self._sources["local"], "songs", [])
+
     @pyqtProperty(bool, notify=scanningChanged)
     def scanning(self):
         """The Pi's music folder is still being read for the first time."""
@@ -767,6 +772,12 @@ class MediaHub(QObject):
         self._pause_others(keep="local")
         self._set_source("local")
         self._sources["local"].playAlbum(album, start)
+
+    @pyqtSlot(int)
+    def playSong(self, index):
+        self._pause_others(keep="local")
+        self._set_source("local")
+        self._sources["local"].playSong(index)
 
     @pyqtSlot()
     def playAll(self):

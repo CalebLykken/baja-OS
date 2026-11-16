@@ -5,9 +5,10 @@
 // the sort. Anything that does not start with A-Z lands in "#".
 var LABELS = ["#", "A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"]
 
-function bucketOf(name) {
+// `literal` keeps a leading "The ": song titles sort that way.
+function bucketOf(name, literal) {
     var s = String(name === undefined || name === null ? "" : name).trim().toUpperCase()
-    if (s.indexOf("THE ") === 0)
+    if (!literal && s.indexOf("THE ") === 0)
         s = s.substring(4).trim()
     var c = s.charCodeAt(0)
     if (!(c >= 65 && c <= 90))
@@ -16,10 +17,10 @@ function bucketOf(name) {
 }
 
 // The nine buckets in order, each with the index of its first entry or -1.
-function buckets(names) {
+function buckets(names, literal) {
     var first = {}
     for (var i = 0; i < names.length; i++) {
-        var b = bucketOf(names[i])
+        var b = bucketOf(names[i], literal)
         if (first[b] === undefined)
             first[b] = i
     }

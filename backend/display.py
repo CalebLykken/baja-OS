@@ -31,6 +31,10 @@ VCP_BRIGHTNESS = 0x10
 DDC_DELAY = 0.05  # DDC/CI wants ~50 ms between a command and the next one
 DDC_TRIES = 3     # a write the panel NAKs is retried ...
 DDC_RETRY_S = 0.15  # ... after this pause
+# A panel still waking on car power can miss the first probe. When a bus was
+# found but the probe failed, the writer thread tries again after each of
+# these pauses (seconds), then stops: no polling for the rest of the drive.
+PROBE_RETRY_S = (2, 5, 10, 30, 60)
 SEATTLE = (47.6062, -122.3321)
 DUSK = -2.0       # sun this far below the horizon counts as night (screen dimming)
 MAP_DARK = -4.0   # the map goes dark a little later (between sunset and civil dusk) ...
@@ -157,9 +161,13 @@ class Display(QObject):
         else:
             self._apply(self._levels[night])  # resend a level the panel never took
 
-    def _probe(self):
-        """Find the panel and read its brightness. Runs off the UI thread."""
+    def _probe(self, first=True, attempt=0):
+        """Find the panel and read its brightness. Runs off the UI thread.
+        Returns True when it is worth trying again: a bus was found but
+        opening it or reading it failed. _probe_done goes out for a success
+        and for the first failure only, so the QML sees no repeats."""
         current = 0
+        retry = False
         try:
             path = find_ddc_bus()
             if path:
@@ -170,15 +178,24 @@ class Display(QObject):
                         # A zeroed reply would scale every write to 0: a black screen.
                         raise OSError(f"panel reports a maximum of {self._max}")
                     current = max(0, min(self._max, current))
+                    if attempt:
+                        print(f"Brightness: DDC/CI found on retry {attempt}")
                 except OSError as e:
-                    print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
+                    if first:
+                        print(f"Brightness: no DDC/CI on {path} ({e}); dimming in software")
                     self._give_up()
+                    retry = True
         except Exception as e:
-            print(f"Brightness: DDC probe failed ({e}); dimming in software")
+            if first:
+                print(f"Brightness: DDC probe failed ({e}); dimming in software")
             self._give_up()
+            retry = True
         finally:
             ok = self._ddc is not None
-            safe_emit(self, "_probe_done", ok, current if ok else 0, self._max if ok else 100)
+            if ok or first:
+                safe_emit(self, "_probe_done", ok, current if ok else 0,
+                          self._max if ok else 100)
+        return retry
 
     def _give_up(self):
         """Drop a device the probe opened but can't use."""
@@ -200,7 +217,12 @@ class Display(QObject):
         self._apply(self._levels[self._night])
 
     def _writer(self):
-        self._probe()
+        retry = self._probe()
+        for n, delay in enumerate(PROBE_RETRY_S, 1):
+            if not retry:
+                break
+            time.sleep(delay)
+            retry = self._probe(first=False, attempt=n)
         if self._ddc is None:
             return
         # Only the newest value matters, so a burst of slider moves collapses

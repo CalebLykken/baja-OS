@@ -305,5 +305,84 @@ class WriteFailureTests(unittest.TestCase):
         self.assertEqual(calls[-1], 70)
 
 
+class ProbeRetryTests(unittest.TestCase):
+    """The writer thread tries the probe again when a bus exists but failed."""
+
+    def run_writer(self, opens, bus="/dev/i2c-9", before=None):
+        """Run the writer thread with PROBE_RETRY_S patched; `opens` is how
+        many opens fail before one works (None: all fail). Returns the
+        display, the sleep mock and the thread."""
+        count = [0]
+
+        def ddc(path):
+            count[0] += 1
+            if opens is None or count[0] <= opens:
+                raise OSError("panel still waking")
+            return FakeDdc(path)
+
+        d = display_mod.Display()
+        d._probing = True
+        if before:
+            before(d)
+        with mock.patch.object(display_mod, "find_ddc_bus", return_value=bus), \
+                mock.patch.object(display_mod, "DdcBrightness", ddc), \
+                mock.patch.object(display_mod.time, "sleep") as sleep:
+            t = threading.Thread(target=d._writer, daemon=True)
+            t.start()
+            if opens is None or bus is None:
+                t.join(5)
+            else:
+                for _ in range(500):  # _probe_done is queued to this thread
+                    app.processEvents()
+                    if d.hardware:
+                        break
+                    time.sleep(0.01)
+            app.processEvents()
+        return d, sleep, t
+
+    def test_late_success_turns_hardware_on(self):
+        d, sleep, t = self.run_writer(2)
+        self.assertTrue(d.hardware)
+        self.assertEqual(d.brightness, 30)  # the panel's own level
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_all_retries_fail_and_thread_ends(self):
+        d, sleep, t = self.run_writer(None)
+        self.assertFalse(t.is_alive())
+        self.assertFalse(d.hardware)
+        self.assertEqual(sleep.call_count, 5)
+
+    def test_no_bus_never_sleeps(self):
+        d, sleep, t = self.run_writer(None, bus=None)
+        self.assertFalse(t.is_alive())
+        sleep.assert_not_called()
+
+    def test_failure_is_announced_once(self):
+        d = display_mod.Display()
+        d._probing = True
+        emitted = []
+        d._probe_done.connect(lambda *a: emitted.append(a))
+        with mock.patch.object(display_mod, "find_ddc_bus", return_value="/dev/i2c-9"), \
+                mock.patch.object(display_mod, "DdcBrightness",
+                                  lambda p: FakeDdc(p, fail=True)), \
+                mock.patch.object(display_mod.time, "sleep"):
+            d._writer()
+        app.processEvents()
+        self.assertEqual(emitted, [(False, 0, 100)])
+
+    def test_level_set_during_retries_is_written_after_success(self):
+        def before(d):
+            d.setBrightness(55)  # the panel is not known yet: kept in _levels
+
+        d, sleep, t = self.run_writer(1, before=before)
+        self.assertTrue(d.hardware)
+        self.assertEqual(d.brightness, 55)
+        for _ in range(500):
+            if d._ddc.sets:
+                break
+            time.sleep(0.01)
+        self.assertEqual(d._ddc.sets[-1], 55)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -189,6 +189,7 @@ Item {
                         Layout.preferredWidth: 1
                         label: page.warmingUp ? "Warming up" : "Coolant"
                         widest: "000"
+                        highlight: page.warmingUp
                         unit: Units.tempUnit
                     }
                     Readout {

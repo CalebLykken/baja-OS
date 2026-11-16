@@ -154,6 +154,7 @@ class MediaHub(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     sourceChanged = pyqtSignal()
+    otherSourcesChanged = pyqtSignal()   # a phone player came or went, or the active source moved
     queueChanged = pyqtSignal()
     upNextChanged = pyqtSignal()      # what plays after this song (local order, Spotify queue)
     _artReady = pyqtSignal(str, str, str, str)   # source, its art url, local copy, rounded card
@@ -169,6 +170,7 @@ class MediaHub(QObject):
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
         super().__init__(parent)
         self._sources = {"local": local, "phone": phone, "spotify": spotify}
+        self.sourceChanged.connect(self.otherSourcesChanged)
         self._source = "local"
         self._settings = settings
         saved = read_state(str(settings.get("music", ""))) if settings else None
@@ -218,6 +220,8 @@ class MediaHub(QObject):
             src.trackChanged.connect(lambda n=name: self._update_art(n))
         phone.trackChanged.connect(self._phone_player_changed)
         phone.changed.connect(self._phone_connection_changed)
+        for sig in (phone.changed, phone.trackChanged, local.queueChanged):
+            sig.connect(self.otherSourcesChanged)      # the list of other sources may have changed
         phone.volumeChanged.connect(lambda: self._remote_volume_changed("phone"))
         spotify.volumeChanged.connect(lambda: self._remote_volume_changed("spotify"))
         spotify.changed.connect(self._spotify_changed)
@@ -534,6 +538,32 @@ class MediaHub(QObject):
         if self._source == "phone":
             return self._sources["phone"].deviceName
         return "Spotify" if self._source == "spotify" else ""
+
+    @pyqtProperty("QVariantList", notify=otherSourcesChanged)
+    def otherSources(self):
+        """The sources the driver could move to from here, not counting the
+        one that's on: [{name, label}] for the phone (when it has a player)
+        and the Pi's own songs (when it has some)."""
+        phone, local = self._sources["phone"], self._sources["local"]
+        out = []
+        if self._source != "phone" and phone.hasPlayer:
+            out.append({"name": "phone", "label": phone.deviceName or "Phone"})
+        if self._source != "local" and local.index >= 0:
+            out.append({"name": "local", "label": "On this Pi"})
+        return out
+
+    @pyqtSlot(str)
+    def useSource(self, name):
+        """Move to the phone or back to the Pi's songs, and play there."""
+        if name == self._source or name not in [o["name"] for o in self.otherSources]:
+            return
+        self._pause_others(keep=name)
+        self._set_source(name)
+        src = self._sources[name]
+        if name == "phone":
+            src.play()
+        elif not src.playing:
+            src.togglePlay()
 
     @pyqtProperty(str, notify=trackChanged)
     def title(self):

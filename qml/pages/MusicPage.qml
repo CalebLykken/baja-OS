@@ -234,6 +234,39 @@ Item {
                             font.pixelSize: Theme.fontBody
                             elide: Text.ElideRight
                         }
+
+                        // Other places to play from: the phone, or back to the Pi's songs.
+                        // Not shown with nothing to switch to.
+                        Row {
+                            id: otherSources
+                            visible: media.otherSources.length > 0
+                            Layout.fillWidth: true
+                            spacing: Theme.gap
+                            Repeater {
+                                model: media.otherSources
+                                delegate: Rectangle {
+                                    height: 64
+                                    width: Math.min(chipRow.implicitWidth + 40, otherSources.width)
+                                    radius: height / 2
+                                    color: chipTap.pressed ? Theme.panelHi : Theme.panel
+                                    border.width: 1
+                                    border.color: Theme.line
+                                    RowLayout {
+                                        id: chipRow
+                                        anchors { fill: parent; leftMargin: 20; rightMargin: 20 }
+                                        spacing: 10
+                                        Icon { name: modelData.name === "phone" ? "bluetooth" : "music"; size: 28; color: Theme.accent }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: modelData.label
+                                            font.pixelSize: Theme.fontSmall
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    TapHandler { id: chipTap; onTapped: media.useSource(modelData.name) }
+                                }
+                            }
+                        }
                         Item { Layout.fillHeight: true }
 
                         // The next song, when it's known: tap for the rest.

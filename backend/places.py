@@ -492,6 +492,35 @@ CATEGORIES = {
     "groceries": ("supermarket", "convenience", "greengrocer"),
 }
 
+# What a driver types for a category, mapped to its CATEGORIES key. Only exact
+# phrases count, so "gas works park" is still a name search.
+CATEGORY_WORDS = {
+    "gas": "gas", "gas station": "gas", "petrol": "gas", "fuel": "gas",
+    "coffee": "coffee", "cafe": "coffee",
+    "food": "food", "restaurant": "food", "restaurants": "food",
+    "parking": "parking",
+    "charging": "charging", "ev": "charging", "charger": "charging",
+    "groceries": "groceries", "grocery": "groceries", "supermarket": "groceries",
+}
+
+
+def category_for(text):
+    """The CATEGORIES key a typed phrase means ("Gas Station " -> "gas"), or None."""
+    return CATEGORY_WORDS.get(" ".join((text or "").lower().split()))
+
+
+def search_with_categories(db, text, near=None, limit=12):
+    """`search`, but a typed category word puts the nearest places of that
+    category first, then the name matches, without repeats."""
+    key = category_for(text) if near else None
+    rows = nearby(db, key, near, limit) if key else []
+    seen = {(r["name"], r["area"]) for r in rows}
+    for r in search(db, text, near=near, limit=limit):
+        if (r["name"], r["area"]) not in seen:
+            seen.add((r["name"], r["area"]))
+            rows.append(r)
+    return rows[:limit]
+
 
 def nearby(db, category, near, limit=12):
     """The nearest places of a category to `near` (lon, lat)."""

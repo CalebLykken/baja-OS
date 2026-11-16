@@ -342,7 +342,7 @@ class MapService(QObject):
                         pass
                 try:
                     with contextlib.closing(sqlite3.connect(f"file:{index}?mode=ro", uri=True)) as db:
-                        rows += places.search(db, text, near=near)
+                        rows += places.search_with_categories(db, text, near=near)
                         if not rows and places.looks_like_address(text):
                             # The house number isn't mapped: offer the street itself.
                             rows += [r for r in places.search(db, places.street_part(text), near=near)

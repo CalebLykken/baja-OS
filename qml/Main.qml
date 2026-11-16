@@ -313,6 +313,33 @@ Window {
         function onMilestone(text) { root.notify(text, "") }
     }
 
+    // The phone connecting (BlueZ gives it a device name): music and calls
+    // route there now. Only the connect, not each change of name, and no
+    // toast on disconnect (a phone flaps in and out of range).
+    // Starts at the phone already there, if it is, so its name isn't a "connect".
+    property string lastPhone: typeof bluetooth !== "undefined" ? bluetooth.deviceName : ""
+    Connections {
+        target: typeof bluetooth !== "undefined" ? bluetooth : null
+        function onChanged() {
+            var name = bluetooth.deviceName
+            if (root.lastPhone === "" && name !== "") root.notify("Phone connected: " + name, "bluetooth")
+            root.lastPhone = name
+        }
+    }
+
+    // The GPS finding its first fix, once per run: Maps can start now. Only
+    // from the receiver, never the demo drive.
+    property bool gpsLockShown: false
+    Connections {
+        target: typeof gps !== "undefined" ? gps : null
+        function onChanged() {
+            if (!root.gpsLockShown && gps.realFix && gps.source === "gps") {
+                root.gpsLockShown = true
+                root.notify("GPS locked", "gps_fixed")
+            }
+        }
+    }
+
     // Volume panel for the knob and long-press mute, on every page but Music
     // (which has its own bar). Above the pages and the toast, below the
     // dimming, screen-off and prompt layers. Held back until the splash is

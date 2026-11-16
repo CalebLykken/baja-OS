@@ -34,11 +34,13 @@ app = QGuiApplication(sys.argv)
 engine = QQmlEngine()
 
 QML = """import QtQuick
+import QtQuick.Window
 import "qml/components"
-Item {
-    width: 1280; height: 800
+Window {
+    width: 1280; height: 800; visible: true
     Toast { objectName: "t"; holdMs: 600 }
     Toast { objectName: "d" }
+    Toast { objectName: "w" }
 }
 """
 
@@ -87,6 +89,18 @@ out["again_visible"] = t.property("visible")
 wait(1500)
 out["ended_visible"] = t.property("visible")
 out["default_hold"] = d.property("holdMs")
+# A 60-character device name (with the "Phone connected: " prefix) stays
+# within 520 px, and a short message is no wider than its text.
+w = root.findChild(QQuickItem, "w")
+long_name = "Caleb's very long phone name that keeps going on and on and!"
+invoke(w, "show", "Phone connected: " + long_name, "bluetooth")
+wait(50)
+out["long_len"] = len(long_name)
+out["long_width"] = w.property("width")
+out["long_max"] = w.property("maxWidth")
+invoke(w, "show", "GPS locked", "gps_fixed")
+wait(50)
+out["short_width"] = w.property("width")
 print(json.dumps(out))
 '''
 
@@ -124,12 +138,55 @@ class ToastTest(unittest.TestCase):
         self.assertFalse(self.out["ended_visible"])
         self.assertEqual(self.out["default_hold"], 4000)
 
+    def test_a_long_name_stays_within_520_px(self):
+        self.assertEqual(self.out["long_len"], 60)
+        self.assertEqual(self.out["long_max"], 520)
+        self.assertLessEqual(self.out["long_width"], 520)
+        self.assertGreater(self.out["long_width"], 300)
+
+    def test_a_short_message_is_narrower_than_the_cap(self):
+        self.assertLess(self.out["short_width"], self.out["long_width"])
+
     def test_source_has_no_timer_and_takes_no_taps(self):
         src = TOAST.read_text()
         self.assertNotIn("Timer", src)
         self.assertNotIn("running: true", src)
         self.assertNotIn("MouseArea", src)
         self.assertNotIn("loops", src)
+
+
+MAIN = ROOT / "qml" / "Main.qml"
+
+
+class PhoneAndGpsToasts(unittest.TestCase):
+    """Main.qml: the phone's connect and the first GPS lock each get one toast."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = MAIN.read_text()
+
+    def test_phone_toast_fires_on_connect_only(self):
+        body = self.src.split("Connections {\n        target: typeof bluetooth", 1)[1].split("\n    }", 1)[0]
+        self.assertIn('root.lastPhone === ""', body)
+        self.assertIn('name !== ""', body)
+        self.assertIn('root.notify("Phone connected: " + name, "bluetooth")', body)
+        self.assertIn("root.lastPhone = name", body)
+        self.assertNotIn("disconnect", body.lower())
+
+    def test_gps_toast_is_once_per_run_from_the_receiver(self):
+        self.assertIn("property bool gpsLockShown: false", self.src)
+        body = self.src.split("Connections {\n        target: typeof gps", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("!root.gpsLockShown", body)
+        self.assertIn("gps.realFix", body)
+        self.assertIn('gps.source === "gps"', body)
+        self.assertIn("root.gpsLockShown = true", body)
+        self.assertIn('root.notify("GPS locked", "gps_fixed")', body)
+
+    def test_both_go_through_the_toast_gating(self):
+        body = self.src.split("function notify", 1)[1].split("}", 1)[0]
+        self.assertIn("splash.visible", body)
+        self.assertIn("root.onMaps", body)
+        self.assertIn("root.routeActive", body)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,13 @@ class TidyTitleTest(unittest.TestCase):
         self.assertEqual(tidy_title("a___b   c"), "a b c")
         self.assertEqual(tidy_title("a---b"), "a-b")
 
+    def test_a_dashed_track_number_without_spaces_goes(self):
+        self.assertEqual(tidy_title("01-Intro"), "Intro")
+
+    def test_a_year_or_number_title_with_a_space_stays(self):
+        self.assertEqual(tidy_title("1979 Smashing Pumpkins"), "1979 Smashing Pumpkins")
+        self.assertEqual(tidy_title("2112 Overture"), "2112 Overture")
+
     def test_an_all_digit_title_stays(self):
         self.assertEqual(tidy_title("2112"), "2112")
 

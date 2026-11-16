@@ -227,8 +227,8 @@ def signature(folder):
     return _signature_of(_listing(folder))
 
 
-_LEADING_ID = re.compile(r"^\d{4,}[_\-. ]+")      # freesound-style "575780__author__name"
-_LEADING_NUMBER = re.compile(r"^\d{1,3}(?:\s*[-.]\s+|\s+)")     # "01 ", "01 - ", "1. "
+_LEADING_ID = re.compile(r"^\d{4,}[_\-.]+")      # freesound-style "575780__author__name"
+_LEADING_NUMBER = re.compile(r"^\d{1,3}(?:\s*[-.]\s+|\s+|\s*-\s*(?=\D))")     # "01 ", "01 - ", "1. ", "01-Intro"
 
 
 def tidy_title(stem):

@@ -95,6 +95,7 @@ Item {
             known: vehicle.engineKnown
             value: vehicle.rpm; minValue: 0; maxValue: 7000; warnAbove: vehicle.limits.rpmHigh
             labelDivisor: 1000
+            numberStep: 10   // the numeral to the nearest 10 so it doesn't jitter at idle
             peakHold: true
         }
         Gauge {

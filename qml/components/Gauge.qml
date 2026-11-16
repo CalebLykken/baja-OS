@@ -24,6 +24,10 @@ Card {
     property real warnAbove: Number.POSITIVE_INFINITY
     property real warnBelow: Number.NEGATIVE_INFINITY
     property int decimals: 0
+    // The numeral can show the reading rounded to a step (RPM to the nearest 10)
+    // so the last digit doesn't jitter at idle. 0 shows the value as it is. The
+    // dial and the peak still use the exact value.
+    property real numberStep: 0
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
     property bool peakHold: false   // remember and mark the highest reading
     property real peak: Number.NEGATIVE_INFINITY
@@ -495,7 +499,9 @@ Card {
             objectName: "gaugeNumber"
             anchors.horizontalCenter: parent.horizontalCenter
             numeric: true
-            text: g.known ? g.value.toFixed(g.decimals) : "—"
+            text: g.known ? (g.numberStep > 0
+                             ? Math.round(g.value / g.numberStep) * g.numberStep
+                             : g.value).toFixed(g.decimals) : "—"
             color: g.warning ? Theme.warn : g.known ? Theme.text : Theme.textDim
             transformOrigin: Item.Center
             Behavior on color { ColorAnimation { duration: 180 } }

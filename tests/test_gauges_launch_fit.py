@@ -30,7 +30,39 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 
-STYLES = ("amber", "cluster", "trail", "rally")
+# Theme's own list of looks, read once in its own process, so a look added
+# later is covered without touching this test.
+NAMES_SCRIPT = r'''
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+ROOT = Path(sys.argv[1])
+app = QGuiApplication(sys.argv)
+engine = QQmlEngine()
+component = QQmlComponent(engine)
+component.setData(b'import QtQuick\nimport "qml/components"\nItem { property var th: Theme }',
+                  QUrl.fromLocalFile(str(ROOT / "x.qml")))
+obj = component.create()
+if obj is None:
+    print([e.toString() for e in component.errors()])
+    sys.exit(1)
+print(json.dumps(list(obj.property("th").property("styleNames").toVariant())))
+'''
+
+
+def style_names():
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    result = subprocess.run([sys.executable, "-c", NAMES_SCRIPT, str(ROOT)],
+                            cwd=ROOT, capture_output=True, text=True, timeout=60, env=env)
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+STYLES = style_names()
 
 SCRIPT = r'''
 import json, sys
@@ -144,6 +176,10 @@ def right(r):
 
 class SpeedGaugeFitTests(unittest.TestCase):
     units = "imperial"
+
+    def test_every_theme_is_measured(self):
+        self.assertIn("atlantic", STYLES)
+        self.assertEqual(set(self.outs), set(STYLES))
 
     @classmethod
     def setUpClass(cls):

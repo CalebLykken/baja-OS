@@ -63,6 +63,15 @@ Item {
     // read once per change so the bindings below share it.
     readonly property var upNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
+    // What the Playing card says in its title while there is no song yet: nothing
+    // on the Pi, the Pi's music still being read, or Spotify just starting.
+    readonly property string titleText: idle ? (media.scanning ? "Reading your music" : "Nothing playing")
+                                        : media.title !== "" ? media.title
+                                        : media.source === "spotify" ? "Starting Spotify..." : ""
+    // The one-line hint under it when the Pi has nothing to play, so the
+    // owner knows what to do next rather than guessing.
+    readonly property string idleHint: media.scanning ? "Songs show up as they're found"
+                                                      : "Pair a phone in Settings, or copy songs to ~/Music"
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
     // Only while Spotify is what's playing or being looked at.
     readonly property string spotifyError: typeof spotify !== "undefined"
@@ -232,9 +241,10 @@ Item {
                         spacing: 6
                         SourceBadge { Layout.fillWidth: true }
                         Label {
+                            objectName: "nowTitle"
                             Layout.fillWidth: true
-                            text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-                            color: page.idle ? Theme.textDim : Theme.text
+                            text: page.titleText
+                            color: media.title === "" ? Theme.textDim : Theme.text
                             font.pixelSize: Theme.fontHero
                             font.weight: Font.DemiBold
                             lineHeight: 0.95
@@ -243,11 +253,15 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
+                            objectName: "nowArtist"
                             Layout.fillWidth: true
-                            text: page.spotifyError !== "" ? page.spotifyError : page.artistLine(media.artist, media.albumTitle)
+                            text: page.spotifyError !== "" ? page.spotifyError
+                                  : page.idle ? page.idleHint
+                                  : page.artistLine(media.artist, media.albumTitle)
                             color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                             font.pixelSize: Theme.fontBody
-                            maximumLineCount: 1
+                            wrapMode: Text.WordWrap          // the hint may take two lines
+                            maximumLineCount: 2
                             elide: Text.ElideRight
                         }
 
@@ -990,8 +1004,8 @@ Item {
                                 Layout.preferredWidth: 1
                                 Label {
                                     width: parent.width
-                                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-                                    color: page.idle ? Theme.textDim : Theme.text
+                                    text: page.titleText
+                                    color: media.title === "" ? Theme.textDim : Theme.text
                                     font.pixelSize: Theme.fontBody
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight

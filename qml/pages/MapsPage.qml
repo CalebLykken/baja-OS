@@ -764,6 +764,28 @@ Item {
                             }
                         }
                     }
+                    // Avoid options, one tap away: lit while that kind of road is
+                    // avoided. Changing one reroutes the preview (Router.setAvoid).
+                    RowLayout {
+                        visible: page.hasRouting && routing.previewing
+                        width: parent.width
+                        spacing: 10
+                        OptionChip {
+                            label: "No highways"
+                            lit: page.hasRouting && routing.avoidHighways
+                            onHit: routing.setAvoid("avoidHighways", !routing.avoidHighways)
+                        }
+                        OptionChip {
+                            label: "No tolls"
+                            lit: page.hasRouting && routing.avoidTolls
+                            onHit: routing.setAvoid("avoidTolls", !routing.avoidTolls)
+                        }
+                        OptionChip {
+                            label: "No ferries"
+                            lit: page.hasRouting && routing.avoidFerries
+                            onHit: routing.setAvoid("avoidFerries", !routing.avoidFerries)
+                        }
+                    }
                     // Being worked out again (a route option changed), or that failed.
                     MapLabel {
                         visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")
@@ -1721,6 +1743,31 @@ Item {
             }
         }
         TapHandler { id: skTap; onTapped: sk.hit() }
+    }
+
+    // A route option under the preview (No highways, No tolls, No ferries):
+    // lit while it is on, tap to switch it.
+    component OptionChip: Rectangle {
+        id: oc
+        property string label
+        property bool lit: false
+        signal hit()
+        Layout.fillWidth: true
+        Layout.preferredWidth: 100
+        Layout.preferredHeight: 64
+        radius: Theme.radius
+        color: ocTap.pressed ? page.cLine : oc.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
+        MapLabel {
+            anchors { fill: parent; margins: 6 }
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            text: oc.label
+            color: oc.lit ? page.cBlue : page.cText
+            font.pixelSize: Theme.fontSmall
+            font.weight: Font.DemiBold
+        }
+        TapHandler { id: ocTap; onTapped: oc.hit() }
     }
 
     // A key in the map's strip.

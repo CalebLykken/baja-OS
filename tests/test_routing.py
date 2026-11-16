@@ -11,6 +11,7 @@ import math
 import time
 import unittest
 import urllib.error
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -744,6 +745,31 @@ class AvoidTest(unittest.TestCase):
         self.assertFalse(self.router.computing)
         self.assertTrue(self.router.avoidFerries)
         self.assertEqual(self.settings.values["avoidFerries"], "true")
+
+    def test_a_toll_change_keeps_the_old_route_until_the_answer_lands(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        shown = self.router.remainingDistance
+        held = mock.patch("backend.routing.threading", SimpleNamespace(
+            Thread=lambda **k: SimpleNamespace(start=lambda: None)))
+        held.start()
+        self.addCleanup(held.stop)
+        self.router.setAvoid("avoidTolls", True)
+        self.assertTrue(self.router.computing)
+        self.assertTrue(self.router.previewing)
+        self.assertEqual(self.router.remainingDistance, shown)
+        answer(self.router, ROUTE, "", "Shop", True)
+        self.assertFalse(self.router.computing)
+        self.assertTrue(self.router.previewing)
+
+    def test_the_toll_request_zeroes_use_tolls(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertEqual(self.sent[-1]["costing_options"]["auto"]["use_tolls"], 0)
+
+    def test_maps_page_has_a_chip_for_each_avoid_option(self):
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        for key in ("avoidHighways", "avoidTolls", "avoidFerries"):
+            self.assertIn('routing.setAvoid("%s", !routing.%s)' % (key, key), qml)
 
     def test_no_route_means_no_request(self):
         self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))

@@ -1277,9 +1277,17 @@ Item {
         property bool hidden: false      // a network typed in by hand
         property bool naming: false      // ...and its name is still being typed
         property string note: ""         // why the sheet is open again, e.g. a wrong password
-        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false; note = "" }
-        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true; note = "" }
-        function close() { ssid = ""; password = ""; hidden = false; naming = false; note = "" }
+        property bool lastShown: false   // the newest character shows for a moment, like a phone
+        // Only runs for a moment after a key press, so nothing ticks while idle.
+        Timer { id: lastTimer; interval: 900; onTriggered: joinSheet.lastShown = false }
+        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false; note = ""; lastShown = false; lastTimer.stop() }
+        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true; note = ""; lastShown = false; lastTimer.stop() }
+        function close() { ssid = ""; password = ""; hidden = false; naming = false; note = ""; lastShown = false; lastTimer.stop() }
+        // The password as dots, with the newest character shown while lastShown.
+        function dots() {
+            var n = password.length
+            return lastShown ? "•".repeat(n - 1) + password.charAt(n - 1) : "•".repeat(n)
+        }
 
         anchors.fill: parent
         visible: ssid !== "" || naming
@@ -1327,13 +1335,14 @@ Item {
                     border.color: Theme.accent
                     Label {
                         id: field
+                        objectName: "joinField"
                         anchors { left: parent.left; leftMargin: 18; verticalCenter: parent.verticalCenter }
                         width: Math.min(implicitWidth, parent.width - 50)
                         clip: true
                         horizontalAlignment: implicitWidth > width ? Text.AlignRight : Text.AlignLeft
                         text: joinSheet.naming ? joinSheet.ssid
                               : joinSheet.password === "" ? ""
-                              : joinSheet.reveal ? joinSheet.password : "•".repeat(joinSheet.password.length)
+                              : joinSheet.reveal ? joinSheet.password : joinSheet.dots()
                         font.pixelSize: Theme.fontTitle
                     }
                     Label {
@@ -1373,6 +1382,7 @@ Item {
             }
 
             Keyboard {
+                objectName: "joinKeyboard"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.maximumHeight: 440
@@ -1380,8 +1390,17 @@ Item {
                 doneEnabled: joinSheet.naming ? joinSheet.ssid.length > 0
                              : joinSheet.password.length >= 8      // WPA passwords are 8+
                                 || (joinSheet.hidden && joinSheet.password.length === 0)
-                onTyped: (ch) => { if (joinSheet.naming) joinSheet.ssid += ch; else joinSheet.password += ch }
+                onTyped: (ch) => {
+                    if (joinSheet.naming) joinSheet.ssid += ch
+                    else {
+                        joinSheet.password += ch
+                        joinSheet.lastShown = true
+                        lastTimer.restart()
+                    }
+                }
                 onBackspace: {
+                    joinSheet.lastShown = false
+                    lastTimer.stop()
                     if (joinSheet.naming) joinSheet.ssid = joinSheet.ssid.slice(0, -1)
                     else joinSheet.password = joinSheet.password.slice(0, -1)
                 }

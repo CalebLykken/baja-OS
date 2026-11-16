@@ -289,6 +289,10 @@ Item {
                 SettingRow {
                     label: "Style"
                     SegmentedControl {
+                        // Fills what the label leaves, so five styles never push the page wider.
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 0
+                        stretch: true
                         options: Theme.styleNames.map(n => ({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n }))
                         current: Theme.style
                         onPicked: (v) => Theme.style = v

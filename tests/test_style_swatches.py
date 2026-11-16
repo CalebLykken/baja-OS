@@ -26,7 +26,7 @@ def swatch_body():
 
 class SwatchSourceTest(unittest.TestCase):
     def test_style_control_kept(self):
-        self.assertRegex(PAGE, r'label: "Style"\s+SegmentedControl \{\s+options: Theme\.styleNames')
+        self.assertRegex(PAGE, r'label: "Style"\s+SegmentedControl \{[^}]*?options: Theme\.styleNames')
 
     def test_component_and_row_exist(self):
         self.assertIn("component StyleSwatch: Rectangle", PAGE)
@@ -71,6 +71,7 @@ names = list(theme.property("styleNames").toVariant())
 styles = theme.property("styles").toVariant()
 light = theme.property("lightStyles").toVariant()
 out = {"names": names, "dark": {}, "light": {}, "tap": {}, "picked": {}}
+out["style_count"] = len(list(styles.keys()))
 out["expect_dark"] = {n: styles[n]["bg"] for n in names}
 out["expect_light"] = {n: {**styles[n], **light.get(n, {})}["bg"] for n in names}
 
@@ -103,8 +104,9 @@ class SwatchRuntimeTest(unittest.TestCase):
             raise AssertionError(result.stdout + result.stderr)
         cls.out = json.loads(result.stdout.strip().splitlines()[-1])
 
-    def test_four_styles(self):
-        self.assertEqual(len(self.out["names"]), 4)
+    def test_one_swatch_per_style(self):
+        self.assertEqual(len(self.out["names"]), len(self.out["expect_dark"]))
+        self.assertEqual(len(self.out["names"]), self.out["style_count"])
 
     def test_dark_uses_style_bg(self):
         for n in self.out["names"]:

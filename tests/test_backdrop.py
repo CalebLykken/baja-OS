@@ -66,10 +66,16 @@ component.setData(
     b'  onDkChanged: Theme.dark = dk }',
     QUrl.fromLocalFile(str(ROOT / "x.qml")))
 obj = component.create()
+theme = None
 if obj is None:
     print(json.dumps({"fatal": [e.toString() for e in component.errors()]}))
     sys.exit(0)
 bd = obj.property("bd")
+tc = QQmlComponent(engine)
+tc.setData(b'import QtQuick\nimport "qml/components"\nItem { property var th: Theme }',
+           QUrl.fromLocalFile(str(ROOT / "x.qml")))
+theme = tc.create().property("th")
+styles = theme.property("styles").toVariant()
 
 
 def wait(ms):
@@ -79,12 +85,13 @@ def wait(ms):
 
 
 out = {}
-for style in ["amber", "cluster", "trail", "rally"]:
+for style in list(theme.property("styleNames").toVariant()):
     for dark in (True, False):
         obj.setProperty("st", style)
         obj.setProperty("dk", dark)
         wait(50)
         out["%s/%s" % (style, dark)] = bd.property("kind")
+out["expected"] = {n: styles[n]["backdrop"] for n in styles}
 out["warnings"] = warnings + [m for m in messages if "qml" in m.lower()]
 print(json.dumps(out))
 '''
@@ -105,7 +112,8 @@ class BackdropQmlTest(unittest.TestCase):
         self.assertNotIn("fatal", self.out)
 
     def test_kind_follows_style_in_both_modes(self):
-        expected = {"amber": "grid", "cluster": "dial", "trail": "topo", "rally": "stripes"}
+        expected = self.out["expected"]
+        self.assertTrue(expected)
         for style, kind in expected.items():
             for dark in (True, False):
                 self.assertEqual(self.out["%s/%s" % (style, dark)], kind)

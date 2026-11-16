@@ -238,6 +238,37 @@ class DataUseTests(unittest.TestCase):
         self.assertEqual(format_bytes(1_200_000_000), "1.2 GB")
         self.assertEqual(format_bytes(5_000_000), "5 MB")
 
+    def test_limit_defaults_off(self):
+        self.iface("wlan0", 6_000_000_000, 0)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.limitGb, 0)
+        self.assertFalse(du.overLimit)
+
+    def test_set_limit_warns_and_saves(self):
+        self.iface("wlan0", 6_000_000_000, 0)
+        du = self.make()
+        du.sample()
+        du.setLimit(5)
+        self.assertTrue(du.overLimit)
+        self.assertEqual(self.settings.d["dataLimitGb"], 5)
+        du.setLimit(10)
+        self.assertFalse(du.overLimit)
+
+    def test_limit_follows_this_months_figure(self):
+        du = self.roll(stamp(2026, 11, 2))
+        du.setLimit(10)
+        self.assertEqual(du.text, "0 KB of 10 GB (2.1 GB last month)")
+        du.setLimit(0)
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+
+    def test_garbage_saved_limit_reads_as_off(self):
+        for bad in ("lots", None, "", "-4", "1e9x", [1]):
+            self.settings.d["dataLimitGb"] = bad
+            self.assertEqual(self.make().limitGb, 0)
+        self.settings.d["dataLimitGb"] = "9999"
+        self.assertEqual(self.make().limitGb, 500)
+
 
 if __name__ == "__main__":
     unittest.main()

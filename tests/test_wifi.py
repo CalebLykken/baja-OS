@@ -16,7 +16,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
+from backend.wifi import (saved_elsewhere, HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
                           WATCH_EVERY_MS, Wifi, saved_connections, scan, split_terse, valid_ssid)
 from tests.test_dbus import FakeBus, on_bus
 
@@ -154,6 +154,21 @@ class SavedConnectionsTest(unittest.TestCase):
 
     def test_a_names_own_spaces_stay(self):
         self.assertEqual(self.saved(" Cafe "), " Cafe ")
+
+
+class SavedElsewhereTest(unittest.TestCase):
+    def test_only_wifi_networks_the_scan_cannot_see_sorted(self):
+        w = Wifi({})
+        w._networks = [{"ssid": "Here"}]
+        w._saved = [
+            {"uuid": "1", "ssid": "Zed", "type": "802-11-wireless"},
+            {"uuid": "2", "ssid": "Here", "type": "802-11-wireless"},
+            {"uuid": "3", "ssid": "apple", "type": "802-11-wireless"},
+            {"uuid": "4", "ssid": "Phone BT", "type": "bluetooth"},
+            {"uuid": "5", "ssid": "", "type": "802-11-wireless"},
+        ]
+        self.assertEqual(w.savedElsewhere, [{"ssid": "apple"}, {"ssid": "Zed"}])
+        self.assertEqual(saved_elsewhere([], []), [])
 
 
 class FakeNM:
@@ -569,6 +584,29 @@ class WrongPasswordTest(unittest.TestCase):
         self.join("Phone", "hunter22", 4, "Error: Secrets were required, but not provided.")
         self.assertEqual(self.wifi.message, "Wrong password for Phone")
         self.assertEqual(self.asked, [])
+
+
+class MessageOkTest(unittest.TestCase):
+    """The page colours the join result by whether it worked."""
+
+    def setUp(self):
+        self.wifi = Wifi({})
+        self.wifi._available = False
+        self.fired = []
+        self.wifi.changed.connect(lambda: self.fired.append(1))
+
+    def test_success_is_ok(self):
+        self.wifi._on_finished("Connected to X", True)
+        self.assertTrue(self.wifi.messageOk)
+        self.assertEqual(self.wifi.message, "Connected to X")
+        self.assertTrue(self.fired)
+
+    def test_failure_is_not_ok(self):
+        self.wifi._on_finished("Connected to X", True)
+        del self.fired[:]
+        self.wifi._on_finished("Wrong password for X", False)
+        self.assertFalse(self.wifi.messageOk)
+        self.assertTrue(self.fired)
 
 
 class HiddenNetworkTest(unittest.TestCase):

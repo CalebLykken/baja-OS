@@ -18,12 +18,14 @@ import json
 import os
 import time
 
-from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 SAMPLE_EVERY_MS = 60000
 FIRST_SAMPLE_MS = 5000     # keeps the settings write off the startup path; well under SAMPLE_EVERY_MS
 SYS_NET = "/sys/class/net"
 SETTING = "dataUse"
+LIMIT_SETTING = "dataLimitGb"  # 0 = no warning
+MAX_LIMIT_GB = 500
 MAX_PREV_BYTES = 10 ** 15     # anything bigger in the saved setting is garbage
 
 
@@ -41,6 +43,15 @@ def read_total(root, name):
         return total
     except (OSError, ValueError):
         return None
+
+
+def read_limit(value):
+    """The saved warning limit in GB, 0 (off) for anything that isn't a whole number, clamped to 0-500."""
+    try:
+        gb = int(str(value).strip())
+    except (ValueError, TypeError):
+        return 0
+    return max(0, min(MAX_LIMIT_GB, gb))
 
 
 def format_bytes(n):
@@ -86,6 +97,7 @@ class DataUse(QObject):
                 self._prev_month, self._prev_bytes = month, nbytes
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
             self._prev_month, self._prev_bytes = "", 0
+        self._limit = read_limit(settings.get(LIMIT_SETTING, 0))
         self._present = False
         self._first = QTimer(self, singleShot=True, interval=FIRST_SAMPLE_MS, timeout=self.sample)
         self._timer = QTimer(self, interval=SAMPLE_EVERY_MS, timeout=self.sample)
@@ -145,7 +157,30 @@ class DataUse(QObject):
 
     @pyqtProperty(str, notify=changed)
     def text(self):
+        # The limit sits right after this month's figure, so it can't be read
+        # as applying to last month's.
+        now = format_bytes(self._bytes)
+        if self._limit:
+            now += f" of {self._limit} GB"
         prev = self._last_month()
         if not prev:
-            return format_bytes(self._bytes)
-        return f"{format_bytes(self._bytes)} ({format_bytes(prev)} last month)"
+            return now
+        return f"{now} ({format_bytes(prev)} last month)"
+
+    @pyqtProperty(int, notify=changed)
+    def limitGb(self):
+        return self._limit
+
+    @pyqtProperty(bool, notify=changed)
+    def overLimit(self):
+        """True once this month's use reaches the limit. Only a warning; nothing is switched off."""
+        return self._limit > 0 and self._bytes >= self._limit * 1_000_000_000
+
+    @pyqtSlot(int)
+    def setLimit(self, gb):
+        gb = read_limit(gb)
+        if gb == self._limit:
+            return
+        self._limit = gb
+        self._settings.set(LIMIT_SETTING, gb)
+        self.changed.emit()

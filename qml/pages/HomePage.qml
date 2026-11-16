@@ -148,8 +148,9 @@ Item {
             // Any engine warning (the MIL lamp included, which has no numeral to
             // turn Ember) gives the strip a steady Ember border, which stays
             // after the one-shot pulse ends. The change eases over 180 ms.
-            // Written as a length check so a vehicle without warnings is fine.
-            readonly property bool anyWarning: typeof vehicle.warnings !== "undefined" && vehicle.warnings.length > 0
+            // Set by a Binding at the bottom, like the readouts, so it reads
+            // nothing while Home is hidden (vehicle.changed fires 5 times a second).
+            property bool anyWarning: false
             border.color: anyWarning ? Theme.warn : Theme.line
             border.width: anyWarning ? Theme.border + 1 : Theme.border
             Behavior on border.color { ColorAnimation { duration: 180 } }
@@ -239,4 +240,7 @@ Item {
         value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : batteryReadout.warning }
     Binding { target: speedReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
         value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : speedReadout.value }
+    // Written as a length check so a vehicle without warnings is fine.
+    Binding { target: readoutCard; property: "anyWarning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (typeof vehicle.warnings !== "undefined" && vehicle.warnings.length > 0) : readoutCard.anyWarning }
 }

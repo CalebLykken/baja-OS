@@ -30,6 +30,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlComponent, QQmlEngine, QQmlExpression
+from PyQt6.QtQuick import QQuickWindow
 
 app = QGuiApplication(sys.argv)
 ROOT = Path.cwd()
@@ -115,6 +116,9 @@ if page is None:
     for error in component.errors():
         print(error.toString(), file=sys.stderr)
     sys.exit(1)
+# A page with no window is never visible; put it in one so visible means something.
+window = QQuickWindow()
+page.setParentItem(window.contentItem())
 
 
 def evaluate(scope, expression):
@@ -141,6 +145,16 @@ for name, warnings in [
     vehicle.set(warnings)
     settle()
     results[name] = strip_border()
+
+# While Home is hidden the strip reads nothing, so a warning raised then shows
+# only once the page is back on screen.
+page.setProperty("visible", False)
+vehicle.set(["coolant"])
+settle()
+results["hidden"] = strip_border()
+page.setProperty("visible", True)
+settle()
+results["shown"] = strip_border()
 
 print(json.dumps(results))
 sys.stdout.flush()
@@ -174,6 +188,10 @@ class HomeWarningBorderTest(unittest.TestCase):
 
     def test_ember_border_is_one_pixel_wider(self):
         self.assertEqual(self.results["mil"][1], self.results["none"][1] + 1)
+
+    def test_hidden_page_leaves_the_border_until_shown(self):
+        self.assertEqual(self.results["hidden"][0], self.results["line"])
+        self.assertEqual(self.results["shown"][0], self.results["warn"])
 
 
 if __name__ == "__main__":

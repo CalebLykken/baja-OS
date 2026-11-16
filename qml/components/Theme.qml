@@ -81,6 +81,16 @@ QtObject {
             accent: "#7fe0f0", warn: "#ff5f4d", ok: "#8fe0a8",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
             radius: 20, border: 1, gauge: "arc", backdrop: "dial"
+        },
+        // LCD: retro green monochrome, like an 80s dashboard display. Phosphor
+        // green text on near-black, with segment gauges and a mono numeral
+        // face. Warnings stay orange-red so they still stand out.
+        lcd: {
+            bg: "#050b05", panel: "#0b160a", panelTop: "#0f1d0e", panelHi: "#16270f",
+            line: "#2c4a22", text: "#b9f27a", textDim: "#7fae5a",
+            accent: "#e4ff5a", warn: "#ff6a3d", ok: "#5fe08e",
+            font: "", numFont: "DejaVu Sans Mono", numItalic: false, numWeight: Font.Bold,
+            radius: 2, border: 2, gauge: "segments", backdrop: "grid"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -131,13 +141,19 @@ QtObject {
             bg: "#e3eef2", panel: "#f6fafb", panelTop: "#ffffff", panelHi: "#d7e6ec",
             line: "#b4cbd4", text: "#0b1d24", textDim: "#476470",
             accent: "#0a6f8c", warn: "#c8321f", ok: "#22804a"
+        },
+        // LCD by day: a grey-green calculator panel with dark green ink.
+        lcd: {
+            bg: "#c3cea4", panel: "#d3dcb8", panelTop: "#dde5c6", panelHi: "#b5c295",
+            line: "#8fa072", text: "#16210c", textDim: "#3f4f2a",
+            accent: "#2f5a0f", warn: "#a8260f", ok: "#1f6b2e"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
                                           rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
-                                          desert: "Desert", glacier: "Glacier" })
+                                          desert: "Desert", glacier: "Glacier", lcd: "LCD" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

@@ -140,6 +140,22 @@ class StyleTableTest(unittest.TestCase):
         self.assertIn("glacier", main_choices())
         self.assertEqual(self.out["titles"]["glacier"], "Glacier")
 
+    def test_lcd_is_green_monochrome(self):
+        # LCD: phosphor green on near-black at night, a grey-green calculator
+        # by day, segment gauges, a mono numeral face, and orange-red warnings.
+        night = self.out["night"]["lcd"]
+        day = self.out["day"]["lcd"]
+        self.assertEqual(night["bg"], "#050b05")
+        self.assertEqual(night["text"], "#b9f27a")
+        self.assertEqual(night["warn"], "#ff6a3d")
+        self.assertEqual(day["bg"], "#c3cea4")
+        self.assertEqual(night["numFont"], "DejaVu Sans Mono")
+        self.assertFalse(night["numItalic"])
+        self.assertEqual(night["gauge"], "segments")
+        self.assertEqual(night["backdrop"], "grid")
+        self.assertIn("lcd", main_choices())
+        self.assertEqual(self.out["titles"]["lcd"], "LCD")
+
 
 if __name__ == "__main__":
     unittest.main()

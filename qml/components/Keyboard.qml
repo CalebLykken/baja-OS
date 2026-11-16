@@ -46,6 +46,7 @@ Rectangle {
         property string icon: ""
         property bool primary: false
         property bool lit: false
+        property bool lockBar: false     // caps lock: a bar along the bottom of the key
         property bool preview: false     // character keys pop up a bubble while held
         readonly property alias down: area.pressed
         signal hit()
@@ -84,6 +85,17 @@ Rectangle {
             size: 30
             color: key.lit ? Theme.accent : Theme.text
         }
+        // A one-shot shift only lights the key; caps lock also shows this bar,
+        // so the two read differently without reading the label.
+        Rectangle {
+            objectName: "capsLockBar"
+            visible: key.lockBar
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                      leftMargin: 14; rightMargin: 14; bottomMargin: 7 }
+            height: 4
+            radius: 2
+            color: Theme.accent
+        }
         MouseArea { id: area; anchors.fill: parent; onClicked: key.hit() }
     }
 
@@ -113,6 +125,7 @@ Rectangle {
                 icon: kb.mode === 0 ? "shift" : ""
                 label: kb.mode === 1 ? "#+=" : "123"
                 lit: kb.mode === 0 && kb.shift > 0
+                lockBar: kb.mode === 0 && kb.shift === 2
                 onHit: {
                     if (kb.mode === 0) kb.shift = kb.shift === 0 ? 1 : (kb.shift === 1 ? 2 : 0)
                     else kb.mode = kb.mode === 1 ? 2 : 1

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import threading
 import time
 import unittest
@@ -390,6 +392,38 @@ class WriteFailureTests(unittest.TestCase):
                 break
             time.sleep(0.01)
         self.assertEqual(calls[-1], 70)
+
+
+    def test_failing_panel_logs_once_then_once_on_recovery(self):
+        d = self.hw_display()
+        d._auto = False  # no night change: each check just resends the level
+        d._levels[False] = 40
+        d._brightness = 40
+        d._ddc.set = mock.Mock(side_effect=OSError("nak"))
+
+        def writer_turn():
+            # What _writer does between checks: take the queued level and send it.
+            value, d._pending = d._pending, None
+            if value is not None:
+                d._write(value)
+
+        out = io.StringIO()
+        with mock.patch.object(display_mod.time, "sleep"), contextlib.redirect_stdout(out):
+            for _ in range(5):
+                d._check_sun()
+                writer_turn()
+        self.assertEqual(d._ddc.set.call_count, 5 * display_mod.DDC_TRIES)
+        self.assertEqual(out.getvalue().count("DDC/CI writes failing"), 1)
+        self.assertEqual(out.getvalue().count("working again"), 0)
+
+        d._ddc.set = mock.Mock()  # the panel answers again
+        out = io.StringIO()
+        with mock.patch.object(display_mod.time, "sleep"), contextlib.redirect_stdout(out):
+            d._check_sun()
+            writer_turn()
+        self.assertEqual(d._written, 40)
+        self.assertEqual(out.getvalue().count("DDC/CI writes working again"), 1)
+        self.assertEqual(out.getvalue().count("writes failing"), 0)
 
 
 class ProbeRetryTests(unittest.TestCase):

@@ -21,6 +21,7 @@ panel that ignores 0 is still covered by the black layer.
 
 import fcntl
 import glob
+import math
 import os
 import threading
 import time
@@ -44,6 +45,8 @@ SEATTLE = (47.6062, -122.3321)
 DUSK = -2.0       # sun this far below the horizon counts as night (screen dimming)
 MAP_DARK = -4.0   # the map goes dark a little later (between sunset and civil dusk) ...
 MAP_LIGHT = -3.0  # ... and light again a little earlier, so it never flickers
+RAMP_STEPS = 12   # the day/night flip fades the brightness in about this many steps ...
+RAMP_MS = 500     # ... over about this long, so sunset is not a visible flash
 
 
 def find_ddc_bus():
@@ -116,6 +119,9 @@ class Display(QObject):
         self._sun_down = False
         self._auto = settings is None or as_bool(settings.get("autoNight"), True)
         self._sun_check = QTimer(self, interval=60000, timeout=self._check_sun)
+        self._ramp = QTimer(self, singleShot=True, interval=RAMP_MS // RAMP_STEPS,
+                            timeout=self._ramp_step)  # runs only during a fade
+        self._ramp_to = 100
         self._brightness = 100  # software dimming starts undimmed (overlay clear)
         self._ddc = None
         self._max = 100
@@ -161,10 +167,37 @@ class Display(QObject):
         night = self._auto and alt < DUSK
         if night != self._night or force:
             self._night = night
-            self._apply(self._levels[night])
+            self._stop_ramp()
+            if force or self._probing or self._screen_off:
+                self._apply(self._levels[night])
+            else:
+                self._start_ramp(self._levels[night])
             self.nightChanged.emit()
-        else:
+        elif not self._ramp.isActive():
             self._apply(self._levels[night])  # resend a level the panel never took
+
+    def _start_ramp(self, target):
+        """Fade from the current brightness to `target` in small steps."""
+        self._ramp_to = target
+        self._ramp_step()
+
+    def _ramp_step(self):
+        self._ramp.stop()
+        gap = self._ramp_to - self._brightness
+        if gap == 0:
+            self._apply(self._ramp_to)  # also resends a level the panel never took
+            return
+        # Steps of at most ceil(gap / RAMP_STEPS); the last one lands exactly.
+        step = max(1, math.ceil(abs(gap) / RAMP_STEPS))
+        if abs(gap) <= step:
+            self._apply(self._ramp_to)
+        else:
+            self._apply(self._brightness + (step if gap > 0 else -step))
+        if self._brightness != self._ramp_to:
+            self._ramp.start()
+
+    def _stop_ramp(self):
+        self._ramp.stop()
 
     def _probe(self, first=True, attempt=0):
         """Find the panel and read its brightness. Runs off the UI thread.
@@ -275,6 +308,7 @@ class Display(QObject):
             self._day_default = False
         if self._settings is not None:
             self._settings.set("brightnessNight" if self._night else "brightnessDay", value)
+        self._stop_ramp()
         self._apply(value)
 
     def _apply(self, value):
@@ -302,6 +336,9 @@ class Display(QObject):
         if off == self._screen_off:
             return
         self._screen_off = off
+        if self._ramp.isActive():
+            self._stop_ramp()
+            self._apply(self._ramp_to)  # settle on the target: nothing is written while off
         self.screenOffChanged.emit()
         try:
             self._drive_panel(off)

@@ -471,5 +471,103 @@ class ProbeRetryTests(unittest.TestCase):
         self.assertEqual(d._ddc.sets[-1], 55)
 
 
+class RampTests(unittest.TestCase):
+    """The automatic day/night flip fades instead of jumping."""
+
+    def setUp(self):
+        self.d = make()
+        self.d._levels[False] = 100
+        self.d._levels[True] = 40
+        self.seen = []
+        self.d.brightnessChanged.connect(lambda: self.seen.append(self.d.brightness))
+
+    def sun_at(self, alt):
+        return mock.patch.object(display_mod.sun, "altitude", return_value=alt)
+
+    def run_ramp(self, limit=100):
+        for _ in range(limit):
+            if not self.d._ramp.isActive():
+                return
+            self.d._ramp_step()  # what the timer does, by hand
+        self.fail("ramp never finished")
+
+    def test_forced_check_applies_at_once(self):
+        with self.sun_at(-10):
+            self.d._check_sun(force=True)
+        self.assertEqual(self.seen, [40])
+        self.assertFalse(self.d._ramp.isActive())
+
+    def test_flip_fades_monotonically_and_stops(self):
+        with self.sun_at(30):
+            self.d._check_sun(force=True)
+        self.seen.clear()
+        with self.sun_at(-10):
+            self.d._check_sun()
+        self.assertTrue(self.d._night)
+        self.assertTrue(self.d._ramp.isActive())
+        self.run_ramp()
+        steps = [100] + self.seen
+        self.assertEqual(steps[-1], 40)
+        self.assertEqual(self.d.brightness, 40)
+        self.assertGreater(len(self.seen), 1)
+        for a, b in zip(steps, steps[1:]):
+            self.assertLess(b, a)
+            self.assertLessEqual(a - b, 5)  # ceil(60 / 12)
+        self.assertFalse(self.d._ramp.isActive())
+
+    def test_fades_back_up_at_dawn(self):
+        with self.sun_at(-10):
+            self.d._check_sun(force=True)
+        self.seen.clear()
+        with self.sun_at(30):
+            self.d._check_sun()
+        self.run_ramp()
+        self.assertEqual(self.d.brightness, 100)
+        self.assertEqual(self.seen, sorted(self.seen))
+
+    def test_set_brightness_mid_ramp_cancels_and_keeps_value(self):
+        with self.sun_at(30):
+            self.d._check_sun(force=True)
+        with self.sun_at(-10):
+            self.d._check_sun()
+        self.d._ramp_step()
+        self.d.setBrightness(70)
+        self.assertFalse(self.d._ramp.isActive())
+        self.assertEqual(self.d.brightness, 70)
+        self.assertEqual(self.d._levels[True], 70)
+
+    def test_periodic_check_does_not_jump_a_running_ramp(self):
+        with self.sun_at(30):
+            self.d._check_sun(force=True)
+        with self.sun_at(-10):
+            self.d._check_sun()
+            mid = self.d.brightness
+            self.d._check_sun()
+        self.assertEqual(self.d.brightness, mid)
+        self.assertTrue(self.d._ramp.isActive())
+
+    def test_screen_off_mid_ramp_settles_on_the_target(self):
+        with self.sun_at(30):
+            self.d._check_sun(force=True)
+        with self.sun_at(-10):
+            self.d._check_sun()
+        self.d.setScreenOff(True)
+        self.assertFalse(self.d._ramp.isActive())
+        self.assertEqual(self.d.brightness, 40)
+
+    def test_timer_drives_the_ramp(self):
+        with mock.patch.object(display_mod, "RAMP_MS", 24), \
+                mock.patch.object(display_mod, "RAMP_STEPS", 12):
+            d = make()
+        d._levels[True] = 40
+        with self.sun_at(-10):
+            d._check_sun()
+        deadline = time.time() + 3
+        while d._ramp.isActive() and time.time() < deadline:
+            app.processEvents()
+        self.assertEqual(d.brightness, 40)
+        self.assertFalse(d._ramp.isActive())
+
+
 if __name__ == "__main__":
     unittest.main()

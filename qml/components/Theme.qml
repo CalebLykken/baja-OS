@@ -80,7 +80,7 @@ QtObject {
             line: "#2f5663", text: "#e8f6f9", textDim: "#8fb2bd",
             accent: "#7fe0f0", warn: "#ff5f4d", ok: "#8fe0a8",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
-            radius: 20, border: 1, gauge: "arc", backdrop: "dial"
+            radius: 20, border: 1, gauge: "arc", backdrop: "facets"
         },
         // LCD: retro green monochrome, like an 80s dashboard display. Phosphor
         // green text on near-black, with segment gauges and a mono numeral
@@ -90,7 +90,7 @@ QtObject {
             line: "#2c4a22", text: "#b9f27a", textDim: "#7fae5a",
             accent: "#e4ff5a", warn: "#ff6a3d", ok: "#5fe08e",
             font: "", numFont: "DejaVu Sans Mono", numItalic: false, numWeight: Font.Bold,
-            radius: 2, border: 2, gauge: "segments", backdrop: "grid"
+            radius: 2, border: 2, gauge: "segments", backdrop: "scanlines"
         },
         // Sunset: deep purple at night with a gold accent. The gold sits far
         // from the pink-red warning colour, so an alert is never read as a
@@ -196,7 +196,7 @@ QtObject {
     readonly property int radius: s.radius
     readonly property int border: s.border
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
-    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves" or "dunes"
+    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves", "dunes", "facets" or "scanlines"
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

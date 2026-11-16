@@ -136,7 +136,7 @@ class StyleTableTest(unittest.TestCase):
         self.assertEqual(day["bg"], "#e3eef2")
         self.assertEqual(day["accent"], "#0a6f8c")
         self.assertEqual(night["radius"], 20)
-        self.assertEqual(night["backdrop"], "dial")
+        self.assertEqual(night["backdrop"], "facets")
         self.assertIn("glacier", main_choices())
         self.assertEqual(self.out["titles"]["glacier"], "Glacier")
 
@@ -152,7 +152,7 @@ class StyleTableTest(unittest.TestCase):
         self.assertEqual(night["numFont"], "DejaVu Sans Mono")
         self.assertFalse(night["numItalic"])
         self.assertEqual(night["gauge"], "segments")
-        self.assertEqual(night["backdrop"], "grid")
+        self.assertEqual(night["backdrop"], "scanlines")
         self.assertIn("lcd", main_choices())
         self.assertEqual(self.out["titles"]["lcd"], "LCD")
 

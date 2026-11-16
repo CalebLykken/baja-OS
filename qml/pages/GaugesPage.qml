@@ -129,6 +129,12 @@ Item {
             warnAbove: Units.temp(vehicle.limits.coolantHigh)
             warnMargin: Units.metric ? 5 / 1.8 : 5   // 5 °F as a difference
             peakHold: true
+
+            // A cold engine is not a warning, so no warning colour: just a
+            // note under the unit, as long as it is still below the cold limit.
+            // The coolant reading is in °F, so it is compared with the limit in °F.
+            note: vehicle.engineKnown && vehicle.limits.coolantCold !== undefined
+                  && vehicle.coolant < vehicle.limits.coolantCold ? "warming up" : ""
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

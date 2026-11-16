@@ -48,6 +48,7 @@ LIMITS = {
     "rpmHigh": 6000.0,
     "boostHigh": 15.0,          # overboost
     "coolantHigh": 230.0,       # overheating
+    "coolantCold": 160.0,       # below this the engine is still warming up: ease off the boost
     "intakeHigh": 150.0,
     "voltageLow": 12.0,         # not charging
     "voltageHigh": 15.0,        # overcharging

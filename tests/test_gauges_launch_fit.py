@@ -85,9 +85,12 @@ QtObject { property real rpm: 3000; property string gear: "5"; property bool eng
  property real intake: 90; property real voltage: 13.8; property bool voltageKnown: true
  property var codes: []; property real zeroToSixty: 7.3; property real zeroToHundred: 12.4
  property var limits: ({rpmHigh: 6000, boostHigh: 15, coolantHigh: 230, intakeHigh: 150,
-                        voltageHigh: 15, voltageLow: 11.5}) }""", QUrl.fromLocalFile(str(ROOT / "v.qml")))
+                        coolantCold: 160, voltageHigh: 15, voltageLow: 11.5}) }""", QUrl.fromLocalFile(str(ROOT / "v.qml")))
 vehicle = component.create()
 view.rootContext().setContextProperty("vehicle", vehicle)
+# An optional coolant reading (degrees F) for this run; the default is 190.
+if len(sys.argv) > 5:
+    vehicle.setProperty("coolant", float(sys.argv[5]))
 
 metric = sys.argv[2] == "metric"
 style = sys.argv[3]
@@ -152,14 +155,20 @@ out = {"card": {"x": 0, "y": 0, "w": speed.width(), "h": speed.height()},
        "unit": rect(named("gaugeUnit")), "note": rect(note),
        "hub_bottom": speed.height() / 2 + 8 + 13,
        "other_card_widths": [g.width() for g in gauges if g is not speed]}
+# The Coolant gauge's own note ("warming up" while the engine is cold).
+coolant_gauge = [g for g in gauges if str(g.property("label")) == "Coolant"][0]
+coolant_note = find(coolant_gauge, lambda i: i.objectName() == "gaugeNote")[0]
+out["coolant_note"] = coolant_note.property("text")
+out["coolant_note_visible"] = coolant_note.isVisible()
 print(json.dumps(out))
 '''
 
 
-def measure(units, style):
+def measure(units, style, coolant=None):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    extra = [] if coolant is None else [str(coolant)]
     with tempfile.TemporaryDirectory() as tmp:
-        result = subprocess.run([sys.executable, "-c", SCRIPT, str(ROOT), units, style, tmp],
+        result = subprocess.run([sys.executable, "-c", SCRIPT, str(ROOT), units, style, tmp, *extra],
                                 cwd=ROOT, capture_output=True, text=True, timeout=60, env=env)
     if result.returncode != 0:
         raise AssertionError(result.stdout + result.stderr)
@@ -231,6 +240,9 @@ class SpeedGaugeFitTests(unittest.TestCase):
             self.assertLessEqual(bottom(n), o["legend"]["y"])
         self.every(check)
 
+    def test_warm_engine_has_no_coolant_note(self):
+        self.every(lambda o: self.assertEqual(o["coolant_note"], ""))
+
     def test_readout_stays_clear_of_the_hub(self):
         def check(o):
             if o["value"]["y"] > o["hub_bottom"] - 40:  # the needle look puts it under the hub
@@ -239,6 +251,26 @@ class SpeedGaugeFitTests(unittest.TestCase):
 
 
 class SpeedGaugeFitMetricTests(SpeedGaugeFitTests):
+    units = "metric"
+
+
+class CoolantWarmingTests(unittest.TestCase):
+    """The Coolant gauge says "warming up" under its unit while the engine is
+    cold (120 F, where the demo starts) and nothing at 190 F."""
+    units = "imperial"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cold = {style: measure(cls.units, style, 120.0) for style in STYLES}
+
+    def test_cold_engine_says_warming_up(self):
+        for style, out in self.cold.items():
+            with self.subTest(style=style, units=self.units):
+                self.assertTrue(out["coolant_note_visible"])
+                self.assertEqual(out["coolant_note"], "warming up")
+
+
+class CoolantWarmingMetricTests(CoolantWarmingTests):
     units = "metric"
 
 

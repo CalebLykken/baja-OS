@@ -83,6 +83,11 @@ class ThresholdTest(unittest.TestCase):
         self.assertEqual(warnings(**{**FINE, "coolant": 231}), ["coolant"])
         self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantHigh"]}), [])
 
+    def test_cold_limit_is_below_overheating(self):
+        # The "warming up" note ends below the cold limit; the overheat warning starts above the hot one.
+        self.assertLess(LIMITS["coolantCold"], LIMITS["coolantHigh"])
+        self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantCold"] - 1}), [])
+
     def test_battery_voltage_both_ways(self):
         self.assertEqual(warnings(**{**FINE, "voltage": 11.9}), ["voltage"])
         self.assertEqual(warnings(**{**FINE, "voltage": 15.1}), ["voltage"])

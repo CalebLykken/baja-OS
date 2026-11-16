@@ -372,112 +372,75 @@ Window {
     // The last start had to take an update back (backend/updater.py): say
     // so, once, until OK. Declared before the pairing and shutdown prompts so
     // they stay above it and their buttons stay tappable.
-    Rectangle {
+    Prompt {
         id: updateNotice
         readonly property string text: typeof updater === "undefined" ? "" : updater.notice
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        visible: text !== ""
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: text !== ""
+        title: "Software update"
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: noticeColumn.implicitHeight + 64
-            ColumnLayout {
-                id: noticeColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    text: "Software update"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: updateNotice.text
-                }
-                TextButton {
-                    Layout.topMargin: 12
-                    Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                    text: "OK"; primary: true
-                    onClicked: updater.dismissNotice()
-                }
-            }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: updateNotice.text
+        }
+        TextButton {
+            Layout.topMargin: 12
+            Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+            text: "OK"; primary: true
+            onClicked: updater.dismissNotice()
         }
     }
 
     // A phone wants to pair (backend/btagent.py): nothing pairs without a
     // tap here. Phones with no screen have no code to compare.
-    Rectangle {
+    Prompt {
         id: pairPrompt
         readonly property bool asking: typeof bluetooth !== "undefined" && bluetooth.pairPending
         readonly property string name: asking ? bluetooth.pairName : ""
         readonly property string address: asking ? bluetooth.pairAddress : ""
         readonly property string code: asking ? bluetooth.pairCode : ""
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: asking ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: asking
+        title: "Pair with " + name + "?"       // the name comes from the other device
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: pairColumn.implicitHeight + 64
-            ColumnLayout {
-                id: pairColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText      // the name comes from the other device
-                    text: "Pair with " + pairPrompt.name + "?"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
-                    text: pairPrompt.address
-                }
-                Label {
-                    visible: pairPrompt.code !== ""
-                    Layout.topMargin: 8
-                    numeric: true
-                    text: pairPrompt.code
-                    font.pixelSize: Theme.fontHuge
-                    font.weight: Theme.numWeight
-                    font.letterSpacing: 6
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
-                                                 : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
-                }
-                RowLayout {
-                    Layout.topMargin: 12
-                    spacing: 14
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Pair"; primary: true
-                        onClicked: bluetooth.acceptPairing()
-                    }
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Cancel"
-                        onClicked: bluetooth.cancelPairing()
-                    }
-                }
+        Label {
+            visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+            text: pairPrompt.address
+        }
+        Label {
+            visible: pairPrompt.code !== ""
+            Layout.topMargin: 8
+            numeric: true
+            text: pairPrompt.code
+            font.pixelSize: Theme.fontHuge
+            font.weight: Theme.numWeight
+            font.letterSpacing: 6
+        }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
+                                         : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
+        }
+        RowLayout {
+            Layout.topMargin: 12
+            spacing: 14
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Pair"; primary: true
+                onClicked: bluetooth.acceptPairing()
+            }
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Cancel"
+                onClicked: bluetooth.cancelPairing()
             }
         }
     }
@@ -485,7 +448,7 @@ Window {
     // The truck was turned off: the Pi shuts down at the end of the
     // countdown (backend/ignition.py) unless "Keep on" is tapped. If the
     // shutdown fails, it says so instead, until OK.
-    Rectangle {
+    Prompt {
         id: keyOffPrompt
         readonly property int secondsLeft: typeof keyOff === "undefined" ? -1 : keyOff.countdown
         readonly property bool failed: typeof keyOff !== "undefined" && keyOff.error !== ""
@@ -493,66 +456,48 @@ Window {
         onFailedChanged: if (failed) showError = true
         onSecondsLeftChanged: if (secondsLeft >= 0) showError = false
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: secondsLeft >= 0 || failed ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: secondsLeft >= 0 || failed
+        title: showError ? "Couldn't shut down" : "The truck is off"
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: promptColumn.implicitHeight + 64
-            ColumnLayout {
-                id: promptColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    text: keyOffPrompt.showError ? "Couldn't shut down" : "The truck is off"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: keyOffPrompt.showError
-                          ? "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
-                          : "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
-                }
-                Label {
-                    visible: keyOffPrompt.showError
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
-                    text: typeof keyOff !== "undefined" ? keyOff.error : ""
-                }
-                RowLayout {
-                    visible: keyOffPrompt.showError
-                    Layout.topMargin: 12
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "OK"; primary: true
-                        onClicked: keyOff.dismiss()
-                    }
-                }
-                RowLayout {
-                    visible: !keyOffPrompt.showError
-                    Layout.topMargin: 12
-                    spacing: 14
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Keep on"; primary: true
-                        onClicked: keyOff.keepOn()
-                    }
-                    TextButton {
-                        Layout.preferredHeight: Theme.touch
-                        icon: "power"; text: "Shut down now"; danger: true
-                        onClicked: system.powerOff()
-                    }
-                }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: keyOffPrompt.showError
+                  ? "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
+                  : "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
+        }
+        Label {
+            visible: keyOffPrompt.showError
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+            text: typeof keyOff !== "undefined" ? keyOff.error : ""
+        }
+        RowLayout {
+            visible: keyOffPrompt.showError
+            Layout.topMargin: 12
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "OK"; primary: true
+                onClicked: keyOff.dismiss()
+            }
+        }
+        RowLayout {
+            visible: !keyOffPrompt.showError
+            Layout.topMargin: 12
+            spacing: 14
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Keep on"; primary: true
+                onClicked: keyOff.keepOn()
+            }
+            TextButton {
+                Layout.preferredHeight: Theme.touch
+                icon: "power"; text: "Shut down now"; danger: true
+                onClicked: system.powerOff()
             }
         }
     }

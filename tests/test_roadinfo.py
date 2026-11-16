@@ -199,3 +199,63 @@ class ParseMatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeldLimitTest(unittest.TestCase):
+    """A red light must not lose the limit sign, and a parked truck runs no timer."""
+
+    def setUp(self):
+        inline = mock.patch("backend.roadinfo.threading", SimpleNamespace(Thread=InlineThread))
+        inline.start()
+        self.addCleanup(inline.stop)
+        self.now = 100.0
+        clock = mock.patch("backend.roadinfo.time.monotonic", lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.gps = Gps()
+        self.info = RoadInfo(self.gps)
+        self.assertFalse(self.info._timer.isActive())
+        for n in range(4):
+            self.now += 1.0
+            self.gps._apply(real(n))
+        self.assertTrue(self.info._timer.isActive())
+        self.check(b'{"edges": [{"speed_limit": 50, "names": ["Main St"]}]}')
+        self.assertEqual((self.info.speedLimit, self.info.roadName), (50, "Main St"))
+
+    def check(self, body):
+        with mock.patch("backend.roadinfo.urllib.request.urlopen",
+                        lambda req, timeout: io.BytesIO(body)):
+            self.info._check()
+
+    def stop_at(self, n, speed=0.0):
+        self.gps._apply(dict(real(n), speed=speed))
+
+    def test_a_long_red_light_keeps_the_limit(self):
+        self.stop_at(3)
+        self.now += 60
+        self.info._check()
+        self.assertEqual((self.info.speedLimit, self.info.roadName), (50, "Main St"))
+
+    def test_driving_on_without_a_match_clears_it(self):
+        self.now += 60
+        self.gps._apply(real(4))
+        self.info._busy = True        # no new answer yet
+        self.info._check()
+        self.assertEqual((self.info.speedLimit, self.info.roadName), (0, ""))
+
+    def test_stopped_but_far_from_the_match_clears_it(self):
+        self.now += 60
+        self.stop_at(3 + 200)         # 0.001 degree of latitude is about 111 m
+        self.info._check()
+        self.assertEqual(self.info.speedLimit, 0)
+
+    def test_timer_stops_once_parked_with_nothing_held(self):
+        self.stop_at(3)
+        self.now += 60
+        self.info._check()
+        self.assertTrue(self.info._timer.isActive())    # still holding the limit
+        self.stop_at(3 + 200)
+        self.info._check()
+        self.assertFalse(self.info._timer.isActive())
+        self.gps._apply(real(300))
+        self.assertTrue(self.info._timer.isActive())

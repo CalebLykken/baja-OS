@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from PyQt6.QtCore import QCoreApplication
 
 from backend import gps as gpsmod
-from backend.gps import (DemoRoute, Gps, Position, configure_receiver, nmea_coord, nmea_fields,
+from backend.gps import (DemoRoute, Gps, Position, configure_receiver, next_wait, nmea_coord, nmea_fields,
                          sky_report, tpv_report, ubx_frame, ubx_nav5_frame, ubx_rate_frame, ubx_replies,
                          ubx_valset_frame)
 
@@ -932,3 +932,69 @@ class GpsdWithoutReceiverTest(unittest.TestCase):
         tpv = {"class": "TPV", "mode": 3, "lat": 47.0, "lon": -122.0}
         _, got = self.run_gpsd([tpv])
         self.assertEqual(got[:2], [{"gpsd": True}, {"receiver": True}])
+
+
+class ReceiverRetryBackoffTest(unittest.TestCase):
+    """With nothing plugged in the look for a receiver backs off instead of every 5 s."""
+
+    def test_the_wait_doubles_up_to_the_cap(self):
+        waits = [5]
+        for _ in range(4):
+            waits.append(next_wait(waits[-1], 0))
+        self.assertEqual(waits, [5, 10, 20, 30, 30])
+
+    def test_a_long_run_that_found_a_receiver_starts_again_quickly(self):
+        self.assertEqual(next_wait(30, 120), 5)
+        self.assertEqual(next_wait(5, 31), 5)
+
+    def test_a_run_of_30_s_or_less_keeps_backing_off(self):
+        self.assertEqual(next_wait(5, 30), 10)
+
+    def test_the_loop_waits_longer_each_time_nothing_is_plugged_in(self):
+        g = Gps(None)
+
+        class Stop(Exception):
+            pass
+
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 5:
+                raise Stop
+
+        with mock.patch.object(g, "_read_gpsd", return_value=False), \
+                mock.patch("backend.gps.find_receiver", return_value=None), \
+                mock.patch("backend.gps.time.sleep", side_effect=sleep):
+            with self.assertRaises(Stop):
+                g._receiver_loop()
+        self.assertEqual(sleeps, [5, 10, 20, 30, 30])
+
+    def test_the_loop_looks_again_quickly_after_a_receiver_that_worked(self):
+        g = Gps(None)
+
+        class Stop(Exception):
+            pass
+
+        sleeps = []
+        now = [0.0]
+        looks = []
+
+        def read_gpsd():
+            looks.append(1)
+            if len(looks) == 3:
+                now[0] += 120            # the third look ran for two minutes, then the receiver dropped
+            return False
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                raise Stop
+
+        with mock.patch.object(g, "_read_gpsd", side_effect=read_gpsd), \
+                mock.patch("backend.gps.find_receiver", return_value=None), \
+                mock.patch("backend.gps.time.monotonic", side_effect=lambda: now[0]), \
+                mock.patch("backend.gps.time.sleep", side_effect=sleep):
+            with self.assertRaises(Stop):
+                g._receiver_loop()
+        self.assertEqual(sleeps, [5, 10, 5])

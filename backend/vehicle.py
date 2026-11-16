@@ -30,11 +30,14 @@ from backend.demo import allowed
 from backend.gps import MPH_TO_MS
 from backend.obd import describe
 from backend.prefs import as_bool
+from backend.routing import boot_id
+from backend.trip import PEAKS_SETTING, peaks_record, saved_peaks, uptime
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
 LAUNCH_MAX_S = 30  # a run from a standstill to 60 mph taking longer than this isn't a launch
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
 VOLTS_MS = 180000  # a battery reading is current this long after the latest one
+PEAKS_SAVE_S = 30  # the top speed and peak rpm are saved at most this often
 ENGINE = ("rpm", "speed", "boost", "coolant", "intake")  # what only the car can answer
 
 # Rough 5-speed gearing for the 2005 Baja Turbo: mph per 1000 rpm in each gear.
@@ -45,22 +48,38 @@ LIMITS = {
     "rpmHigh": 6000.0,
     "boostHigh": 15.0,          # overboost
     "coolantHigh": 230.0,       # overheating
+    "coolantCold": 160.0,       # below this the engine is still warming up: ease off the boost
     "intakeHigh": 150.0,
     "voltageLow": 12.0,         # not charging
     "voltageHigh": 15.0,        # overcharging
 }
 
 
-def warnings(coolant, voltage, boost, mil=False):
+# How far back in range a reading must be before its warning clears, so one
+# hovering on a limit doesn't flicker the warning on and off.
+CLEAR = {
+    "coolant": 5.0,             # °F
+    "boost": 1.0,               # psi
+    "voltage": 0.3,             # volts, inside both limits
+}
+
+
+def warnings(coolant, voltage, boost, mil=False, active=()):
     """The engine readings out of range, most urgent first: 'coolant',
     'voltage' and 'boost', then 'mil' (the check-engine lamp is on). A
-    voltage of None (not read lately) can't warn."""
+    voltage of None (not read lately) can't warn. `active` names the ones
+    already warning: those stay until the reading is back in range by the
+    CLEAR margin."""
     found = []
-    if coolant > LIMITS["coolantHigh"]:
+    held = "coolant" in active
+    if coolant > LIMITS["coolantHigh"] - (CLEAR["coolant"] if held else 0.0):
         found.append("coolant")
-    if voltage is not None and not LIMITS["voltageLow"] <= voltage <= LIMITS["voltageHigh"]:
-        found.append("voltage")
-    if boost > LIMITS["boostHigh"]:
+    if voltage is not None:
+        m = CLEAR["voltage"] if "voltage" in active else 0.0
+        if not LIMITS["voltageLow"] + m <= voltage <= LIMITS["voltageHigh"] - m:
+            found.append("voltage")
+    held = "boost" in active
+    if boost > LIMITS["boostHigh"] - (CLEAR["boost"] if held else 0.0):
         found.append("boost")
     if mil:
         found.append("mil")
@@ -77,6 +96,22 @@ def estimate_gear(mph, rpm):
     return best + 1 if abs(per_k - GEARS[best]) / GEARS[best] < 0.12 else 0
 
 
+def settled_gear(current, seen, count, estimate, mph, rpm):
+    """Steady the gear readout through shifts. `seen` is the last raw
+    estimate and `count` how many samples in a row gave it. A new gear takes
+    2 in a row, a drop to 0 (clutch in, between gears) takes 3, unless the
+    car is stopped or the engine is off, which shows at once. Returns
+    (gear, seen, count)."""
+    count = count + 1 if estimate == seen else 1
+    if estimate == current:
+        return current, estimate, count
+    if estimate == 0 and (mph < 3 or rpm < 500):
+        return 0, estimate, count
+    if count >= (3 if estimate == 0 else 2):
+        return estimate, estimate, count
+    return current, estimate, count
+
+
 class VehicleData(QObject):
     changed = pyqtSignal()
     liveChanged = pyqtSignal()
@@ -86,6 +121,7 @@ class VehicleData(QObject):
     voltageKnownChanged = pyqtSignal()
     codesChanged = pyqtSignal()
     launchChanged = pyqtSignal()
+    topSpeedChanged = pyqtSignal()
 
     def __init__(self, settings=None, demo=None, parent=None):
         """`demo` is main.py's --demo (True), --no-demo (False) or neither
@@ -103,7 +139,9 @@ class VehicleData(QObject):
         self._intake = 72.0
         self._voltage = 14.2
         self._gear = 1
+        self._gear_seen, self._gear_count = 1, 0   # see settled_gear
         self._live = False
+        self._active = []         # the warnings now latched (see CLEAR)
         self._volts_real = False  # `_voltage` is the adapter's reading, current
         self._mil, self._codes, self._codes_count = False, [], 0   # the check-engine lamp, from the car
         self._gps = None
@@ -114,6 +152,16 @@ class VehicleData(QObject):
         self._launch_six = False  # ... and has already passed 60 mph
         self._zero_sixty = 0.0    # seconds, the last 0-60 mph (0 = none yet); memory only
         self._zero_hundred = 0.0  # likewise 0-100 km/h
+        # the top speed and peak rpm since key-on, from real readings only; they
+        # carry across a dashboard restart in the same boot (see backend/trip.py)
+        self._top_mph = 0.0
+        self._peak_rpm = 0.0
+        self._peaks_dirty = False
+        self._peaks_saved_at = None
+        if settings is not None:
+            kept = saved_peaks(str(settings.get(PEAKS_SETTING, "")), boot_id(), uptime())
+            if kept:
+                self._top_mph, self._peak_rpm = kept
         self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._volts_stale = QTimer(self, singleShot=True, interval=VOLTS_MS, timeout=self._volts_aged)
         self._timer = QTimer(self)
@@ -137,12 +185,38 @@ class VehicleData(QObject):
         gps = self._gps
         self._gps_mph = gps.speed / MPH_TO_MS if gps.realFix else None
         self._gps_real = gps.source == "gps"
+        if self._gps_mph is not None and not self._live:
+            self._note_peaks(self._gps_mph, None)
         if self.speed != was or self._flags() != before:
             self._settle(before)
         else:
             # a stopped receiver reports the same 0.0 on every fix: still
             # re-arm the launch, or its start time goes stale while it waits
             self._watch_launch()
+
+    def _note_peaks(self, mph, rpm):
+        """Keep the top speed and peak rpm from a real reading (never the
+        simulation's), and save them, at most once every PEAKS_SAVE_S."""
+        top = False
+        if mph is not None and math.isfinite(mph) and mph > self._top_mph:
+            self._top_mph, top = mph, True
+        if rpm is not None and math.isfinite(rpm) and rpm > self._peak_rpm:
+            self._peak_rpm, top = rpm, True
+        if top:
+            self._peaks_dirty = True
+            self.topSpeedChanged.emit()
+        # Nothing to save, no settings, or saved too recently: stop before
+        # boot_id(), which reads a file and this runs on every OBD reading.
+        if not self._peaks_dirty or self._settings is None:
+            return
+        now = self._clock()
+        if self._peaks_saved_at is not None and now - self._peaks_saved_at < PEAKS_SAVE_S:
+            return
+        boot = boot_id()
+        if boot:   # no boot id: it couldn't be restored
+            self._peaks_saved_at, self._peaks_dirty = now, False
+            self._settings.set(PEAKS_SETTING, peaks_record(
+                self._top_mph, self._peak_rpm, boot, uptime()))
 
     def _flags(self):
         return self._live, self.simulated, self.engineKnown, self.speedKnown, self.voltageKnown
@@ -198,7 +272,14 @@ class VehicleData(QObject):
         if "voltage" in values:
             self._take_voltage(float(values["voltage"]))
         if answering:
-            self._gear = estimate_gear(self._speed, self._rpm)
+            self._note_peaks(values.get("speed"), values.get("rpm"))
+            estimate = estimate_gear(self._speed, self._rpm)
+            if self._live:
+                self._gear, self._gear_seen, self._gear_count = settled_gear(
+                    self._gear, self._gear_seen, self._gear_count,
+                    estimate, self._speed, self._rpm)
+            else:       # the first reading after quiet is taken as it comes
+                self._gear, self._gear_seen, self._gear_count = estimate, estimate, 1
             self._stale.start()
             self._live = True
             if not self._answered:
@@ -298,9 +379,11 @@ class VehicleData(QObject):
         'mil' (the check-engine lamp is on), from the car only: the
         simulation never warns."""
         if not self._live:
+            self._active = []
             return []
-        return warnings(self._coolant, self._voltage if self._volts_real else None, self._boost,
-                        mil=self._mil)
+        self._active = warnings(self._coolant, self._voltage if self._volts_real else None,
+                                self._boost, mil=self._mil, active=self._active)
+        return list(self._active)
 
     @pyqtProperty(bool, notify=codesChanged)
     def milOn(self):
@@ -357,6 +440,16 @@ class VehicleData(QObject):
     def _engine(self, value):
         """What the UI reads: 0 for an engine value that isn't known."""
         return value if self.engineKnown else 0.0
+
+    @pyqtProperty(float, notify=topSpeedChanged)
+    def topSpeed(self):
+        """The fastest real speed since key-on, in mph (0 = none yet)."""
+        return self._top_mph
+
+    @pyqtProperty(float, notify=topSpeedChanged)
+    def peakRpm(self):
+        """The highest real rpm since key-on (0 = none yet)."""
+        return self._peak_rpm
 
     @pyqtProperty(float, notify=launchChanged)
     def zeroToSixty(self):

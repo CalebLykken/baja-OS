@@ -1,5 +1,6 @@
-"""Render the splash/boot-screen stills (baja-side.png, plus a hero shot)
-from the portfolio's baja.glb with Blender:
+"""Render side-profile and hero stills (baja-side.png, baja-hero.png) from the
+portfolio's baja.glb with Blender. The boot screen and splash now use
+tools/render_boot.py's Atlantic Blue three-quarter render instead.
 
     blender -b --python tools/render_stills.py -- path/to/baja.glb OUTDIR
 

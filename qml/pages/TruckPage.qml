@@ -6,13 +6,14 @@ import "../assets/truck"
 
 // The Baja in 3D: turns slowly on its own, drag sideways to spin it (let go
 // mid-swipe and it keeps turning, then slows). Opening the page whips it
-// round once, at most every 30 s. Tap the name five times within 3 s for a
+// round once, at most every 30 s. It rests after 90 s with no touch, and any
+// touch wakes it. Tap the name five times within 3 s for a
 // showroom double spin and a one-line aside. Only
 // renders while this page is on screen (PageHost hides it otherwise), so
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
 // triangles) converted to Qt's own mesh files, which load at once, with
-// its materials put right (tools/convert_truck.py): glossy gold paint,
-// grey cladding, tinted glass, and BAJA plates. Under it, this trip so
+// its materials put right (tools/convert_truck.py): glossy Atlantic Blue
+// paint with matching cladding, tinted glass, and BAJA plates. Under it, this trip so
 // far (the live readouts are on Home and Gauges).
 Item {
     id: page
@@ -21,11 +22,26 @@ Item {
 
     property real spin: -35            // degrees, around the vertical axis
     property bool dragging: false
+    property bool resting: false       // true after 90 s with no touch
 
-    // Slow idle turntable; pauses while you drag and for a moment after.
+    // Rest after 90 s with no touch: the turntable stops so the Pi can cool
+    // in a hot cab. Any touch, a spin or reopening the page wakes it again.
+    // A one-shot animation rather than a Timer, so no timer runs idle.
+    SequentialAnimation {
+        id: restTimer
+        PauseAnimation { duration: 90000 }
+        ScriptAction { script: page.resting = true }
+    }
+    function wake() {
+        resting = false
+        restTimer.restart()
+    }
+
+    // Slow idle turntable; pauses while you drag, for a moment after, and
+    // once it has rested.
     NumberAnimation on spin {
         id: turntable
-        running: page.visible && !page.dragging && !resume.running && !intro.running && !flick.running
+        running: page.visible && !page.dragging && !page.resting && !resume.running && !intro.running && !flick.running
         from: page.spin; to: page.spin + 360
         duration: 48000
         loops: Animation.Infinite
@@ -73,6 +89,7 @@ Item {
         eggTaps++
         if (eggTaps < 5) return
         eggTaps = 0
+        wake()
         eggLine = eggLines[eggIndex]
         eggIndex = (eggIndex + 1) % eggLines.length
         flick.stop()
@@ -88,8 +105,13 @@ Item {
         PauseAnimation { duration: 4000 }
         ScriptAction { script: page.eggLine = "" }
     }
-    onVisibleChanged: if (visible) playIntro()
-    Component.onCompleted: if (visible) playIntro()
+    // Off screen nothing runs: the rest timer stops and the page wakes on return.
+    // Reopening wakes the truck even when the open spin is still cooling down.
+    onVisibleChanged: {
+        if (visible) { wake(); playIntro() }
+        else restTimer.stop()
+    }
+    Component.onCompleted: if (visible) { wake(); playIntro() }
 
     // Flick: a swipe released at speed keeps turning and slows to a stop.
     NumberAnimation {
@@ -195,6 +217,7 @@ Item {
         property real lastVxAt: 0      // when lastVx was recorded (ms)
         onActiveChanged: {
             page.dragging = active
+            page.wake()
             if (active) {
                 intro.stop()
                 flick.stop()
@@ -217,6 +240,10 @@ Item {
         onCentroidChanged: if (active) { lastVx = centroid.velocity.x; lastVxAt = Date.now() }
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
+
+    // Any tap on the page wakes a rested truck. Taps on the name still reach
+    // its own handler below, so the easter egg is unaffected.
+    TapHandler { onTapped: page.wake() }
 
     // The truck's name, plus this trip in the same strip as Home's readouts.
     Column {
@@ -243,6 +270,57 @@ Item {
         }
     }
 
+    // One-glance health line at the top right: the check-engine lamp and
+    // codes, else the first warning, else "Engine OK" with the battery.
+    // Hidden unless the car is answering (no clutter in demo or key-off).
+    // Purely bindings, so it costs nothing idle; a tap opens Gauges.
+    Card {
+        id: status
+        readonly property bool have: typeof vehicle !== "undefined" && vehicle.engineKnown && vehicle.live
+        readonly property int codes: have ? vehicle.codeCount : 0
+        readonly property var names: ({ coolant: "Overheating", voltage: "Battery", boost: "Overboost" })
+        readonly property string other: {
+            if (!have) return ""
+            var w = vehicle.warnings
+            for (var i = 0; i < w.length; i++)
+                if (w[i] !== "mil") return names[w[i]] || w[i]
+            return ""
+        }
+        readonly property bool check: have && (vehicle.milOn || codes > 0)
+        readonly property bool bad: check || other !== ""
+
+        visible: have
+        anchors { right: parent.right; top: parent.top; rightMargin: 8; topMargin: 4 }
+        width: statusRow.implicitWidth + 32
+        height: 64
+        tappable: true
+        onTapped: page.navigate(3)
+
+        Row {
+            id: statusRow
+            anchors.centerIn: parent
+            spacing: 10
+            Icon {
+                name: "engine_check"; size: 28
+                color: status.bad ? Theme.warn : Theme.ok
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Label {
+                text: status.check ? "Check engine" + (status.codes > 0 ? " \u00b7 " + status.codes + (status.codes === 1 ? " code" : " codes") : "")
+                      : status.other !== "" ? status.other : "Engine OK"
+                color: status.bad ? Theme.warn : Theme.ok
+                font.pixelSize: Theme.fontSmall + 2; font.weight: Font.DemiBold
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Label {
+                visible: status.have && vehicle.voltageKnown && !status.bad
+                text: status.have ? vehicle.voltage.toFixed(1) + " V" : ""
+                color: Theme.textDim; font.pixelSize: Theme.fontSmall
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
+
     Card {
         id: readouts
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
@@ -251,7 +329,7 @@ Item {
         readonly property real minutes: page.trip ? Math.floor(page.trip.movingSeconds / 60) : 0
 
         RowLayout {
-            anchors { fill: parent; margins: 20 }
+            anchors { fill: parent; leftMargin: 14; rightMargin: 14; topMargin: 20; bottomMargin: 20 }
             Readout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: page.trip ? "Trip since " + Units.timeText(page.trip.started) : "Trip"
@@ -269,6 +347,12 @@ Item {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: "Average"
                 value: page.trip && page.trip.movingSeconds > 0 ? Math.round(Units.speed(page.trip.averageMph)) : "—"
+                unit: Units.speedUnit
+            }
+            Readout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Top speed"
+                value: vehicle.topSpeed > 0 ? Math.round(Units.speed(vehicle.topSpeed)) : "—"
                 unit: Units.speedUnit
             }
             Readout {

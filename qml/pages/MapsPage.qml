@@ -152,8 +152,12 @@ Item {
     }
 
     // ---- what the controls do ------------------------------------------------------------
-    function openSearch() { query = ""; panel = "search"; typing = false }
+    // "Set Home" / "Set Work" in the empty search list: the next place picked is
+    // saved as that ('home', 'work', or '' for an ordinary pick).
+    property string saveAs: ""
+    function openSearch() { saveAs = ""; query = ""; panel = "search"; typing = false }
     function closePanel() {
+        saveAs = ""
         if (panel === "place") cancelPlace()
         panel = ""
         typing = false
@@ -180,6 +184,11 @@ Item {
         panel = "results"
     }
     function choose(p) {
+        // Saved only when it is not already that place, so picking the current
+        // Home through "Set Home" does not undo it.
+        if (saveAs === "home" && !samePlace(home, p)) toggleHome(p)
+        else if (saveAs === "work" && !samePlace(work, p)) toggleWork(p)
+        saveAs = ""
         goName = ""                     // an ordinary pick only previews
         place = p
         typing = false
@@ -316,6 +325,7 @@ Item {
         }
     }
     function cancelPlace() {
+        saveAs = ""
         goName = ""
         if (hasRouting && !routing.active) routing.stop()
         place = null
@@ -330,6 +340,13 @@ Item {
         routing.stop()
         place = null
         if (map) map.call("clearPlace()")
+    }
+
+    function findParkingHere() {
+        // At the destination: end the route, then list the nearest parking
+        // around where the truck stopped (the search starts from the gps fix).
+        endRoute()
+        searchCategory("parking", "Parking")
     }
 
     // Zoom keys appear for a while after the map is touched.
@@ -550,6 +567,25 @@ Item {
                     id: quick
                     width: parent.width
                     spacing: 6
+                    Heading {
+                        visible: page.saveAs !== ""
+                        text: page.saveAs === "work" ? "Pick your Work" : "Pick your Home"
+                        color: page.cDim
+                    }
+                    ResultRow {
+                        visible: page.home === null
+                        icon: "home"
+                        title: "Set Home"
+                        subtitle: "Search for it, then it is saved"
+                        onHit: { page.saveAs = "home"; page.startTyping() }
+                    }
+                    ResultRow {
+                        visible: page.work === null
+                        icon: "work"
+                        title: "Set Work"
+                        subtitle: "Search for it, then it is saved"
+                        onHit: { page.saveAs = "work"; page.startTyping() }
+                    }
                     ResultRow {
                         visible: page.home !== null
                         icon: "home"
@@ -636,7 +672,17 @@ Item {
                 clip: true
                 spacing: 6
                 boundsBehavior: Flickable.StopAtBounds
-                model: maps.results
+                // Waiting for a search (the 180 ms debounce or the search itself):
+                // the last search's rows don't stay on screen meanwhile.
+                readonly property bool waiting: searchDelay.running || (page.hasMaps && maps.searching)
+                model: searchDelay.running ? [] : maps.results
+                header: Heading {
+                    width: resultList.width
+                    visible: page.saveAs !== ""
+                    height: visible ? implicitHeight : 0
+                    text: page.saveAs === "work" ? "Pick your Work" : "Pick your Home"
+                    color: page.cDim
+                }
                 delegate: ResultRow {
                     required property var modelData
                     width: resultList.width
@@ -647,10 +693,10 @@ Item {
                     onHit: page.choose(modelData)
                 }
                 MapLabel {
-                    visible: resultList.count === 0
+                    visible: resultList.count === 0 && (resultList.waiting || page.panel === "results" || page.query.trim() !== "")
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Nothing by that name in the offline map"
+                    text: resultList.waiting ? "Searching..." : "Nothing by that name in the offline map"
                     color: page.cDim
                     font.pixelSize: Theme.fontBody
                 }
@@ -667,7 +713,8 @@ Item {
                     MapLabel {
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        maximumLineCount: 2
+                        // One line while a route shows, so Go always has room.
+                        maximumLineCount: page.hasRouting && routing.previewing ? 1 : 2
                         elide: Text.ElideRight
                         text: page.place ? page.place.name : ""
                         font.pixelSize: Theme.fontTitle + 4
@@ -680,7 +727,6 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    Item { width: 1; height: 6 }
                     // Keep it: Home, Work or a favourite (each lit when it is, tap to undo).
                     RowLayout {
                         width: parent.width
@@ -704,7 +750,6 @@ Item {
                             onHit: page.toggleFavourite(page.place)
                         }
                     }
-                    Item { width: 1; height: 12 }
                     // The route, worked out as soon as the place was picked.
                     MapLabel {
                         visible: page.hasRouting && routing.previewing
@@ -721,39 +766,73 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
+                    // The main road, and a warning if there is a toll. This one line also
+                    // says when the route is being worked out again (a route option
+                    // changed) or that failed, so the card never grows past Go.
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing && (routing.via !== "" || routing.hasToll || routing.computing || routing.error !== "")
+                        width: parent.width
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                        text: !page.hasRouting ? ""
+                              : routing.computing ? "Finding a route"
+                              : routing.error !== "" ? routing.error
+                              : (routing.via !== "" ? "via " + routing.via : "")
+                                + (routing.hasToll ? (routing.via !== "" ? " \u00b7 " : "") + "Toll road" : "")
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
                     MapLabel {
                         visible: page.hasRouting && routing.previewing && routing.stopCount > 0
                         width: parent.width
-                        wrapMode: Text.WordWrap
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
                         text: page.hasRouting ? "Stops: " + routing.stops.map(s => s.name).join(", ") : ""
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    // A ferry on the way, one row per crossing.
-                    Repeater {
-                        model: page.hasRouting && routing.previewing ? routing.ferries : []
-                        Row {
-                            width: parent.width
-                            spacing: 8
-                            Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
-                            MapLabel {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 40
-                                wrapMode: Text.WordWrap
-                                text: "Ferry" + (modelData.name !== "Ferry" ? ": " + modelData.name : "") + (modelData.minutes > 0 ? ", " + modelData.minutes + " min" : "")
-                                color: page.cDim
-                                font.pixelSize: Theme.fontBody
+                    // A ferry on the way: one line, the first crossing and how many more.
+                    Row {
+                        visible: page.hasRouting && routing.previewing && routing.ferries.length > 0
+                        width: parent.width
+                        spacing: 8
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
+                        MapLabel {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 40
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                            text: {
+                                if (!page.hasRouting || routing.ferries.length === 0) return ""
+                                var f = routing.ferries[0]
+                                return "Ferry" + (f.name !== "Ferry" ? ": " + f.name : "") + (f.minutes > 0 ? ", " + f.minutes + " min" : "")
+                                       + (routing.ferries.length > 1 ? " + " + (routing.ferries.length - 1) + " more" : "")
                             }
+                            color: page.cDim
+                            font.pixelSize: Theme.fontBody
                         }
                     }
-                    // Being worked out again (a route option changed), or that failed.
-                    MapLabel {
-                        visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")
+                    // Avoid options, one tap away: lit while that kind of road is
+                    // avoided. Changing one reroutes the preview (Router.setAvoid).
+                    RowLayout {
+                        visible: page.hasRouting && routing.previewing
                         width: parent.width
-                        wrapMode: Text.WordWrap
-                        text: !page.hasRouting ? "" : routing.computing ? "Finding a route" : routing.error
-                        color: page.cDim
-                        font.pixelSize: Theme.fontBody
+                        spacing: 10
+                        OptionChip {
+                            label: "No highways"
+                            lit: page.hasRouting && routing.avoidHighways
+                            onHit: routing.setAvoid("avoidHighways", !routing.avoidHighways)
+                        }
+                        OptionChip {
+                            label: "No tolls"
+                            lit: page.hasRouting && routing.avoidTolls
+                            onHit: routing.setAvoid("avoidTolls", !routing.avoidTolls)
+                        }
+                        OptionChip {
+                            label: "No ferries"
+                            lit: page.hasRouting && routing.avoidFerries
+                            onHit: routing.setAvoid("avoidFerries", !routing.avoidFerries)
+                        }
                     }
                     MapLabel {
                         visible: !page.hasRouting || !routing.previewing
@@ -819,6 +898,13 @@ Item {
             // only plays on the change to arrived, not when the page opens
             // already arrived, and everything stops by itself.
             readonly property bool arrivedNow: page.hasRouting && routing.arrived
+            // Guidance that can't be trusted: the truck left the line and the
+            // new route hasn't landed, or asking for one failed (the old line
+            // stays, so its arrow is stale).
+            readonly property bool offNow: page.hasRouting && routing.offRoute && routing.error === "" && !routing.computing && !routing.arrived
+            // A failed reroute leaves error set while still off the line; once back on it the
+            // old line is good again, so the notice only counts while off route.
+            readonly property bool lostNow: page.hasRouting && routing.offRoute && routing.error !== "" && !routing.computing && !routing.arrived
             property real barFill: 0
             function resetArrival() {
                 arrivalMoment.stop()
@@ -854,15 +940,34 @@ Item {
                     id: turnIcon
                     Layout.alignment: Qt.AlignTop
                     transform: Translate { id: iconDrop }     // a RowLayout owns x/y, so drop with a transform
-                    name: page.hasRouting && routing.computing ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
+                    name: page.hasRouting && (routing.computing || turnCard.offNow) ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
                     size: 112
-                    color: page.cOnBanner
+                    color: turnCard.lostNow ? page.cDim : page.cOnBanner
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
+                    Rectangle {                          // the green highway sign: EXIT 165B (the card is always dark, so it is the same by day and night)
+                        visible: page.hasRouting && routing.exitNumber !== "" && !routing.arrived
+                                 && !routing.computing && !turnCard.offNow && !turnCard.lostNow
+                        Layout.preferredHeight: 44
+                        Layout.preferredWidth: exitText.implicitWidth + 28
+                        radius: 8
+                        color: "#0a7d3b"
+                        border.width: 2
+                        border.color: "#ffffff"
+                        MapLabel {
+                            id: exitText
+                            anchors.centerIn: parent
+                            numeric: true
+                            text: "EXIT " + (page.hasRouting ? routing.exitNumber : "")
+                            color: "#ffffff"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.Bold
+                        }
+                    }
                     MapLabel {
-                        visible: page.hasRouting && !routing.arrived && !routing.computing
+                        visible: page.hasRouting && !routing.arrived && !routing.computing && !turnCard.offNow && !turnCard.lostNow
                         numeric: true
                         text: page.hasRouting ? Units.distanceText(routing.distanceToTurn) : ""
                         color: page.cOnBanner
@@ -875,7 +980,9 @@ Item {
                         wrapMode: Text.WordWrap
                         maximumLineCount: 3
                         elide: Text.ElideRight
-                        text: !page.hasRouting ? "" : routing.computing ? "Finding a new route" : routing.instruction
+                        text: !page.hasRouting ? "" : routing.computing ? "Finding a new route"
+                              : turnCard.lostNow ? "No new route found. Retrying"
+                              : turnCard.offNow ? "Off route" : routing.instruction
                         color: page.cOnBanner
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold
@@ -960,6 +1067,7 @@ Item {
             width: page.panelWidth
             height: 132 + (nextStop.visible ? nextStop.height + 8 : 0)
             Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            readonly property bool arrived: page.hasRouting && routing.arrived
             readonly property real timeLeft: page.hasRouting ? routing.remainingTime : 0
             readonly property string distance: page.hasRouting ? Units.distanceText(routing.remainingDistance) : ""
             Item {
@@ -998,18 +1106,50 @@ Item {
                           leftMargin: 14; rightMargin: 16 }
                 height: 132
                 spacing: 0
+                MapLabel {                                // arrived: one clear word, then parking
+                    visible: tripCard.arrived
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 14
+                    text: "Arrived"
+                    color: page.cText
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.Bold
+                }
+                Rectangle {                               // Parking: nearest parking from here
+                    visible: tripCard.arrived
+                    Layout.preferredWidth: 150
+                    Layout.preferredHeight: 100
+                    Layout.rightMargin: 8
+                    radius: Theme.radius
+                    color: parkTap.pressed ? page.cLine : page.cPanelHi
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 10
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "parking"; size: 40; color: page.cBlue }
+                        MapLabel {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Parking"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                    TapHandler { id: parkTap; onTapped: page.findParkingHere() }
+                }
                 TripStat {
+                    visible: !tripCard.arrived
                     Layout.preferredWidth: 130
                     value: page.hasRouting ? Units.arrivalText(tripCard.timeLeft) : ""
                     label: "arrival"
                 }
                 TripStat {
+                    visible: !tripCard.arrived
                     readonly property int minutes: Math.max(1, Math.round(tripCard.timeLeft / 60))
                     value: minutes < 60 ? String(minutes)
                                         : Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0")
                     label: minutes < 60 ? "min" : "hr"
                 }
                 TripStat {
+                    visible: !tripCard.arrived
                     value: tripCard.distance.split(" ")[0]
                     label: tripCard.distance.split(" ")[1] || ""
                 }
@@ -1020,7 +1160,7 @@ Item {
                     color: endTap.pressed ? Qt.darker(page.cRed, 1.2) : page.cRed
                     MapLabel {
                         anchors.centerIn: parent
-                        text: "End"
+                        text: tripCard.arrived ? "Done" : "End"
                         color: page.cOnKey
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.Bold
@@ -1036,6 +1176,7 @@ Item {
         // turn card or search panel otherwise (top centre is taken by the
         // Home/Work keys when browsing).
         Rectangle {
+            id: outsideChip
             readonly property bool shown: page.map !== null && page.map.outside && page.mapReady
             visible: shown
             x: whereTo.visible ? 16 : page.panelWidth + 32
@@ -1048,6 +1189,33 @@ Item {
                 id: outsideText
                 anchors.centerIn: parent
                 text: "Outside the offline map"
+                color: page.cOnBanner
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+        }
+
+        // ================================================================================
+        // The GPS signal is lost (a tunnel, a garage): the map and the route hold the
+        // last position, so guidance has stopped following the truck. Same place as the
+        // outside chip, one row below it when both show. Not shown for the demo drive.
+        Rectangle {
+            id: gpsLostChip
+            readonly property bool shown: page.mapReady && typeof gps !== "undefined" && gps !== null
+                                          && gps.stale && gps.source !== "demo"
+            visible: shown
+            x: outsideChip.x
+            y: outsideChip.y + (outsideChip.visible ? 64 : 0)
+            width: gpsLostText.implicitWidth + 44
+            height: 56
+            radius: page.cRadius
+            color: page.cBanner
+            border.width: 3
+            border.color: page.cRed
+            MapLabel {
+                id: gpsLostText
+                anchors.centerIn: parent
+                text: "GPS signal lost"
                 color: page.cOnBanner
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
@@ -1544,6 +1712,7 @@ Item {
     // A heading in the search panel's list.
     component Heading: Item {
         property alias text: headingText.text
+        property alias color: headingText.color
         Layout.fillWidth: true
         implicitHeight: headingText.implicitHeight + 20
         MapLabel {
@@ -1626,7 +1795,8 @@ Item {
         signal hit()
         Layout.fillWidth: true
         Layout.preferredWidth: 100
-        Layout.preferredHeight: 100
+        // Shorter while a route preview shows, to leave room for the chips and Go.
+        Layout.preferredHeight: page.hasRouting && routing.previewing ? 76 : 100
         radius: Theme.radius
         color: skTap.pressed ? page.cLine : sk.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
         Column {
@@ -1642,6 +1812,31 @@ Item {
             }
         }
         TapHandler { id: skTap; onTapped: sk.hit() }
+    }
+
+    // A route option under the preview (No highways, No tolls, No ferries):
+    // lit while it is on, tap to switch it.
+    component OptionChip: Rectangle {
+        id: oc
+        property string label
+        property bool lit: false
+        signal hit()
+        Layout.fillWidth: true
+        Layout.preferredWidth: 100
+        Layout.preferredHeight: 64
+        radius: Theme.radius
+        color: ocTap.pressed ? page.cLine : oc.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
+        MapLabel {
+            anchors { fill: parent; margins: 6 }
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            text: oc.label
+            color: oc.lit ? page.cBlue : page.cText
+            font.pixelSize: Theme.fontSmall
+            font.weight: Font.DemiBold
+        }
+        TapHandler { id: ocTap; onTapped: oc.hit() }
     }
 
     // A key in the map's strip.

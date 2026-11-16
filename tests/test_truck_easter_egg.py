@@ -22,6 +22,21 @@ class TruckEasterEgg(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bTimer\s*\{", self.src)), 1)
         self.assertNotIn("repeat: true", self.src)
 
+    def test_turntable_rests_after_90_seconds(self):
+        # The rest is a one-shot PauseAnimation, not a Timer, and the
+        # turntable's running binding must respect it.
+        turntable = self.src.split("NumberAnimation on spin", 1)[1].split("loops:", 1)[0]
+        self.assertIn("!page.resting", turntable)
+        self.assertRegex(self.src, r"PauseAnimation\s*\{\s*duration:\s*90000\s*\}")
+        self.assertIn("page.resting = true", self.src)
+
+    def test_touch_and_reopen_wake_the_turntable(self):
+        self.assertIn("function wake()", self.src)
+        self.assertIn("TapHandler { onTapped: page.wake() }", self.src)
+        for fn in ("onVisibleChanged", "Component.onCompleted", "onActiveChanged", "function eggTap()"):
+            start = self.src.index(fn)
+            self.assertIn("wake()", self.src[start:start + 400], fn)
+
     def test_spins_stop_the_running_intro_before_restarting_it(self):
         # start() on a running animation is a no-op and property changes only
         # apply on restart, so a tap during an open spin or an earlier egg spin

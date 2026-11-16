@@ -23,6 +23,9 @@ if [ "$1" = "--windowed" ]; then
     shift
 fi
 
+# Print lines straight to the journal: block-buffered output is lost when
+# systemd has to kill a stuck start, and that's when it's needed most.
+export PYTHONUNBUFFERED=1
 export QT_QPA_EGLFS_HIDECURSOR=1
 export QT_QPA_EGLFS_ALWAYS_SET_MODE=1
 # The Waveshare 8" EDID claims a 1210x680 mm panel; give Qt the real size.

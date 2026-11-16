@@ -5,7 +5,8 @@ import QtQuick.Layouts
 // music comes from, title and artist; progress and the transport keys run
 // across underneath. No heading: a song explains itself. Tap the cover to
 // open Music. With no music on the Pi (and nothing from the phone or
-// Spotify) it says "Nothing playing", with the keys dimmed.
+// Spotify) it says "Nothing playing" and how to get some, with the keys
+// dimmed.
 Card {
     id: np
     signal openMusic()
@@ -28,8 +29,21 @@ Card {
     property real prevTappedAt: 0
     property int prevWindowMs: 1500
     readonly property real slideX: shift.x
-    readonly property string liveTitle: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-    readonly property string liveArtist: media.artist
+    // With no song yet the title says why, and the line under it says what to
+    // do: nothing on the Pi, the Pi's music still being read, or Spotify starting.
+    readonly property string liveTitle: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing")
+                                        : media.title !== "" ? media.title
+                                        : media.source === "spotify" ? "Starting Spotify..." : ""
+    // The artist, then the album: "Boxer Rebellion · Bed Liner Sessions".
+    // "Unknown artist" (untagged files) is left out.
+    readonly property string liveArtist: {
+        if (np.idle) return media.scanning ? "Songs show up as they're found"
+                                           : "Pair a phone in Settings, or copy songs to ~/Music"
+        var parts = []
+        if (media.artist && media.artist !== "Unknown artist") parts.push(media.artist)
+        if (media.albumTitle) parts.push(media.albumTitle)
+        return parts.join(" \u00b7 ")
+    }
 
     Component.onCompleted: {
         shownTitle = liveTitle
@@ -132,10 +146,11 @@ Card {
 
                 SourceBadge { Layout.fillWidth: true }
                 Label {
+                    objectName: "nowTitle"
                     Layout.fillWidth: true
                     Layout.topMargin: 2
                     text: np.shownTitle
-                    color: np.idle ? Theme.textDim : Theme.text
+                    color: media.title === "" ? Theme.textDim : Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.weight: Font.DemiBold
                     wrapMode: Text.WordWrap
@@ -143,12 +158,14 @@ Card {
                     elide: Text.ElideRight
                 }
                 Label {
+                    objectName: "nowArtist"
                     Layout.fillWidth: true
                     text: np.shownArtist
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
+                    // The hint with nothing to play may take two lines; a song's artist stays on one.
+                    wrapMode: np.idle ? Text.WordWrap : Text.NoWrap
+                    maximumLineCount: np.idle ? 2 : 1
                     elide: Text.ElideRight
                 }
             }

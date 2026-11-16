@@ -7,10 +7,13 @@ clock that's just a number.
 import unittest
 from unittest import mock
 
+from PyQt6.QtCore import QCoreApplication
+
 from backend.ignition import RUNNING_V, VOLTS_FRESH_S, KeyOff, KeyOffLogic
 from backend.obd import VOLTS_FOR_S
 
 QUIET_S, WARN_S = 15.0, 10.0
+app = QCoreApplication.instance() or QCoreApplication([])   # QTimer needs one to run
 
 
 def logic():
@@ -360,6 +363,38 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(len(self.powered), 2)
         self.assertEqual(self.k.error, "")         # cleared when the car answered
 
+    def test_the_timer_is_idle_while_the_car_answers(self):
+        self.assertFalse(self.k._timer.isActive())  # nothing ticks until the car's quiet
+        self.k._answered({"speed": 0})
+        self.assertFalse(self.k._timer.isActive())
+        self.k._quiet()
+        self.assertTrue(self.k._timer.isActive())  # the battery log and the countdown
+        self.k._answered({"speed": 0})
+        self.assertFalse(self.k._timer.isActive())  # the car's back: stop ticking
+
+    def test_quiet_before_the_car_has_answered_doesnt_start_the_timer(self):
+        self.k._quiet()                            # a bench Pi, the key never on
+        self.assertFalse(self.k._timer.isActive())
+
+    def test_the_timer_runs_through_a_countdown_and_stops_when_it_is_kept_on(self):
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + 1
+        self.k._tick()
+        self.assertEqual(self.k.countdown, 9)
+        self.assertTrue(self.k._timer.isActive())  # still counting down
+        self.k.keepOn()
+        self.assertTrue(self.k._timer.isActive())  # the car's still quiet
+        self.k._answered({"speed": 0})
+        self.assertFalse(self.k._timer.isActive())
+
+    def test_the_timer_stops_when_the_key_comes_back_during_a_shutdown_wait(self):
+        self.key_off()
+        self.assertTrue(self.k._timer.isActive())  # power off asked, waiting on the car
+        self.k._answered({"speed": 0})
+        self.assertEqual(len(self.cancelled), 1)
+        self.assertFalse(self.k._timer.isActive())
+
     def test_a_failure_from_settings_isnt_shown_here(self):
         self.k.power_failed("Access denied")      # Settings > Shut down, no countdown
         self.assertEqual(self.k.error, "")
@@ -445,6 +480,39 @@ class DashboardTest(unittest.TestCase):
             self.now += 1
             self.k._second()
         self.assertEqual(len(self.battery_lines()), int(VOLTS_FOR_S))
+
+
+    def with_notes(self):
+        self.notes = []
+        self.k = KeyOff(self.obd, FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now),
+                        cancel_power=lambda: self.cancelled.append(self.now), note=self.notes.append)
+
+    def test_notes_for_a_quiet_spell_that_the_car_ends(self):
+        self.with_notes()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.k._quiet()                             # repeats aren't new
+        self.now += QUIET_S + 1
+        self.k._tick()
+        self.k._answered({"speed": 0})
+        self.assertEqual(self.notes, ["car quiet", "countdown", "cancelled: car answered"])
+
+    def test_notes_for_keep_on_and_for_power_off(self):
+        self.with_notes()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + 1
+        self.k._tick()
+        self.k.keepOn()
+        self.assertEqual(self.notes, ["car quiet", "countdown", "cancelled: kept on"])
+        self.notes.clear()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + WARN_S
+        self.k._tick()
+        self.k.power_failed("no polkit rule")
+        self.assertEqual(self.notes[:3], ["car quiet", "countdown", "power off requested"])
+        self.assertIn("power off failed: no polkit rule", self.notes)
 
 
 if __name__ == "__main__":

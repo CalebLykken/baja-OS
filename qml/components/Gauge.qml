@@ -24,12 +24,35 @@ Card {
     property real warnAbove: Number.POSITIVE_INFINITY
     property real warnBelow: Number.NEGATIVE_INFINITY
     property int decimals: 0
+    // The numeral can show the reading rounded to a step (RPM to the nearest 10)
+    // so the last digit doesn't jitter at idle. 0 shows the value as it is. The
+    // dial and the peak still use the exact value.
+    property real numberStep: 0
     property real labelDivisor: 1   // e.g. 1000 so the RPM dial reads 0..7
     property bool peakHold: false   // remember and mark the highest reading
     property real peak: Number.NEGATIVE_INFINITY
     property string note: ""        // an optional small line under the unit ("0-60 7.3 s")
+    property real markValue: NaN    // a fixed reference mark on the face (boost: where vacuum ends)
 
-    readonly property bool warning: known && (value > warnAbove || value < warnBelow)
+    // The warning latches: it sets once the reading goes past a limit and clears
+    // only when the reading is back inside by warnMargin (in the gauge's own
+    // units). A reading hovering on a limit then doesn't flip the numeral and
+    // the lit blocks on every sample. With the default margin of 0 it clears at
+    // the limit itself.
+    property real warnMargin: 0
+    property bool warning: false
+    function _updateWarning() {
+        if (!known) {
+            warning = false
+            return
+        }
+        if (value > warnAbove || value < warnBelow) {
+            warning = true
+            return
+        }
+        if (value <= warnAbove - warnMargin && value >= warnBelow + warnMargin)
+            warning = false
+    }
     // Same one-shot cue as the Home readouts (Readout.qml): on the false-to-true
     // edge the numeral double-pulses once, at most every 30 s so a reading
     // sitting on a limit doesn't keep pulsing. A hidden page stays loaded, so a
@@ -68,9 +91,19 @@ Card {
         ready = true
         peak = peakHold && known ? value : Number.NEGATIVE_INFINITY
         updatePeakShown()
+        _updateWarning()
     }
-    onValueChanged: if (ready && peakHold && known && value > peak) peak = value
-    onKnownChanged: if (ready && peakHold && known && value > peak) peak = value
+    onValueChanged: {
+        if (ready && peakHold && known && value > peak) peak = value
+        if (ready) _updateWarning()
+    }
+    onKnownChanged: {
+        if (ready && peakHold && known && value > peak) peak = value
+        if (ready) _updateWarning()
+    }
+    onWarnAboveChanged: if (ready) _updateWarning()
+    onWarnBelowChanged: if (ready) _updateWarning()
+    onWarnMarginChanged: if (ready) _updateWarning()
     // A units switch rescales min/max, so the old peak is meaningless. Clear it
     // rather than set it to value: value and min/max can update in either order.
     onMinValueChanged: if (ready) peak = Number.NEGATIVE_INFINITY
@@ -95,6 +128,9 @@ Card {
                                         ? clamp((warnBelow - minValue) / (maxValue - minValue)) : 0
     readonly property real peakFrac: isFinite(peak)
                                      ? clamp((peak - minValue) / (maxValue - minValue)) : -1
+    // Where markValue sits on the dial, 0..1, or -1 when there is no mark.
+    readonly property real markFrac: isFinite(markValue)
+                                     ? clamp((markValue - minValue) / (maxValue - minValue)) : -1
     readonly property bool peakHot: isFinite(peak) && (peak > warnAbove || peak < warnBelow)
     readonly property string look: Theme.gauge
     readonly property string styleName: Theme.style
@@ -180,6 +216,7 @@ Card {
         function onLabelDivisorChanged() { face.requestPaint() }
         function onWarnFracChanged() { face.requestPaint(); dynamic.requestPaint() }
         function onWarnLowFracChanged() { face.requestPaint(); dynamic.requestPaint() }
+        function onMarkFracChanged() { face.requestPaint(); dynamic.requestPaint() }
     }
 
     Item {
@@ -259,6 +296,17 @@ Card {
                             ctx.fillText(txt, cx + Math.cos(a) * tr, cx + Math.sin(a) * tr)
                         }
                     }
+                    // The reference mark: a longer, thicker tick than any major one
+                    if (g.markFrac >= 0) {
+                        var ma = a0 + sw * g.markFrac
+                        ctx.lineWidth = 5
+                        ctx.lineCap = "butt"
+                        ctx.strokeStyle = "" + Theme.text
+                        ctx.beginPath()
+                        ctx.moveTo(cx + Math.cos(ma) * (r + 2), cx + Math.sin(ma) * (r + 2))
+                        ctx.lineTo(cx + Math.cos(ma) * (r - 26), cx + Math.sin(ma) * (r - 26))
+                        ctx.stroke()
+                    }
                     return
                 }
 
@@ -283,6 +331,10 @@ Card {
                     ctx.arc(cx, cx, r + 12, a0 + sw * g.warnFrac, a0 + sw, false)
                     ctx.stroke()
                 }
+                // The reference mark: a tick across the track at the face
+                // (the value arc is drawn over it by `dynamic`, so it is
+                // repainted there too, on top).
+                dial.paintMark(ctx)
             }
         }
 
@@ -309,6 +361,7 @@ Card {
                     ctx.arc(dial.cx, dial.cx, dial.r, g.startAngle,
                             g.startAngle + g.sweep * Math.max(0.001, g.paintFrac), false)
                     ctx.stroke()
+                    dial.paintMark(ctx)  // over the value arc, which covers the face's tick
                 }
                 if (g.peakShown)
                     dial.paintPeak(ctx)
@@ -349,6 +402,21 @@ Card {
             ctx.stroke()
         }
 
+        // The arc look's reference tick, across the track in the text colour.
+        function paintMark(ctx) {
+            if (g.look !== "arc" || g.markFrac < 0)
+                return
+            var ang = g.startAngle + g.sweep * g.markFrac
+            var half = (Theme.style === "rally" ? 16 : 12) / 2 + 5
+            ctx.lineWidth = 4
+            ctx.lineCap = "butt"
+            ctx.strokeStyle = "" + Theme.text
+            ctx.beginPath()
+            ctx.moveTo(dial.cx + Math.cos(ang) * (dial.r - half), dial.cx + Math.sin(ang) * (dial.r - half))
+            ctx.lineTo(dial.cx + Math.cos(ang) * (dial.r + half), dial.cx + Math.sin(ang) * (dial.r + half))
+            ctx.stroke()
+        }
+
         // Draws the block bar graph. lit < 0 paints every block unlit.
         function paintSegments(ctx, lit) {
             var count = 28
@@ -369,10 +437,15 @@ Card {
                 // as red, not brown. In range, the lit blocks are muted and
                 // only the leading one is the accent, like a needle's tip.
                 var w = Theme.warn
+                // The block nearest the reference mark, shown as an unlit
+                // block in the text colour (once lit it looks like any other).
+                var isMark = g.markFrac >= 0 && i === Math.max(0, Math.min(count - 1, Math.round(g.markFrac * count - 0.5)))
                 ctx.strokeStyle = on ? "" + (g.warning ? Theme.warn : i === tip ? Theme.accent : Theme.textDim)
                                      : (hot ? "rgba(" + Math.round(w.r * 255) + "," + Math.round(w.g * 255) + ","
                                               + Math.round(w.b * 255) + ",0.3)"
-                                            : "" + Theme.panelHi)
+                                            : isMark ? "rgba(" + Math.round(Theme.text.r * 255) + "," + Math.round(Theme.text.g * 255)
+                                                       + "," + Math.round(Theme.text.b * 255) + ",0.5)"
+                                                     : "" + Theme.panelHi)
                 var a = g.startAngle + i * (segA + gapA)
                 ctx.beginPath()
                 ctx.arc(dial.cx, dial.cx, dial.r - 4, a, a + segA, false)
@@ -426,7 +499,9 @@ Card {
             objectName: "gaugeNumber"
             anchors.horizontalCenter: parent.horizontalCenter
             numeric: true
-            text: g.known ? g.value.toFixed(g.decimals) : "—"
+            text: g.known ? (g.numberStep > 0
+                             ? Math.round(g.value / g.numberStep) * g.numberStep
+                             : g.value).toFixed(g.decimals) : "—"
             color: g.warning ? Theme.warn : g.known ? Theme.text : Theme.textDim
             transformOrigin: Item.Center
             Behavior on color { ColorAnimation { duration: 180 } }

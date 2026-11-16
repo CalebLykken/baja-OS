@@ -70,10 +70,10 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(self.eq.preset, "Road")
         self.assertEqual(self.eq.gains, [4, 2, 0, 2, 3])
 
-    def test_change_one_band_is_custom(self):
+    def test_change_one_band_is_mine(self):
         self.eq.setGain(0, 5)
         self.assertEqual(self.eq.gains, [5, 0, 0, 0, 0])
-        self.assertEqual(self.eq.preset, "Custom")
+        self.assertEqual(self.eq.preset, "Mine")
 
     def test_gain_index_out_of_range_does_nothing(self):
         self.eq.setGain(9, 5)

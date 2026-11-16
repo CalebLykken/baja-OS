@@ -11,7 +11,7 @@ import unittest
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.datause import SAMPLE_EVERY_MS, DataUse, format_bytes
+from backend.datause import SAMPLE_EVERY_MS, SAVE_EVERY_SAMPLES, DataUse, format_bytes
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -19,11 +19,14 @@ app = QCoreApplication.instance() or QCoreApplication([])
 class FakeSettings:
     def __init__(self):
         self.d = {}
+        self.writes = 0          # counts writes to the data-use setting
 
     def get(self, k, default=None):
         return self.d.get(k, default)
 
     def set(self, k, v):
+        if k == "dataUse":
+            self.writes += 1
         self.d[k] = v
 
 
@@ -234,9 +237,114 @@ class DataUseTests(unittest.TestCase):
         self.assertTrue(du.available)
         self.assertEqual(du.bytesThisMonth, 150)
 
+    def test_five_samples_write_settings_once(self):
+        du = self.make()
+        for i in range(1, 6):
+            self.iface("wlan0", 100 * i, 0)
+            du.sample()
+            self.assertEqual(du.bytesThisMonth, 100 * i)    # the figure on screen still grows every sample
+        self.assertEqual(self.settings.writes, 1)           # only the first sample after start
+
+    def test_writes_again_after_save_every_samples(self):
+        du = self.make()
+        for i in range(1, SAVE_EVERY_SAMPLES + 2):
+            self.iface("wlan0", 100 * i, 0)
+            du.sample()
+        self.assertEqual(self.settings.writes, 2)           # samples 1 and 1 + SAVE_EVERY_SAMPLES
+        self.assertEqual(du.bytesThisMonth, 100 * (SAVE_EVERY_SAMPLES + 1))
+
+    def test_month_change_writes_at_once(self):
+        self.iface("wlan0", 100, 0)
+        du = self.make()
+        du.sample()
+        self.iface("wlan0", 200, 0)
+        du.sample()
+        self.assertEqual(self.settings.writes, 1)
+        self.now = stamp(2026, 11, 1)
+        self.iface("wlan0", 250, 0)
+        du.sample()
+        self.assertEqual(self.settings.writes, 2)
+        self.assertIn('"month": "2026-11"', self.settings.d["dataUse"])
+        self.assertEqual(du.bytesThisMonth, 50)
+
+    def test_interface_going_away_writes_at_once(self):
+        self.iface("bnep0", 900, 100)
+        du = self.make()
+        du.sample()
+        self.iface("wlan0", 10, 0)
+        du.sample()
+        self.assertEqual(self.settings.writes, 1)           # wlan0 is new, nothing gone yet
+        shutil.rmtree(os.path.join(self.root, "bnep0"))
+        du.sample()
+        self.assertEqual(self.settings.writes, 2)
+
+    def test_restart_after_an_unsaved_sample_counts_correctly(self):
+        self.iface("wlan0", 100, 0)
+        du = self.make()
+        du.sample()                                          # saved: 100
+        self.iface("wlan0", 400, 0)
+        du.sample()                                          # not saved yet
+        self.assertEqual(self.settings.writes, 1)
+        self.assertEqual(du.bytesThisMonth, 400)
+        restarted = self.make()
+        restarted.sample()                                   # counts 300 more from the saved 100
+        self.assertEqual(restarted.bytesThisMonth, 400)
+
+    def test_restart_after_reboot_counts_the_new_counter(self):
+        self.iface("wlan0", 100, 0)
+        du = self.make()
+        du.sample()                                          # saved: 100
+        self.iface("wlan0", 40, 0)                           # rebooted, counter from zero
+        du.sample()
+        restarted = self.make()
+        restarted.sample()
+        self.assertEqual(restarted.bytesThisMonth, 140)
+
+    def test_save_writes_now(self):
+        self.iface("wlan0", 100, 0)
+        du = self.make()
+        du.sample()
+        self.iface("wlan0", 300, 0)
+        du.sample()
+        self.assertEqual(self.settings.writes, 1)
+        du.save()
+        self.assertEqual(self.settings.writes, 2)
+        self.assertEqual(self.make().bytesThisMonth, 300)
+
     def test_format(self):
         self.assertEqual(format_bytes(1_200_000_000), "1.2 GB")
         self.assertEqual(format_bytes(5_000_000), "5 MB")
+
+    def test_limit_defaults_off(self):
+        self.iface("wlan0", 6_000_000_000, 0)
+        du = self.make()
+        du.sample()
+        self.assertEqual(du.limitGb, 0)
+        self.assertFalse(du.overLimit)
+
+    def test_set_limit_warns_and_saves(self):
+        self.iface("wlan0", 6_000_000_000, 0)
+        du = self.make()
+        du.sample()
+        du.setLimit(5)
+        self.assertTrue(du.overLimit)
+        self.assertEqual(self.settings.d["dataLimitGb"], 5)
+        du.setLimit(10)
+        self.assertFalse(du.overLimit)
+
+    def test_limit_follows_this_months_figure(self):
+        du = self.roll(stamp(2026, 11, 2))
+        du.setLimit(10)
+        self.assertEqual(du.text, "0 KB of 10 GB (2.1 GB last month)")
+        du.setLimit(0)
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+
+    def test_garbage_saved_limit_reads_as_off(self):
+        for bad in ("lots", None, "", "-4", "1e9x", [1]):
+            self.settings.d["dataLimitGb"] = bad
+            self.assertEqual(self.make().limitGb, 0)
+        self.settings.d["dataLimitGb"] = "9999"
+        self.assertEqual(self.make().limitGb, 500)
 
 
 if __name__ == "__main__":

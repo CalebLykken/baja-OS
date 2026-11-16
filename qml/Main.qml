@@ -33,6 +33,17 @@ Window {
     readonly property bool onMaps: page === 2
     readonly property bool fullPage: page === 1 || page === 2     // Music and Maps
 
+    // The badge dot on a nav key: stored trouble codes on Truck (not for the
+    // demo's made-up codes), a waiting update on Settings. Bound per key, so
+    // it follows those properties when they change.
+    function badgeFor(i) {
+        if (i === 4)
+            return typeof vehicle !== "undefined" && vehicle.codeCount > 0 && !vehicle.simulated
+        if (i === 5)
+            return typeof updater !== "undefined" && updater.canUpdate
+        return false
+    }
+
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
     function setStyle(name) { Theme.style = name }
@@ -60,9 +71,9 @@ Window {
     }
     Connections {
         target: Units
-        function onMetricChanged() { settings.set("metric", Units.metric ? "true" : "false") }
-        function onClock24Changed() { settings.set("clock24", Units.clock24 ? "true" : "false") }
-        function onAppearanceChanged() { settings.set("appearance", Units.appearance) }
+        function onMetricChanged() { if (typeof settings !== "undefined") settings.set("metric", Units.metric ? "true" : "false") }
+        function onClock24Changed() { if (typeof settings !== "undefined") settings.set("clock24", Units.clock24 ? "true" : "false") }
+        function onAppearanceChanged() { if (typeof settings !== "undefined") settings.set("appearance", Units.appearance) }
     }
 
     // Light by day, dark at night (by the sun where the truck is), unless
@@ -96,17 +107,22 @@ Window {
     Timer { interval: 3000; running: true; onTriggered: root.mapWanted = true }
     onPageChanged: if (page === 0 || page === 2) mapWanted = true
 
-    // The other pages are built when first opened, or in the background a few
-    // seconds after start-up (one at a time, after the map engine), so the
-    // first frame and the map start don't wait for pages nobody is looking at.
+    // The other pages are built when first opened, or in the background after
+    // start-up, one after another: Music 1 s after the map has drawn (or 6 s
+    // after start if it hasn't), then each next page 500 ms after the previous
+    // one finished building (PageHost.built). A slow boot spreads the work out
+    // instead of overlapping builds, and a quick one gets there sooner. All
+    // the timers are single-shot, so none is left running once Truck is built.
     property bool preloadMusic: false
     property bool preloadSettings: false
     property bool preloadGauges: false
     property bool preloadTruck: false
-    Timer { interval: 4000; running: true; onTriggered: root.preloadMusic = true }
-    Timer { interval: 5000; running: true; onTriggered: root.preloadSettings = true }
-    Timer { interval: 6000; running: true; onTriggered: root.preloadGauges = true }
-    Timer { interval: 7000; running: true; onTriggered: root.preloadTruck = true }
+    Timer { id: musicFallback; interval: 6000; running: true; onTriggered: root.preloadMusic = true }
+    Timer { id: musicAfterMap; interval: 1000; onTriggered: root.preloadMusic = true }
+    onMapReadyChanged: if (mapReady && !preloadMusic) musicAfterMap.start()
+    Timer { id: settingsNext; interval: 500; onTriggered: root.preloadSettings = true }
+    Timer { id: gaugesNext; interval: 500; onTriggered: root.preloadGauges = true }
+    Timer { id: truckNext; interval: 500; onTriggered: root.preloadTruck = true }
 
     Loader {
         id: mapLoader
@@ -137,18 +153,19 @@ Window {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
 
+        // The rail clock's time, once a minute (see ClockTick.qml).
+        ClockTick { id: tick }
+
         Column {
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
             spacing: 4
             Label {
                 id: clock
                 anchors.horizontalCenter: parent.horizontalCenter
-                property date now: new Date()
-                text: Units.timeText(now)
+                text: Units.timeText(tick.now)
                 numeric: true
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
-                Timer { interval: 5000; running: true; repeat: true; onTriggered: clock.now = new Date() }
             }
             // Made-up engine data (a Mac, a bench Pi, --demo): never let it
             // pass for the truck's.
@@ -171,9 +188,18 @@ Window {
         // Truck and Settings (Home, Music and Maps show it themselves); a
         // warning comes first. Tap for Maps.
         TurnChip {
+            id: turnChip
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
             opacity: active && !engineWarning.visible && root.page >= 3 ? 1 : 0
             onTapped: root.page = 2
+        }
+
+        // GPS, phone, Wi-Fi and the car, lit when each is there. Hidden
+        // under the warning and the turn chip, which take the same spot.
+        StatusStrip {
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
+            opacity: engineWarning.visible || turnChip.active && root.page >= 3 ? 0 : 1
+            visible: opacity > 0
         }
 
         Column {
@@ -184,6 +210,7 @@ Window {
                     icon: modelData.icon
                     label: modelData.label
                     active: root.page === index
+                    badge: root.badgeFor(index)
                     onClicked: root.page = index
                 }
             }
@@ -214,20 +241,24 @@ Window {
                 onNavigate: (i) => root.page = i
             }
         }
-        PageHost { anchors.fill: parent; index: 3; current: root.page
+        PageHost { id: gaugesHost; anchors.fill: parent; index: 3; current: root.page
+            onBuiltChanged: if (built) truckNext.start()
             preload: root.preloadGauges
             lazy: Component { GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
         PageHost { anchors.fill: parent; index: 4; current: root.page
             preload: root.preloadTruck
             lazy: Component { TruckPage { anchors.fill: parent; trip: tripCounter; onNavigate: (i) => root.page = i } } }
-        PageHost { anchors.fill: parent; index: 5; current: root.page
+        PageHost { id: settingsHost; anchors.fill: parent; index: 5; current: root.page
+            onBuiltChanged: if (built) gaugesNext.start()
             preload: root.preloadSettings
             lazy: Component { SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
     }
 
     // Music: everything right of the rail.
     PageHost {
+        id: musicHost
         anchors { left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom }
+        onBuiltChanged: if (built) settingsNext.start()
         index: 1
         current: root.page
         preload: root.preloadMusic
@@ -249,83 +280,117 @@ Window {
         }
     }
 
-    // Trip milestone toast: shown for a few seconds by one short animation
-    // that ends by itself; invisible (not drawn) the rest of the time. No
-    // MouseArea, so it never takes a tap. Above the pages, below the dimming,
-    // screen-off and prompt layers. Never on Maps: the next-turn card, the
-    // "Outside the offline map" banner and the Home/Work keys fill that top
-    // row, and the toast would cover them while the driver is reading them.
-    // Likewise never while a route is active: Home and Music also carry the
-    // next-turn card at the top right, which the toast would sit on.
-    Rectangle {
-        id: milestonePill
-        property string text: ""
-        anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter
-                  horizontalCenterOffset: rail.width / 2 }
-        width: milestoneLabel.implicitWidth + 56
-        height: milestoneLabel.implicitHeight + 24
-        radius: Theme.radius
-        color: Theme.panel
-        border { width: Theme.border; color: Theme.line }
-        opacity: 0
-        visible: opacity > 0
-
-        Label {
-            id: milestoneLabel
-            anchors.centerIn: parent
-            text: milestonePill.text
-            color: Theme.text
-            font.pixelSize: Theme.fontBody
-            font.weight: Font.DemiBold
-        }
-
-        transform: Translate { id: milestoneSlide; y: 0 }
-
-        SequentialAnimation {
-            id: milestoneShow
-            ParallelAnimation {
-                NumberAnimation { target: milestonePill; property: "opacity"; to: 1; duration: 250; easing.type: Easing.OutCubic }
-                NumberAnimation { target: milestoneSlide; property: "y"; from: -20; to: 0; duration: 250; easing.type: Easing.OutCubic }
-            }
-            PauseAnimation { duration: 4000 }
-            NumberAnimation { target: milestonePill; property: "opacity"; to: 0; duration: 400 }
+    // Settings or the Truck page left open: after 90 s with no touch, go back
+    // to Home if the truck is moving (gps.speed is m/s, 0 when stale). Parked,
+    // it just waits another round. Only runs on those two pages.
+    IdleReturn {
+        id: idleReturn
+        active: root.page === 4 || root.page === 5
+        onIdle: {
+            if (typeof gps !== "undefined" && gps.speed > 3) root.page = 0
+            else idleReturn.poke()
         }
     }
+
+    // Transient message toast (trip milestones today): shown for a few seconds
+    // by one short animation that ends by itself; invisible (not drawn) the
+    // rest of the time. No MouseArea, so it never takes a tap. Above the
+    // pages, below the dimming, screen-off and prompt layers. Never on Maps:
+    // the next-turn card, the "Outside the offline map" banner and the
+    // Home/Work keys fill that top row, and the toast would cover them while
+    // the driver is reading them. Likewise never while a route is active:
+    // Home and Music also carry the next-turn card at the top right, which
+    // the toast would sit on.
+    Toast {
+        id: toast
+        anchors { top: parent.top; topMargin: 16; horizontalCenter: parent.horizontalCenter
+                  horizontalCenterOffset: rail.width / 2 }
+    }
     readonly property bool routeActive: typeof routing !== "undefined" && routing.active
+    function notify(text, icon) {
+        if (splash.visible || root.onMaps || root.routeActive) return
+        toast.show(text, icon)
+    }
     // Opening Maps, or starting a route, while the toast is up cuts it short.
     Connections {
         target: root
         function onOnMapsChanged() {
-            if (!root.onMaps) return
-            milestoneShow.stop()
-            milestonePill.opacity = 0
+            if (root.onMaps) toast.hide()
         }
         function onRouteActiveChanged() {
-            if (!root.routeActive) return
-            milestoneShow.stop()
-            milestonePill.opacity = 0
+            if (root.routeActive) toast.hide()
         }
     }
     Connections {
         target: tripCounter
-        function onMilestone(text) {
-            if (splash.visible || root.onMaps || root.routeActive) return
-            milestonePill.text = text
-            milestoneShow.restart()
+        function onMilestone(text) { root.notify(text, "") }
+    }
+
+    // The phone connecting (BlueZ gives it a device name): music and calls
+    // route there now. Only the connect, not each change of name, and no
+    // toast on disconnect (a phone flaps in and out of range).
+    // Starts at the phone already there, if it is, so its name isn't a "connect".
+    // Set once, not bound: a binding would follow deviceName before the
+    // handler below runs, so the first connect would never toast.
+    property string lastPhone: ""
+    Connections {
+        target: typeof bluetooth !== "undefined" ? bluetooth : null
+        Component.onCompleted: if (typeof bluetooth !== "undefined") root.lastPhone = bluetooth.deviceName
+        function onChanged() {
+            var name = bluetooth.deviceName
+            if (root.lastPhone === "" && name !== "") root.notify("Phone connected: " + name, "bluetooth")
+            root.lastPhone = name
         }
     }
 
-    // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
-    // Never fully black, and it lets touches through to the UI below.
-    Rectangle {
-        anchors.fill: parent
-        visible: !display.hardware
-        color: "black"
-        opacity: (1 - display.brightness / 100) * 0.85
+    // The GPS finding its first fix, once per run: Maps can start now. Only
+    // from the receiver, never the demo drive.
+    property bool gpsLockShown: false
+    Connections {
+        target: typeof gps !== "undefined" ? gps : null
+        function onChanged() {
+            if (!root.gpsLockShown && gps.realFix && gps.source === "gps") {
+                root.gpsLockShown = true
+                root.notify("GPS locked", "gps_fixed")
+            }
+        }
     }
 
-    // "Screen off": a black layer over the pages and the dim overlay (the
-    // backlight itself is not driven yet, see Display._drive_panel). The tap
+    // The soft fade when the dashboard turns from day to night or back: over
+    // the pages, the map and the toast, under the volume panel, dimming,
+    // screen-off and prompts. Armed once the start-up screen is gone, so
+    // the first setting at start-up doesn't fade (see DayNightFade.qml).
+    DayNightFade {
+        id: dayNightFade
+        anchors.fill: parent
+    }
+    Timer {
+        interval: 600
+        running: !splash.visible && !dayNightFade.armed
+        onTriggered: dayNightFade.armed = true
+    }
+
+    // Volume panel for the knob and long-press mute, on every page but Music
+    // (which has its own bar). Above the pages and the toast, below the
+    // dimming, screen-off and prompt layers. Held back until the splash is
+    // gone so the restored volume doesn't show it.
+    VolumeOverlay {
+        ready: !splash.visible
+        quiet: root.page === 1
+    }
+
+    // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
+    // Never fully black, and it lets touches through to the UI below. No
+    // dimming at all without the display object.
+    Rectangle {
+        anchors.fill: parent
+        visible: typeof display !== "undefined" && !display.hardware
+        color: "black"
+        opacity: visible ? (1 - display.brightness / 100) * 0.85 : 0
+    }
+
+    // "Screen off": a black layer over the pages and the dim overlay (Display
+    // also sets the panel's DDC brightness to 0, see backend/display.py). The tap
     // that wakes it is swallowed so it doesn't press anything underneath.
     // The shutdown prompt below stays above it.
     Rectangle {
@@ -354,112 +419,75 @@ Window {
     // The last start had to take an update back (backend/updater.py): say
     // so, once, until OK. Declared before the pairing and shutdown prompts so
     // they stay above it and their buttons stay tappable.
-    Rectangle {
+    Prompt {
         id: updateNotice
         readonly property string text: typeof updater === "undefined" ? "" : updater.notice
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        visible: text !== ""
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: text !== ""
+        title: "Software update"
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: noticeColumn.implicitHeight + 64
-            ColumnLayout {
-                id: noticeColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    text: "Software update"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: updateNotice.text
-                }
-                TextButton {
-                    Layout.topMargin: 12
-                    Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                    text: "OK"; primary: true
-                    onClicked: updater.dismissNotice()
-                }
-            }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: updateNotice.text
+        }
+        TextButton {
+            Layout.topMargin: 12
+            Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+            text: "OK"; primary: true
+            onClicked: updater.dismissNotice()
         }
     }
 
     // A phone wants to pair (backend/btagent.py): nothing pairs without a
     // tap here. Phones with no screen have no code to compare.
-    Rectangle {
+    Prompt {
         id: pairPrompt
         readonly property bool asking: typeof bluetooth !== "undefined" && bluetooth.pairPending
         readonly property string name: asking ? bluetooth.pairName : ""
         readonly property string address: asking ? bluetooth.pairAddress : ""
         readonly property string code: asking ? bluetooth.pairCode : ""
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: asking ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: asking
+        title: "Pair with " + name + "?"       // the name comes from the other device
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: pairColumn.implicitHeight + 64
-            ColumnLayout {
-                id: pairColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText      // the name comes from the other device
-                    text: "Pair with " + pairPrompt.name + "?"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
-                    text: pairPrompt.address
-                }
-                Label {
-                    visible: pairPrompt.code !== ""
-                    Layout.topMargin: 8
-                    numeric: true
-                    text: pairPrompt.code
-                    font.pixelSize: Theme.fontHuge
-                    font.weight: Theme.numWeight
-                    font.letterSpacing: 6
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
-                                                 : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
-                }
-                RowLayout {
-                    Layout.topMargin: 12
-                    spacing: 14
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Pair"; primary: true
-                        onClicked: bluetooth.acceptPairing()
-                    }
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Cancel"
-                        onClicked: bluetooth.cancelPairing()
-                    }
-                }
+        Label {
+            visible: pairPrompt.address !== "" && pairPrompt.address !== pairPrompt.name
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+            text: pairPrompt.address
+        }
+        Label {
+            visible: pairPrompt.code !== ""
+            Layout.topMargin: 8
+            numeric: true
+            text: pairPrompt.code
+            font.pixelSize: Theme.fontHuge
+            font.weight: Theme.numWeight
+            font.letterSpacing: 6
+        }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: pairPrompt.code !== "" ? "Check it matches the code on the phone"
+                                         : "This phone shows no code, so there's no code to compare. Pair only if it's yours."
+        }
+        RowLayout {
+            Layout.topMargin: 12
+            spacing: 14
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Pair"; primary: true
+                onClicked: bluetooth.acceptPairing()
+            }
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Cancel"
+                onClicked: bluetooth.cancelPairing()
             }
         }
     }
@@ -467,74 +495,62 @@ Window {
     // The truck was turned off: the Pi shuts down at the end of the
     // countdown (backend/ignition.py) unless "Keep on" is tapped. If the
     // shutdown fails, it says so instead, until OK.
-    Rectangle {
+    Prompt {
         id: keyOffPrompt
+        readonly property int warnSeconds: 10     // the countdown's length: WARN_S in backend/ignition.py
         readonly property int secondsLeft: typeof keyOff === "undefined" ? -1 : keyOff.countdown
         readonly property bool failed: typeof keyOff !== "undefined" && keyOff.error !== ""
         property bool showError: false            // kept while it fades out
         onFailedChanged: if (failed) showError = true
         onSecondsLeftChanged: if (secondsLeft >= 0) showError = false
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.6)
-        opacity: secondsLeft >= 0 || failed ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-        MouseArea { anchors.fill: parent }        // nothing underneath while it's up
+        shown: secondsLeft >= 0 || failed
+        title: showError ? "Couldn't shut down" : "The truck is off"
 
-        Card {
-            anchors.centerIn: parent
-            width: 720
-            height: promptColumn.implicitHeight + 64
-            ColumnLayout {
-                id: promptColumn
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 32 }
-                spacing: 12
-                Label {
-                    text: keyOffPrompt.showError ? "Couldn't shut down" : "The truck is off"
-                    font.pixelSize: Theme.fontTitle
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: keyOffPrompt.showError
-                          ? "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
-                          : "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
-                }
-                Label {
-                    visible: keyOffPrompt.showError
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontSmall
-                    text: typeof keyOff !== "undefined" ? keyOff.error : ""
-                }
-                RowLayout {
-                    visible: keyOffPrompt.showError
-                    Layout.topMargin: 12
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "OK"; primary: true
-                        onClicked: keyOff.dismiss()
-                    }
-                }
-                RowLayout {
-                    visible: !keyOffPrompt.showError
-                    Layout.topMargin: 12
-                    spacing: 14
-                    TextButton {
-                        Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
-                        text: "Keep on"; primary: true
-                        onClicked: keyOff.keepOn()
-                    }
-                    TextButton {
-                        Layout.preferredHeight: Theme.touch
-                        icon: "power"; text: "Shut down now"; danger: true
-                        onClicked: system.powerOff()
-                    }
-                }
+        KeyOffCountdown {
+            visible: !keyOffPrompt.showError
+            Layout.fillWidth: true
+            seconds: keyOffPrompt.secondsLeft
+            total: keyOffPrompt.warnSeconds
+        }
+        Label {
+            visible: keyOffPrompt.showError
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontBody
+            text: "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
+        }
+        Label {
+            visible: keyOffPrompt.showError
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim
+            font.pixelSize: Theme.fontSmall
+            text: typeof keyOff !== "undefined" ? keyOff.error : ""
+        }
+        RowLayout {
+            visible: keyOffPrompt.showError
+            Layout.topMargin: 12
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "OK"; primary: true
+                onClicked: keyOff.dismiss()
+            }
+        }
+        RowLayout {
+            visible: !keyOffPrompt.showError
+            Layout.topMargin: 12
+            spacing: 14
+            TextButton {
+                Layout.preferredWidth: 300; Layout.preferredHeight: Theme.touch
+                text: "Keep on"; primary: true
+                onClicked: keyOff.keepOn()
+            }
+            TextButton {
+                Layout.preferredHeight: Theme.touch
+                icon: "power"; text: "Shut down now"; danger: true
+                onClicked: system.powerOff()
             }
         }
     }

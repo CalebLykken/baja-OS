@@ -7,9 +7,9 @@ mesh files; this then fixes up the QML it writes:
 - colours: glTF stores them linear, but balsam writes them where Qt expects
   ordinary screen colours, so the paint came out orange and the grey
   cladding black. They're converted back here.
-- materials: glossy paint, matte plastic cladding, dark tinted glass (no
-  see-through muddle or jagged reflections), headlight covers you can see
-  the chrome through, satin wheels.
+- materials: glossy Atlantic Blue paint, matte cladding in the same blue,
+  dark tinted glass (no see-through muddle or jagged reflections), headlight
+  covers you can see the chrome through, satin wheels.
 - the model's own "HUMSTER3D" plates are hidden; it draws plate.png, a
   BAJA plate, for TruckPage to put on instead.
 - the cab interior is hidden (nothing shows through the tinted glass).
@@ -28,16 +28,28 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # objectName prefix -> properties to set (replacing balsam's).
 MATERIALS = {
-    # Glossy solid paint. (Metallic paint mirrors the dark studio and goes
-    # brown; Qt's clear coat darkens this model's paint the same way.)
-    "carpaint.": {"metalness": "0", "roughness": "0.24"},
-    "carpaint_second": {"metalness": "0", "roughness": "0.75"},
-    "clearglass": {"baseColor": '"#0d1013"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                   "alphaMode": "PrincipledMaterial.Opaque"},
-    "windowglass": {"baseColor": '"#0d1013"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                    "alphaMode": "PrincipledMaterial.Opaque"},
-    "darkglass": {"baseColor": '"#0a0b0d"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                  "alphaMode": "PrincipledMaterial.Opaque"},
+    # Glossy solid paint in the truck's own colour, Atlantic Blue Pearl
+    # (Subaru 33A, #2A4C7A on the portfolio site); the 2005-06 Baja wore it
+    # monotone, so the cladding is the same blue, matte. The Truck page's
+    # studio light and filmic tone map lift paint a lot: #2A4C7A came out a
+    # light sky blue there, so the base is deeper (#1D3557) to look like the
+    # boot screen's render of the real colour. (Metallic paint mirrors the
+    # dark studio and goes brown; Qt's clear coat darkens this model's paint
+    # the same way.)
+    "carpaint.": {"baseColor": '"#1d3557"', "metalness": "0", "roughness": "0.24"},
+    "carpaint_second": {"baseColor": '"#1d3557"', "metalness": "0", "roughness": "0.75"},
+    "clearglass": {"baseColor": '"#0d1013"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                   "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    "windowglass": {"baseColor": '"#0d1013"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                    "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    "darkglass": {"baseColor": '"#0a0b0d"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                  "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    # The thin glass shells draw only their outer face (the inner one mirrored
+    # the studio panels a second time and z-fought), with a rough, dim lobe so
+    # the bright panels blur into a soft grade instead of jagged white streaks.
+    # The small bright metal parts are roughened a touch for the same reason.
+    "mirror.": {"roughness": "0.08"},
+    "chrome.": {"roughness": "0.1"},
     "lens_clear": {"baseColor": '"#ffffff"', "opacity": "0.22", "roughness": "0.03",
                    "alphaMode": "PrincipledMaterial.Blend"},
     "rim.": {"roughness": "0.35"},

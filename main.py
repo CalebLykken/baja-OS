@@ -11,9 +11,11 @@ falls back to a simulated drive and a demo queue; --demo / --no-demo force it.
 """
 
 import argparse
+import faulthandler
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -23,11 +25,21 @@ from pathlib import Path
 from backend.startup import StartupClock
 clock = StartupClock()
 
+# A start that hangs before READY ends itself quickly: faulthandler writes where
+# every thread is stuck to the journal, then exits, and systemd (Restart=always)
+# starts the dashboard again a second later, instead of waiting out its own
+# start timeout. A normal start reaches READY in about 5 s at boot, under 1 s
+# after; this is cancelled then. faulthandler runs from C, so a stuck main
+# thread can't stop it. Only when run as the dashboard: tests import this file.
+STARTUP_LIMIT_S = 30
+if __name__ == "__main__":
+    faulthandler.dump_traceback_later(STARTUP_LIMIT_S, exit=True)
+
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
 # set before Qt loads, so it lives above the PyQt imports.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
-from PyQt6.QtCore import QCoreApplication, QTimer, QUrl
+from PyQt6.QtCore import QCoreApplication, QSocketNotifier, QTimer, QUrl, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -42,7 +54,7 @@ from backend.routing import Router
 from backend.voice import Voice, arrival_line
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
-from backend.knob import Gestures, Knob, double_press
+from backend.knob import Acceleration, Gestures, Knob, double_press, turn_volume
 from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
@@ -69,7 +81,7 @@ def parse_args():
     parser.add_argument("--fullscreen", action="store_true",
                         help="fill the whole screen (use this on the Pi)")
     parser.add_argument("--style", default=None,
-                        choices=["amber", "cluster", "trail", "rally"],
+                        choices=["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd", "sunset"],
                         help="UI style for this run (default: the one last picked in Settings)")
     parser.add_argument("--no-splash", action="store_true",
                         help="skip the startup animation")
@@ -108,6 +120,32 @@ def make_media_player(music_dir, demo_flag=None, on_pi=None):
     tracks = cached_tracks(music_dir)
     print(f"Music: {len(tracks)} track(s) from the cache; reading {music_dir}")
     return LibraryPlayer(tracks, scanning=not tracks)
+
+
+def install_sigterm(on_term):
+    """Run on_term on SIGTERM, waking the idle event loop to do it.
+
+    Python's C-level handler only flags the signal; the Python handler runs
+    when the interpreter next gets a turn, which an idle Qt loop never gives
+    it. set_wakeup_fd makes the signal write a byte to a socket, and the
+    notifier on the other end wakes the loop, so no polling timer is needed.
+    Returns the objects to keep referenced."""
+    read_end, write_end = socket.socketpair()
+    read_end.setblocking(False)
+    write_end.setblocking(False)
+    signal.set_wakeup_fd(write_end.fileno())
+    signal.signal(signal.SIGTERM, on_term)
+    notifier = QSocketNotifier(read_end.fileno(), QSocketNotifier.Type.Read)
+
+    def drain():
+        # Reading is all that's needed: running this slot is what lets Python
+        # deliver the handler.
+        try:
+            read_end.recv(4096)
+        except OSError:
+            pass
+    notifier.activated.connect(drain)
+    return read_end, write_end, notifier
 
 
 def log_exception(exc_type, exc, tb):
@@ -179,9 +217,12 @@ def main():
     # let SIGINT kill the process directly (matters when started over SSH).
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    qInstallMessageHandler(errorlog.qt_messages.handle)   # repeated Qt/QML warnings are counted, not flooded
     web_engine = init_web_engine()
+    clock.mark("webengine")
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Baja Carputer")
+    clock.mark("app")
 
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
@@ -189,21 +230,20 @@ def main():
     # Changes are written a moment after they're made, on a thread of their
     # own; write what's waiting, and wait until it's on disk, when the app
     # quits or when systemd stops it (SIGTERM would otherwise end the process
-    # on the spot). Python only sees the signal when it gets to run, so a
-    # timer gives it a turn.
+    # on the spot). Python only runs its handler when it gets a turn, so the
+    # signal also writes a byte to a socket that Qt watches (install_sigterm).
     # The trip saves first (a restart at a stop, the updater's, would otherwise
     # lose what it counted since its last save), then settings go to disk.
     trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
     connect_quit(app.aboutToQuit, trip_store, settings.flush_and_wait)
+    clock.mark("settings")
 
     def on_sigterm(*_):
         settings.flush_and_wait()
         # Posted, not called: quit() before app.exec() is running does nothing,
         # and a stop during start-up must still end the dashboard.
         QTimer.singleShot(0, QCoreApplication.quit)
-    signal.signal(signal.SIGTERM, on_sigterm)
-    sigterm_poll = QTimer(interval=250, timeout=lambda: None)
-    sigterm_poll.start()
+    sigterm_wake = install_sigterm(on_sigterm)
     vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
     obd = ObdReader(baro=settings.get("baro"))
@@ -235,12 +275,14 @@ def main():
                      max_volume=settings.get_int("maxVolume", 100), settings=settings)
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
+    clock.mark("media")
     # The dash knob: turn for volume; press to play or pause (a beat late, in
     # case it's a double); double press for the next song, or while navigating
     # the last direction again; hold to mute.
     knob = Knob()
     gestures = Gestures()
-    knob.turned.connect(lambda step: media.volumeUp() if step > 0 else media.volumeDown())
+    accel = Acceleration()
+    knob.turned.connect(lambda step: turn_volume(media, accel, step))
     knob.pressed.connect(gestures.down)
     knob.released.connect(gestures.up)
     gestures.single.connect(media.togglePlay)
@@ -253,6 +295,7 @@ def main():
     network.changed.connect(lambda: spotify.set_network(network.online, network.ip))
     network.changed.connect(lambda: spotify_account.set_online(network.online))
     maps = MapService(args.maps_dir, web_engine)
+    clock.mark("screen")
     eq = Equalizer(settings)
     phone = PhoneSend(args.maps_dir)
     phone.spotify = spotify_account
@@ -275,7 +318,8 @@ def main():
     routing.speak.connect(lambda text: voice.say(arrival_line(text)))
     # Shut down cleanly once the truck is turned off (the car stops
     # answering the OBD adapter), inside the power relay's hold time.
-    key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power)
+    key_off = KeyOff(obd, gps, settings, power_off=system.powerOff, cancel_power=system.cancel_power,
+                    note=power_log.note)
     system.powerFailed.connect(key_off.power_failed)
 
     clock.mark("backends")
@@ -338,14 +382,15 @@ def main():
     spotify_account.start()
     knob.start()
     obd.start()
-    key_off.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
+    faulthandler.cancel_dump_traceback_later()
     updater.start()
     clock.mark("started")
     code = app.exec()
     mark_clean_exit()             # a normal end isn't a failed start (deploy/update-guard.sh)
+    errorlog.qt_messages.flush()
     errorlog.log.flush()          # repeats still being counted go to the journal now
     settings.close()              # everything on disk, writer thread stopped
     if scanner:
@@ -356,6 +401,9 @@ def main():
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine
+    # Qt can still log while QGuiApplication and WebEngine are torn down; don't
+    # let those messages call back into Python while it shuts down.
+    qInstallMessageHandler(None)
     return code
 
 

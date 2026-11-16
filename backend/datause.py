@@ -12,18 +12,28 @@ before the current one.
 
 It doesn't tell the phone's hotspot from home Wi-Fi, so it counts all Wi-Fi
 use and says so. Without those interfaces (a Mac) nothing is shown.
+
+It samples every minute so the figure on screen stays current, but writes the
+settings file (a rewrite with an fsync, on the SD card) only every
+SAVE_EVERY_SAMPLES samples, on the first sample after start, when a month
+ends, and when an interface goes away. A restart counts the change since the
+last saved reading, so it loses nothing; only a reboot inside that window can
+lose up to five minutes of use, because the counters start over at boot.
 """
 
 import json
 import os
 import time
 
-from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
 SAMPLE_EVERY_MS = 60000
+SAVE_EVERY_SAMPLES = 5     # 5 minutes between settings writes, to spare the SD card
 FIRST_SAMPLE_MS = 5000     # keeps the settings write off the startup path; well under SAMPLE_EVERY_MS
 SYS_NET = "/sys/class/net"
 SETTING = "dataUse"
+LIMIT_SETTING = "dataLimitGb"  # 0 = no warning
+MAX_LIMIT_GB = 500
 MAX_PREV_BYTES = 10 ** 15     # anything bigger in the saved setting is garbage
 
 
@@ -41,6 +51,15 @@ def read_total(root, name):
         return total
     except (OSError, ValueError):
         return None
+
+
+def read_limit(value):
+    """The saved warning limit in GB, 0 (off) for anything that isn't a whole number, clamped to 0-500."""
+    try:
+        gb = int(str(value).strip())
+    except (ValueError, TypeError):
+        return 0
+    return max(0, min(MAX_LIMIT_GB, gb))
 
 
 def format_bytes(n):
@@ -86,7 +105,10 @@ class DataUse(QObject):
                 self._prev_month, self._prev_bytes = month, nbytes
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
             self._prev_month, self._prev_bytes = "", 0
+        self._limit = read_limit(settings.get(LIMIT_SETTING, 0))
         self._present = False
+        self._since_save = 0       # samples since the last settings write
+        self._saved_once = False   # the first sample after start always writes
         self._first = QTimer(self, singleShot=True, interval=FIRST_SAMPLE_MS, timeout=self.sample)
         self._timer = QTimer(self, interval=SAMPLE_EVERY_MS, timeout=self.sample)
 
@@ -102,12 +124,14 @@ class DataUse(QObject):
         except OSError:
             names = None
         month = time.strftime("%Y-%m", time.localtime(self._clock()))
+        rolled = False
         if month > self._month:     # an earlier month is a clock not yet set: keep counting
             if self._month and month_before(month) == self._month and self._bytes > 0:
                 self._prev_month, self._prev_bytes = self._month, self._bytes
             else:
                 self._prev_month, self._prev_bytes = "", 0
             self._month, self._bytes = month, 0
+            rolled = True
         readings = {n: t for n in names or [] if (t := read_total(self._root, n)) is not None}
         for n, t in readings.items():
             last = self._last.get(n)
@@ -121,11 +145,19 @@ class DataUse(QObject):
             del self._last[n]
         self._present = bool(readings)
         if self._present or gone:        # nothing to save on a Mac
-            saved = {"month": self._month, "bytes": self._bytes, "last": self._last}
-            if self._prev_month:
-                saved["prev"] = {"month": self._prev_month, "bytes": self._prev_bytes}
-            self._settings.set(SETTING, json.dumps(saved))
+            self._since_save += 1
+            if gone or rolled or not self._saved_once or self._since_save >= SAVE_EVERY_SAMPLES:
+                self.save()
         self.changed.emit()
+
+    def save(self):
+        """Write the state to settings now. The readings in between are only in memory until the next write."""
+        saved = {"month": self._month, "bytes": self._bytes, "last": self._last}
+        if self._prev_month:
+            saved["prev"] = {"month": self._prev_month, "bytes": self._prev_bytes}
+        self._settings.set(SETTING, json.dumps(saved))
+        self._since_save = 0
+        self._saved_once = True
 
     @pyqtProperty(bool, notify=changed)
     def available(self):
@@ -145,7 +177,30 @@ class DataUse(QObject):
 
     @pyqtProperty(str, notify=changed)
     def text(self):
+        # The limit sits right after this month's figure, so it can't be read
+        # as applying to last month's.
+        now = format_bytes(self._bytes)
+        if self._limit:
+            now += f" of {self._limit} GB"
         prev = self._last_month()
         if not prev:
-            return format_bytes(self._bytes)
-        return f"{format_bytes(self._bytes)} ({format_bytes(prev)} last month)"
+            return now
+        return f"{now} ({format_bytes(prev)} last month)"
+
+    @pyqtProperty(int, notify=changed)
+    def limitGb(self):
+        return self._limit
+
+    @pyqtProperty(bool, notify=changed)
+    def overLimit(self):
+        """True once this month's use reaches the limit. Only a warning; nothing is switched off."""
+        return self._limit > 0 and self._bytes >= self._limit * 1_000_000_000
+
+    @pyqtSlot(int)
+    def setLimit(self, gb):
+        gb = read_limit(gb)
+        if gb == self._limit:
+            return
+        self._limit = gb
+        self._settings.set(LIMIT_SETTING, gb)
+        self.changed.emit()

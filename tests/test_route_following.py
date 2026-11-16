@@ -232,6 +232,22 @@ class FollowingTest(unittest.TestCase):
         self.assertEqual(self.said[-1], "You have arrived at Shop.")
         self.assertEqual(self.said.count("You have arrived at Shop."), 1)
 
+    def test_exit_number_follows_next_maneuver(self):
+        exit_step = step(20, 1, "Take exit 165B.")
+        exit_step["sign"] = {"exit_number_elements": [{"text": "165B"}],
+                             "exit_toward_elements": [{"text": "I-5 S"}]}
+        self.start(response([(0, 0), (0, 300), (0, 600), (0, 900)], [
+            step(1, 0, "Drive north."), exit_step, step(10, 2, "Turn right."),
+            step(4, 3, "You have arrived.")]))
+        self.assertEqual((self.router.exitNumber, self.router.exitToward), ("165B", "I-5 S"))
+        for n in range(310, 590, 10):
+            self.fix(0, n, 0)
+        self.assertEqual((self.router.exitNumber, self.router.exitToward), ("", ""))
+        for n in range(590, 900, 10):
+            self.fix(0, n, 0)
+        self.assertTrue(self.router.arrived)
+        self.assertEqual(self.router.exitNumber, "")
+
     def test_loop_ramp_said(self):
         self.start(LOOP_ROUTE)
         for e, n, heading, along in drive(LOOP, sideways=(0, 8, 9, 5)):
@@ -254,6 +270,77 @@ class FollowingTest(unittest.TestCase):
         self.assertFalse(self.router.arrived)
         self.fix(3, 492, 0, 3.0)
         self.assertTrue(self.router.arrived)
+
+    def test_off_route_then_a_failed_reroute_keeps_the_line_and_says_why(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        self.assertFalse(self.router.offRoute)
+        for n in (100, 110, 120, 130):
+            self.fix(80, n, 0)                       # 80 m east of the line
+        self.assertTrue(self.router.offRoute)
+        message = "Routing isn't running"
+        answer(self.router, None, message, "Shop", True)
+        self.assertTrue(self.router.active)
+        self.assertEqual(self.router.error, message)
+        self.assertTrue(self.router.offRoute)
+        answer(self.router, straight, "", "Shop", True)
+        self.assertEqual(self.router.error, "")
+        self.assertFalse(self.router.offRoute)
+
+    def drive_off(self, seconds_apart=1.0, fixes=4):
+        """Fixes 80 m off the line on a fake clock; returns the reroute requests."""
+        requests = []
+        self.router._request = lambda *a, **k: requests.append((a, k))
+        for _ in range(fixes):
+            self.now += seconds_apart
+            self.fix(80, 100, 0)
+        return requests
+
+    def test_off_route_is_said_once_then_okay_on_the_new_route(self):
+        from backend.routing import REROUTE_EVERY_S
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        self.now = 1000.0
+        self.router._clock = lambda: self.now
+        self.assertEqual(len(self.drive_off()), 1)
+        self.assertEqual(self.said.count("Off route. Finding a new route."), 1)
+        self.drive_off(fixes=3)                     # more fixes, still the same episode
+        self.now += REROUTE_EVERY_S                 # and a second ask a while on
+        self.assertEqual(len(self.drive_off(fixes=3)), 1)
+        self.assertEqual(self.said.count("Off route. Finding a new route."), 1)
+        answer(self.router, straight, "", "Shop", True)
+        self.assertEqual(self.said[-1], "Okay. Drive north.")
+        # Back on the line, then off again: a new episode says it again.
+        self.fix(0, 120, 0)
+        self.now += REROUTE_EVERY_S
+        self.drive_off()
+        self.assertEqual(self.said.count("Off route. Finding a new route."), 2)
+
+    def test_other_reroutes_still_say_rerouting(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        answer(self.router, straight, "", "Shop", True)
+        self.assertEqual(self.said[-1], "Rerouting. Drive north.")
+
+    def test_a_failed_reroute_says_so_once(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        self.now = 1000.0
+        self.router._clock = lambda: self.now
+        self.drive_off()
+        answer(self.router, None, "No route found", "Shop", True)
+        answer(self.router, None, "No route found", "Shop", True)
+        self.assertEqual(self.said.count("Can't find a new route. Keep going on the line."), 1)
+
+    def test_stop_clears_a_failed_reroute(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        for n in (100, 110, 120, 130):
+            self.fix(80, n, 0)
+        answer(self.router, None, "No route found", "Shop", True)
+        self.router.stop()
+        self.assertEqual(self.router.error, "")
+        self.assertFalse(self.router.offRoute)
 
 
 # North past two stops to the shop, a leg each, with a turn to take after

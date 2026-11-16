@@ -426,7 +426,7 @@ class SwitchTest(unittest.TestCase):
 
 
 class FakeSink(QObject):
-    """Stands in for QAudioSink: no audio device needed, nothing asks the feed for data."""
+    """Stands in for QAudioSink: no audio device needed, and it never takes any samples."""
     stateChanged = pyqtSignal(object)
 
     def __init__(self, device, fmt, parent=None):
@@ -445,8 +445,8 @@ class FakeSink(QObject):
     def setVolume(self, v):
         pass
 
-    def start(self, feed):
-        pass
+    def start(self):
+        return None             # no device to write to: nothing plays by itself
 
     def stop(self):
         pass

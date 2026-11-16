@@ -76,6 +76,94 @@ print(json.dumps(r))
 sys.stdout.flush()
 '''
 
+# One NavButton per label in a 112 px rail, so each label's laid-out width can
+# be checked against its 96 px plate (card width = 112 - 2 * 8).
+LABEL_SCRIPT = r'''
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import QEventLoop, QTimer, QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+app = QGuiApplication(sys.argv)
+ROOT = Path.cwd()
+LABELS = ["Home", "Music", "Maps", "Gauges", "Truck", "Settings"]
+
+
+def wait(ms):
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+engine = QQmlEngine()
+r = {}
+for i, label in enumerate(LABELS):
+    component = QQmlComponent(engine)
+    component.setData(('import QtQuick\nimport "qml/components"\n'
+                       'Item { width: 112; height: 400; '
+                       'NavButton { objectName: "nb"; icon: "home"; label: "%s"; active: true } }'
+                       % label).encode(),
+                      QUrl.fromLocalFile(str(ROOT / ("x%d.qml" % i))))
+    obj = component.create()
+    if obj is None:
+        for error in component.errors():
+            print(error.toString(), file=sys.stderr)
+        sys.exit(1)
+    nb = obj.findChild(object, "nb")
+    wait(60)
+    r[label] = {"label": nb.property("labelWidth"), "card": nb.property("cardWidth")}
+print(json.dumps(r))
+sys.stdout.flush()
+'''
+
+BADGE_SCRIPT = r'''
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import QEventLoop, QTimer, QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+app = QGuiApplication(sys.argv)
+ROOT = Path.cwd()
+
+
+def wait(ms):
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+engine = QQmlEngine()
+component = QQmlComponent(engine)
+component.setData(b'import QtQuick\nimport "qml/components"\n'
+                  b'Item { width: 112; height: 400; '
+                  b'NavButton { objectName: "nb"; icon: "car"; label: "TRUCK"; active: false } }',
+                  QUrl.fromLocalFile(str(ROOT / "x.qml")))
+obj = component.create()
+if obj is None:
+    for error in component.errors():
+        print(error.toString(), file=sys.stderr)
+    sys.exit(1)
+nb = obj.findChild(object, "nb")
+r = {}
+r["default"] = bool(nb.property("badgeShown"))
+nb.setProperty("badge", True)
+wait(20)
+r["on"] = bool(nb.property("badgeShown"))
+nb.setProperty("active", True)
+wait(20)
+r["active"] = bool(nb.property("badgeShown"))
+nb.setProperty("active", False)
+wait(20)
+r["back"] = bool(nb.property("badgeShown"))
+nb.setProperty("badge", False)
+wait(20)
+r["cleared"] = bool(nb.property("badgeShown"))
+print(json.dumps(r))
+sys.stdout.flush()
+'''
+
 PRESS_SCRIPT = r'''
 import json, sys, time
 from pathlib import Path
@@ -171,6 +259,45 @@ class NavButtonMotionTest(unittest.TestCase):
         self.assertIn("id: pressSpring", source)
         self.assertIn("pressSpring.targetValue < 1 ? 70 : 180", source)
         self.assertIn("easing.overshoot: 2.5", source)
+
+    def test_every_nav_label_fits_inside_its_plate(self):
+        # The label may not run past the highlighted plate: it keeps a gap of at
+        # least 4 px each side (contentWidth <= card width - 8).
+        result = subprocess.run([sys.executable, "-c", LABEL_SCRIPT], cwd=ROOT,
+                                capture_output=True, text=True, timeout=120,
+                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(data["Settings"]["card"], 96)
+        for label, sizes in data.items():
+            self.assertGreater(sizes["label"], 0, label)
+            self.assertLessEqual(sizes["label"], sizes["card"] - 8, label)
+
+    def test_badge_is_hidden_by_default_and_shows_off_the_active_page(self):
+        result = subprocess.run([sys.executable, "-c", BADGE_SCRIPT], cwd=ROOT,
+                                capture_output=True, text=True, timeout=60,
+                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertFalse(data["default"])
+        self.assertTrue(data["on"])
+        self.assertFalse(data["active"])
+        self.assertTrue(data["back"])
+        self.assertFalse(data["cleared"])
+
+    def test_badge_is_a_plain_shape_with_no_motion(self):
+        source = (ROOT / "qml" / "components" / "NavButton.qml").read_text()
+        start = source.index("id: dot")
+        block = source[source.rindex("Rectangle {", 0, start):source.index("\n                }", start)]
+        for pattern in ("Animation", "Behavior", "Timer", "running"):
+            self.assertNotIn(pattern, block)
+
+    def test_main_binds_badges_per_nav_key(self):
+        source = (ROOT / "qml" / "Main.qml").read_text()
+        self.assertIn("badge: root.badgeFor(index)", source)
+        self.assertIn("function badgeFor(i)", source)
+        self.assertIn("vehicle.codeCount > 0 && !vehicle.simulated", source)
+        self.assertIn("updater.canUpdate", source)
 
     def test_no_idle_cost_constructs(self):
         source = (ROOT / "qml" / "components" / "NavButton.qml").read_text()

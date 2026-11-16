@@ -13,7 +13,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend import system as system_module
-from backend.system import SystemInfo, can_power, power
+from backend.system import SystemInfo, can_power, power, restart_count
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -163,9 +163,24 @@ class CanPowerTest(unittest.TestCase):
             self.assertIsNone(can_power())
 
 
+class RestartCountTest(unittest.TestCase):
+    def test_parses_the_number(self):
+        with mock.patch("subprocess.run", return_value=ran(0, "3\n")):
+            self.assertEqual(restart_count(), 3)
+
+    def test_none_for_errors_and_odd_output(self):
+        for out in ("", "[not set]"):
+            with mock.patch("subprocess.run", return_value=ran(0, out)):
+                self.assertIsNone(restart_count())
+        for err in (FileNotFoundError, subprocess.TimeoutExpired("systemctl", 2)):
+            with mock.patch("subprocess.run", side_effect=err):
+                self.assertIsNone(restart_count())
+
+
 class StatusCheckTest(unittest.TestCase):
     def setUp(self):
         self.version = mock.patch("backend.system.version_text", return_value="v1 (abc)").start()
+        self.restarts = mock.patch("backend.system.restart_count", return_value=3).start()
         self.system = SystemInfo()
         mock.patch("backend.system.threading", SimpleNamespace(Thread=InlineThread)).start()
         self.printed = mock.patch("builtins.print").start()
@@ -202,6 +217,45 @@ class StatusCheckTest(unittest.TestCase):
         self.assertEqual(self.system.version, "v1 (abc)")
         self.assertEqual(self.version.call_count, 1)
         self.assertEqual(seen[0], "v1 (abc)")
+
+    def test_restarts_is_unknown_until_the_first_check_reads_it(self):
+        self.assertEqual(self.system.restarts, -1)
+        self.check()
+        self.check()
+        self.assertEqual(self.system.restarts, 3)
+        self.assertEqual(self.restarts.call_count, 1)
+
+    def test_unknown_restart_count_stays_minus_one(self):
+        self.restarts.return_value = None
+        self.check()
+        self.assertEqual(self.system.restarts, -1)
+
+    def test_start_checks_once_without_the_repeating_timer(self):
+        self.check = mock.Mock()
+        self.system._check = self.check
+        self.system.start()
+        self.check.assert_called_once()
+        self.assertFalse(self.system._timer.isActive())
+
+    def test_start_still_delivers_version_and_clock(self):
+        mock.patch("backend.system.clock_synced", return_value=True).start()
+        with mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.can_power", return_value=True):
+            self.system.start()
+        self.assertEqual(self.system.version, "v1 (abc)")
+        self.assertTrue(self.system.clockSynced)
+        self.assertFalse(self.system._timer.isActive())
+
+    def test_set_active_checks_at_once_and_runs_the_timer_until_off(self):
+        checks = mock.Mock()
+        self.system._check = checks
+        self.system.setActive(True)
+        checks.assert_called_once()
+        self.assertTrue(self.system._timer.isActive())
+        self.system.setActive(False)
+        self.assertFalse(self.system._timer.isActive())
+        checks.assert_called_once()
 
     def test_a_crashing_version_read_leaves_it_blank_and_checks_go_on(self):
         self.version.side_effect = RuntimeError("git")

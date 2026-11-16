@@ -32,7 +32,7 @@ DEMO_ALBUMS = [
     ]},
 ]
 DEMO_QUEUE = [dict(t) for a in DEMO_ALBUMS for t in a["tracks"]]   # every song, in album order
-NO_SONG = {"title": "", "artist": "", "duration": 0}
+NO_SONG = {"title": "", "artist": "", "album": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
@@ -42,6 +42,7 @@ class MediaPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()             # playAlbum/playAll: the queue and `album` changed
+    upNextChanged = pyqtSignal()            # the song changed, or the queue did
     modesChanged = pyqtSignal()             # never: the demo plays in order
 
     def __init__(self, queue=None, parent=None):
@@ -106,6 +107,7 @@ class MediaPlayer(QObject):
             return
         self._index = index % len(self._queue)
         self._position = 0
+        self.upNextChanged.emit()
         self.trackChanged.emit()
         self.positionChanged.emit()
 
@@ -117,6 +119,21 @@ class MediaPlayer(QObject):
     @pyqtProperty(str, notify=trackChanged)
     def artist(self):
         return self._song()["artist"]
+
+    @pyqtProperty(str, notify=trackChanged)
+    def albumTitle(self):
+        """The demo album the song is on: the one playing, or for a song from
+        all songs, the album it sits in. '' for a queue passed in."""
+        if not self._albums or not self._queue or self._index < 0:
+            return ""
+        if self._album != -1:
+            return self._albums[self._album]["title"]
+        left = self._index
+        for a in self._albums:
+            if left < len(a["tracks"]):
+                return a["title"]
+            left -= len(a["tracks"])
+        return ""
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):
@@ -133,6 +150,12 @@ class MediaPlayer(QObject):
     @pyqtProperty("QVariantList", notify=queueChanged)
     def queue(self):
         return self._queue
+
+    @pyqtProperty("QVariantList", notify=upNextChanged)
+    def upNext(self):
+        """The songs after this one, in order (the demo plays straight through)."""
+        return [{"title": t["title"], "artist": t["artist"], "index": i}
+                for i, t in enumerate(self._queue) if i > self._index]
 
     @pyqtProperty(bool, constant=True)
     def hasModes(self):
@@ -169,6 +192,27 @@ class MediaPlayer(QObject):
                  "duration": sum(t["duration"] for t in a["tracks"])}
                 for a in self._albums]
 
+    @pyqtProperty("QVariantList", constant=True)
+    def recentAlbums(self):
+        return []
+
+    @pyqtProperty("QVariantList", constant=True)
+    def songs(self):
+        order = sorted(range(len(DEMO_QUEUE)), key=lambda i: DEMO_QUEUE[i]["title"].casefold())
+        return [{"title": DEMO_QUEUE[i]["title"], "artist": DEMO_QUEUE[i]["artist"], "index": i}
+                for i in order] if self._albums else []
+
+    @pyqtSlot(int)
+    def playSong(self, index):
+        """Play one song with every song queued after it."""
+        if not self._albums or not 0 <= index < len(DEMO_QUEUE):
+            return
+        self._queue = list(DEMO_QUEUE)
+        self._album = -1
+        self.queueChanged.emit()
+        self.upNextChanged.emit()
+        self.playIndex(index)
+
     @pyqtProperty(int, notify=queueChanged)
     def album(self):
         return self._album
@@ -195,7 +239,12 @@ class MediaPlayer(QObject):
             self._queue = list(DEMO_QUEUE if self._albums else self._queue)
             self._album = -1
             self.queueChanged.emit()
+        self.upNextChanged.emit()
         self.playIndex(0)
+
+    @pyqtSlot()
+    def shuffleAll(self):
+        self.playAll()                  # the demo has no modes to shuffle
 
     def _start_playing(self, index):
         self._set_index(max(0, min(index, len(self._queue) - 1)))

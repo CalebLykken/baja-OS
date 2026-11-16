@@ -6,11 +6,12 @@ the simulated drive, dashes, or the real battery.
 """
 
 import unittest
+from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
 from backend.gps import Gps
-from backend.vehicle import GEARS, LIMITS, VOLTS_MS, VehicleData, estimate_gear, warnings
+from backend.vehicle import GEARS, LIMITS, VOLTS_MS, VehicleData, estimate_gear, settled_gear, warnings
 
 # apply_obd restarts a QTimer, which wants an application object (no event loop).
 app = QCoreApplication.instance() or QCoreApplication([])
@@ -82,6 +83,11 @@ class ThresholdTest(unittest.TestCase):
         self.assertEqual(warnings(**{**FINE, "coolant": 231}), ["coolant"])
         self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantHigh"]}), [])
 
+    def test_cold_limit_is_below_overheating(self):
+        # The "warming up" note ends below the cold limit; the overheat warning starts above the hot one.
+        self.assertLess(LIMITS["coolantCold"], LIMITS["coolantHigh"])
+        self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantCold"] - 1}), [])
+
     def test_battery_voltage_both_ways(self):
         self.assertEqual(warnings(**{**FINE, "voltage": 11.9}), ["voltage"])
         self.assertEqual(warnings(**{**FINE, "voltage": 15.1}), ["voltage"])
@@ -96,6 +102,47 @@ class ThresholdTest(unittest.TestCase):
 
     def test_most_urgent_first(self):
         self.assertEqual(warnings(coolant=240, voltage=11, boost=17), ["coolant", "voltage", "boost"])
+
+
+class HysteresisTest(unittest.TestCase):
+    def test_coolant_latches_until_clearly_cool(self):
+        v = VehicleData()
+        for temp, want in ((231, ["coolant"]), (229, ["coolant"]), (224, []), (230.5, ["coolant"])):
+            v.apply_obd({"coolant": temp, "voltage": 14.1, "boost": 2})
+            self.assertEqual(v.warnings, want, temp)
+
+    def test_boost_latches_until_clearly_lower(self):
+        v = VehicleData()
+        for psi, want in ((15.5, ["boost"]), (14.5, ["boost"]), (13.9, []), (15.2, ["boost"])):
+            v.apply_obd({"coolant": 190, "voltage": 14.1, "boost": psi})
+            self.assertEqual(v.warnings, want, psi)
+
+    def test_voltage_latches_until_clearly_in_range(self):
+        v = truck()
+        v.apply_voltage(11.9)
+        v.apply_obd(DRIVING)
+        self.assertEqual(v.warnings, ["voltage"])
+        v.apply_voltage(12.1)
+        self.assertEqual(v.warnings, ["voltage"])
+        v.apply_voltage(12.4)
+        self.assertEqual(v.warnings, [])
+        v.apply_voltage(12.1)
+        self.assertEqual(v.warnings, [])        # not latched again until it crosses the limit
+
+    def test_going_quiet_empties_the_latch(self):
+        v = VehicleData()
+        v.apply_obd({"coolant": 235, "voltage": 14.1, "boost": 2})
+        self.assertEqual(v.warnings, ["coolant"])
+        v.lost_obd()
+        self.assertEqual(v.warnings, [])
+        v.apply_obd({"coolant": 228, "voltage": 14.1, "boost": 2})
+        self.assertEqual(v.warnings, [])
+
+    def test_the_plain_function_has_no_memory(self):
+        self.assertEqual(warnings(**{**FINE, "coolant": 229}), [])
+        self.assertEqual(warnings(**{**FINE, "coolant": 229}, active=["coolant"]), ["coolant"])
+        self.assertEqual(warnings(**{**FINE, "voltage": 12.1}), [])
+        self.assertEqual(warnings(**{**FINE, "voltage": 12.1}, active=["voltage"]), ["voltage"])
 
 
 class LiveOnlyTest(unittest.TestCase):
@@ -192,6 +239,14 @@ class SimulationTest(unittest.TestCase):
 
 
 class LiveTest(unittest.TestCase):
+    # These are about carAnswered. The top speed and peak rpm are saved too,
+    # but only with a boot id: there is one on the Pi (Linux) and none on a
+    # Mac, so without this the saved list differed between the two.
+    def setUp(self):
+        import backend.vehicle as vehicle
+        self._boot, vehicle.boot_id = vehicle.boot_id, lambda: None
+        self.addCleanup(setattr, vehicle, "boot_id", self._boot)
+
     def test_the_first_reading_saves_that_the_car_answered_once(self):
         settings = FakeSettings()
         v = VehicleData(settings)
@@ -555,3 +610,68 @@ class CodesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettledGearTest(unittest.TestCase):
+    def run_samples(self, gear, estimates, mph=40.0, rpm=2500):
+        seen, count = gear, 5
+        out = []
+        for e in estimates:
+            gear, seen, count = settled_gear(gear, seen, count, e, mph, rpm)
+            out.append(gear)
+        return out
+
+    def test_a_stable_gear_stays_through_one_zero(self):
+        self.assertEqual(self.run_samples(3, [0, 3, 3]), [3, 3, 3])
+
+    def test_a_lone_other_gear_is_ignored(self):
+        self.assertEqual(self.run_samples(3, [3, 4, 3]), [3, 3, 3])
+
+    def test_two_in_a_row_switch(self):
+        self.assertEqual(self.run_samples(3, [4, 4]), [3, 4])
+
+    def test_three_zeros_switch_to_zero(self):
+        self.assertEqual(self.run_samples(3, [0, 0, 0]), [3, 3, 0])
+
+    def test_a_stop_goes_to_zero_at_once(self):
+        self.assertEqual(settled_gear(3, 3, 5, 0, 0.0, 800), (0, 0, 1))
+        self.assertEqual(settled_gear(3, 3, 5, 0, 40.0, 0), (0, 0, 1))
+
+
+class PeaksNoFileReadTests(unittest.TestCase):
+    """_note_peaks runs on every OBD reading: it must not read the boot id
+    (a file) unless a save is actually due."""
+
+    def setUp(self):
+        patch = mock.patch("backend.vehicle.boot_id", return_value="boot-a")
+        self.boot = patch.start()
+        self.addCleanup(patch.stop)
+        self.now = 1000.0
+        self.v = VehicleData(FakeSettings())
+        self.v._clock = lambda: self.now
+        self.boot.reset_mock()
+
+    def test_no_read_when_nothing_changed(self):
+        self.v._note_peaks(0.0, 0)
+        self.v._note_peaks(0.0, 0)
+        self.boot.assert_not_called()
+
+    def test_no_read_without_settings(self):
+        v = VehicleData(None)
+        self.boot.reset_mock()
+        v._note_peaks(50.0, 3000)
+        self.boot.assert_not_called()
+
+    def test_reads_once_per_save_then_not_inside_the_interval(self):
+        self.v._note_peaks(50.0, 3000)
+        self.assertEqual(self.boot.call_count, 1)
+        self.assertEqual(len(self.v._settings.saved), 1)
+        self.now += 5
+        self.v._note_peaks(60.0, 3500)    # dirty again, but saved too recently
+        self.v._note_peaks(60.0, 3500)
+        self.assertEqual(self.boot.call_count, 1)
+        self.assertEqual(len(self.v._settings.saved), 1)
+        self.now += 30
+        self.v._note_peaks(60.0, 3500)
+        self.assertEqual(self.boot.call_count, 2)
+        self.assertEqual(len(self.v._settings.saved), 2)

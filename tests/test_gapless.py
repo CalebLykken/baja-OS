@@ -36,7 +36,7 @@ def counting(first, n):
 
 
 class FakeSink(QObject):
-    """Stands in for QAudioSink: it never asks the feed for anything."""
+    """Stands in for QAudioSink: it never takes any samples."""
     stateChanged = pyqtSignal(object)
 
     made = []
@@ -63,8 +63,8 @@ class FakeSink(QObject):
     def setVolume(self, v):
         pass
 
-    def start(self, feed):
-        pass
+    def start(self):
+        return None             # no device to write to: nothing plays by itself
 
     def stop(self):
         pass
@@ -505,6 +505,110 @@ class SinkRetryTest(Base):
         sip.delete(self.out)
         self.retries[0]()
         self.assertEqual(len(FakeSink.made), made)
+
+
+class FakeDevice(QObject):
+    """Qt's own device a sink gives back in push mode. Takes at most `room`
+    bytes a write (None: everything), and keeps what it took."""
+
+    def __init__(self):
+        super().__init__()
+        self.took = bytearray()
+        self.room = None
+
+    def write(self, data):
+        n = len(data) if self.room is None else min(self.room, len(data))
+        self.took += data[:n]
+        return n
+
+
+class PushSink(FakeSink):
+    """A FakeSink that hands out a device to write to, with `free` bytes of room."""
+
+    def __init__(self, device, fmt, parent=None):
+        super().__init__(device, fmt, parent)
+        self.io = FakeDevice()
+        self.free = 0
+
+    def bytesFree(self):
+        return self.free
+
+    def start(self, *feed):
+        # Push mode only: a Python device to pull from is what deadlocked
+        # against the PulseAudio thread.
+        assert not feed, "the sink must never be given a Python device to read from"
+        return self.io
+
+
+class PushTest(Base):
+    """The stream is written to from the audio thread (push mode), never read
+    from a Python QIODevice. Driven by hand: _push is what its timer runs."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(gapless, "QAudioSink", PushSink)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def output(self, engine):
+        # Its own output on this thread, so _push can be called directly.
+        out = gapless._Output(engine)
+        self.addCleanup(lambda: out._tick.stop())
+        out.make_sink("A")
+        return out
+
+    def test_a_timer_tops_the_stream_up(self):
+        engine = self.engine((0, 5))
+        out = self.output(engine)
+        self.assertTrue(out._tick.isActive())
+        self.assertEqual(out._tick.interval(), gapless.PUSH_MS)
+
+    def test_only_what_is_free_is_written_in_whole_frames(self):
+        engine = self.engine((0, 5))
+        engine.play_from(0)
+        self.decode(engine)
+        out = self.output(engine)
+        out.sink.free = 1001                      # not a whole frame
+        out._push()
+        self.assertEqual(len(out.sink.io.took), 1000)
+        out.sink.free = 0
+        out._push()
+        self.assertEqual(len(out.sink.io.took), 1000)
+
+    def test_samples_the_stream_does_not_take_go_first_next_time(self):
+        # Short writes and odd sizes: a lost or repeated frame breaks the count.
+        engine = self.engine((0, 30))
+        engine.play_from(0)
+        out = self.output(engine)
+        io = out.sink.io
+        for i in range(400):
+            self.decode(engine)
+            out.sink.free = (i * 7919) % 20000 // 4 * 4
+            io.room = None if i % 3 else (i * 104729) % 9000
+            out._push()
+        ramp = gapless.RAMP_FRAMES * gapless.FRAME
+        self.assertGreater(len(io.took), S)
+        self.assert_counts_up(io.took[ramp:], gapless.RAMP_FRAMES)
+
+    def test_a_new_device_drops_what_was_left_for_the_old_one(self):
+        engine = self.engine((0, 5))
+        engine.play_from(0)
+        self.decode(engine)
+        out = self.output(engine)
+        out.sink.free, out.sink.io.room = 4000, 400
+        out._push()
+        self.assertTrue(out.spill)
+        out.make_sink("B")
+        self.assertEqual(out.spill, b"")
+        self.assertEqual(out.sink.dev, "B")
+
+    def test_spill_counts_as_queued(self):
+        engine = self.engine((0, 5))
+        out = self.output(engine)
+        out.sink.setBufferSize(8000)
+        out.sink.free = 6000
+        out.spill = bytes(400)
+        self.assertEqual(out.latency(), 2000 + 400)
 
 
 if __name__ == "__main__":

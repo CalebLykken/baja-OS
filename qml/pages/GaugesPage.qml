@@ -5,8 +5,9 @@ import "../components"
 // Six live gauges in a 3x2 grid. Warning thresholds (vehicle.limits, from
 // backend/vehicle.py) turn a gauge red. A reading that isn't known (the car
 // isn't answering) shows a dash instead of a number; the speed is also known
-// from the GPS. RPM, speed and boost hold a peak tell-tale marker (see
-// Gauge.qml); tap one of those gauges to clear its peak. While the car
+// from the GPS. RPM, speed, boost, coolant and intake hold a peak tell-tale
+// marker (see Gauge.qml), so after a hill or a hot day you can see how hot it
+// got; tap one of those gauges to clear its peak. While the car
 // reports trouble codes (vehicle.codes), a strip under the grid lists each
 // with its description.
 Item {
@@ -38,7 +39,10 @@ Item {
 
     Rectangle {
         id: strip
-        readonly property bool shown: vehicle.codes.length > 0
+        objectName: "codeStrip"
+        // Shown while the check-engine light is on, even when the codes have not
+        // been read yet, so the driver is never told nothing about a lit lamp.
+        readonly property bool shown: vehicle.codes.length > 0 || vehicle.milOn
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: shown ? list.implicitHeight + 16 : 0
         visible: shown
@@ -50,6 +54,18 @@ Item {
             id: list
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
             spacing: 2
+            Label {
+                // The lamp itself, first, so it reads even with no codes listed.
+                objectName: "lampLabel"
+                visible: vehicle.milOn
+                width: list.width
+                text: "Check engine light on" + (vehicle.codeCount > 0 ? "  ·  " + vehicle.codeCount
+                                                + (vehicle.codeCount === 1 ? " code" : " codes") : "")
+                color: Theme.warn
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+            }
             Repeater {
                 model: vehicle.codes.slice(0, 4)
                 Row {
@@ -71,8 +87,11 @@ Item {
                 }
             }
             Label {
-                visible: vehicle.codes.length > 4
-                text: "+" + (vehicle.codes.length - 4) + " more"
+                objectName: "moreLabel"
+                // The count can be higher than the codes read so far.
+                readonly property int more: Math.max(vehicle.codeCount, vehicle.codes.length) - 4
+                visible: more > 0
+                text: "+" + more + " more"
                 color: Theme.textDim
                 font.pixelSize: Theme.fontSmall
             }
@@ -81,6 +100,7 @@ Item {
 
     GridLayout {
         id: grid
+        objectName: "gaugeGrid"
         anchors { left: parent.left; right: parent.right; top: parent.top }
         anchors.bottom: strip.shown ? strip.top : parent.bottom
         anchors.bottomMargin: strip.shown ? Theme.gap : 0
@@ -94,6 +114,7 @@ Item {
             known: vehicle.engineKnown
             value: vehicle.rpm; minValue: 0; maxValue: 7000; warnAbove: vehicle.limits.rpmHigh
             labelDivisor: 1000
+            numberStep: 10   // the numeral to the nearest 10 so it doesn't jitter at idle
             peakHold: true
         }
         Gauge {
@@ -113,8 +134,10 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "Boost"; unit: Units.boostUnit; decimals: Units.boostDecimals
             known: vehicle.engineKnown
-            value: Units.boost(vehicle.boost); minValue: Units.boost(-20); maxValue: Units.boost(20)
+            value: Units.boost(vehicle.boost); minValue: Units.boost(-15); maxValue: Units.boost(20)
+            markValue: Units.boost(0)   // where vacuum ends and boost begins
             warnAbove: Units.boost(vehicle.limits.boostHigh)
+            warnMargin: Units.boost(1) - Units.boost(0)   // 1 psi, in the display units
             peakHold: true
         }
         Gauge {
@@ -123,6 +146,14 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.coolant); minValue: Units.temp(100); maxValue: Units.temp(260)
             warnAbove: Units.temp(vehicle.limits.coolantHigh)
+            warnMargin: Units.metric ? 5 / 1.8 : 5   // 5 °F as a difference
+            peakHold: true
+
+            // A cold engine is not a warning, so no warning colour: just a
+            // note under the unit, as long as it is still below the cold limit.
+            // The coolant reading is in °F, so it is compared with the limit in °F.
+            note: vehicle.engineKnown && vehicle.limits.coolantCold !== undefined
+                  && vehicle.coolant < vehicle.limits.coolantCold ? "warming up" : ""
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -130,6 +161,8 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.intake); minValue: Units.temp(0); maxValue: Units.temp(200)
             warnAbove: Units.temp(vehicle.limits.intakeHigh)
+            warnMargin: Units.metric ? 5 / 1.8 : 5   // 5 °F as a difference
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -137,6 +170,7 @@ Item {
             known: vehicle.voltageKnown
             value: vehicle.voltage; minValue: 10; maxValue: 16
             warnAbove: vehicle.limits.voltageHigh; warnBelow: vehicle.limits.voltageLow
+            warnMargin: 0.3
         }
     }
 }

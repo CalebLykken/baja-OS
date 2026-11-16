@@ -30,6 +30,31 @@ class BackdropTextTest(unittest.TestCase):
         self.assertRegex(THEME, r'gauge: "arc", backdrop: "grid"')
         self.assertRegex(THEME, r'gauge: "needle", backdrop: "dial"')
 
+    def test_waves_and_dunes_are_painted_and_deterministic(self):
+        self.assertIn("function paintWaves(ctx)", BACKDROP)
+        self.assertIn("function paintDunes(ctx)", BACKDROP)
+        self.assertIn('kind === "waves"', BACKDROP)
+        self.assertIn('kind === "dunes"', BACKDROP)
+        self.assertNotIn("Math.random", BACKDROP)
+
+    def test_atlantic_uses_waves(self):
+        self.assertRegex(THEME, r'gauge: "arc", backdrop: "waves"')
+
+    def test_facets_and_scanlines_are_painted_and_deterministic(self):
+        self.assertIn("function paintFacets(ctx)", BACKDROP)
+        self.assertIn("function paintScanlines(ctx)", BACKDROP)
+        self.assertIn('kind === "facets"', BACKDROP)
+        self.assertIn('kind === "scanlines"', BACKDROP)
+        self.assertRegex(THEME, r'glacier: \{[^}]*backdrop: "facets"')
+        self.assertRegex(THEME, r'lcd: \{[^}]*backdrop: "scanlines"')
+
+    def test_sunset_paints_a_horizon_sun_once(self):
+        self.assertIn("function paintHorizon(ctx)", BACKDROP)
+        self.assertIn('kind === "horizon"', BACKDROP)
+        self.assertRegex(THEME, r'sunset: \{[^}]*backdrop: "horizon"')
+        # The clip is balanced by a restore so later kinds can't inherit it.
+        self.assertEqual(BACKDROP.count("ctx.save()"), BACKDROP.count("ctx.restore()"))
+
     def test_nothing_runs_while_idle(self):
         for word in ("Timer", "Animation", "Behavior", "running:"):
             self.assertNotIn(word, BACKDROP)
@@ -66,10 +91,16 @@ component.setData(
     b'  onDkChanged: Theme.dark = dk }',
     QUrl.fromLocalFile(str(ROOT / "x.qml")))
 obj = component.create()
+theme = None
 if obj is None:
     print(json.dumps({"fatal": [e.toString() for e in component.errors()]}))
     sys.exit(0)
 bd = obj.property("bd")
+tc = QQmlComponent(engine)
+tc.setData(b'import QtQuick\nimport "qml/components"\nItem { property var th: Theme }',
+           QUrl.fromLocalFile(str(ROOT / "x.qml")))
+theme = tc.create().property("th")
+styles = theme.property("styles").toVariant()
 
 
 def wait(ms):
@@ -79,12 +110,13 @@ def wait(ms):
 
 
 out = {}
-for style in ["amber", "cluster", "trail", "rally"]:
+for style in list(theme.property("styleNames").toVariant()):
     for dark in (True, False):
         obj.setProperty("st", style)
         obj.setProperty("dk", dark)
         wait(50)
         out["%s/%s" % (style, dark)] = bd.property("kind")
+out["expected"] = {n: styles[n]["backdrop"] for n in styles}
 out["warnings"] = warnings + [m for m in messages if "qml" in m.lower()]
 print(json.dumps(out))
 '''
@@ -105,7 +137,8 @@ class BackdropQmlTest(unittest.TestCase):
         self.assertNotIn("fatal", self.out)
 
     def test_kind_follows_style_in_both_modes(self):
-        expected = {"amber": "grid", "cluster": "dial", "trail": "topo", "rally": "stripes"}
+        expected = self.out["expected"]
+        self.assertTrue(expected)
         for style, kind in expected.items():
             for dark in (True, False):
                 self.assertEqual(self.out["%s/%s" % (style, dark)], kind)

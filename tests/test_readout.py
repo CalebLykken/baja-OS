@@ -57,10 +57,23 @@ def col(c):
 
 
 ref = build('import QtQuick\nimport "qml/components"\n'
-            'Item { property color t: Theme.text; property color d: Theme.textDim; '
-            'property color w: Theme.warn }')
-out = {"ref": {"text": col(ref.property("t")), "dim": col(ref.property("d")),
-               "warn": col(ref.property("w"))}}
+            'Item { property int fr: Theme.fontReadout; property color t: Theme.text; property color d: Theme.textDim; '
+            'property color w: Theme.warn; property color a: Theme.accent }')
+out = {"ref": {"readout": ref.property("fr"), "text": col(ref.property("t")), "dim": col(ref.property("d")),
+               "warn": col(ref.property("w")), "accent": col(ref.property("a"))}}
+
+
+def width(props):
+    obj = make(props)
+    wait(100)
+    return obj.findChild(QObject, "readoutNumeral").property("width")
+
+
+out["widths"] = {
+    "slot": [width('value: "%s"; widest: "000"' % v) for v in ("5", "55", "555")],
+    "free": [width('value: "%s"' % v) for v in ("5", "55", "555")],
+    "dash": width('value: "—"; widest: "000"'),
+}
 
 
 def snap(key, props):
@@ -70,7 +83,7 @@ def snap(key, props):
     unit = obj.findChild(QObject, "readoutUnit")
     leg = obj.findChild(QObject, "readoutLegend")
     out[key] = {"text": num.property("text"), "color": col(num.property("color")),
-                "scale": num.property("scale"), "unit": unit.property("visible"),
+                "scale": num.property("scale"), "size": num.property("font").pixelSize(), "unit": unit.property("visible"),
                 "legend": col(leg.property("color"))}
 
 
@@ -79,7 +92,11 @@ snap("em", 'value: "—"')
 snap("en", 'value: "–"')
 snap("empty", 'value: ""')
 snap("warn", 'value: "12.3"; warning: true')
+snap("big", 'value: "123"; numeralSize: 76')
 snap("pwarn", 'value: "—"; warning: true')
+snap("hl", 'value: "12.3"; highlight: true')
+snap("hlwarn", 'value: "12.3"; highlight: true; warning: true')
+snap("hlempty", 'value: "—"; highlight: true')
 
 print(json.dumps(out))
 '''
@@ -114,11 +131,44 @@ class ReadoutTest(unittest.TestCase):
         self.assertEqual(r["color"], self.out["ref"]["warn"])
         self.assertEqual(r["legend"], self.out["ref"]["warn"])
 
+    def test_numeral_size(self):
+        self.assertEqual(self.out["real"]["size"], self.out["ref"]["readout"])
+        self.assertEqual(self.out["real"]["size"], 56)
+        self.assertEqual(self.out["big"]["size"], 76)
+
     def test_placeholder_never_warns(self):
         r = self.out["pwarn"]
         self.assertEqual(r["color"], self.out["ref"]["dim"])
         self.assertEqual(r["legend"], self.out["ref"]["dim"])
         self.assertEqual(r["scale"], 1)
+
+    def test_legend_is_dim_by_default(self):
+        self.assertEqual(self.out["real"]["legend"], self.out["ref"]["dim"])
+        self.assertEqual(self.out["warn"]["legend"], self.out["ref"]["warn"])
+
+    def test_highlight_marks_legend_in_accent(self):
+        self.assertEqual(self.out["hl"]["legend"], self.out["ref"]["accent"])
+        self.assertEqual(self.out["hl"]["color"], self.out["ref"]["text"])
+
+    def test_warning_wins_over_highlight(self):
+        r = self.out["hlwarn"]
+        self.assertEqual(r["legend"], self.out["ref"]["warn"])
+        self.assertEqual(r["color"], self.out["ref"]["warn"])
+
+    def test_placeholder_is_not_highlighted(self):
+        r = self.out["hlempty"]
+        self.assertEqual(r["legend"], self.out["ref"]["dim"])
+        self.assertEqual(r["color"], self.out["ref"]["dim"])
+
+    def test_widest_holds_the_numeral_width(self):
+        slot = self.out["widths"]["slot"]
+        self.assertEqual(len(set(slot)), 1, slot)
+        self.assertEqual(self.out["widths"]["dash"], slot[0])
+
+    def test_without_widest_the_width_follows_the_text(self):
+        free = self.out["widths"]["free"]
+        self.assertLess(free[0], free[1])
+        self.assertLess(free[1], free[2])
 
 
 if __name__ == "__main__":

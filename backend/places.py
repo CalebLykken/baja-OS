@@ -448,14 +448,41 @@ def _fts_query(text):
     return " AND ".join(f'"{w}"*' for w in words)
 
 
+def _loose_fts_query(text):
+    """Like _fts_query, but a longer word ending in 's' drops the 's' first.
+    The index splits "McDonald's" into "mcdonald" and "s", so "mcdonalds" and
+    "traders joes" need this to match "Trader Joe's"."""
+    words = [w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split() if w]
+    parts = []
+    for w in words:
+        if len(w) > 3 and w.endswith("s"):
+            w = w[:-1]
+        parts.append(f'"{w}"*')
+    return " AND ".join(parts)
+
+
+def _place_rows(db, q):
+    return db.execute("SELECT name, kind, area, weight, lon, lat, bm25(places) FROM places"
+                      " WHERE places MATCH ? ORDER BY bm25(places) LIMIT 300", (q,)).fetchall()
+
+
 def search(db, text, near=None, limit=12):
     """Best matches for `text`, nearest first among equally good names.
-    `near` is (lon, lat) to measure distance from."""
+    `near` is (lon, lat) to measure distance from. When nothing matches as
+    typed, a second try allows for possessives and plurals."""
     q = _fts_query(text)
     if not q:
         return []
-    rows = db.execute("SELECT name, kind, area, weight, lon, lat, bm25(places) FROM places"
-                      " WHERE places MATCH ? ORDER BY bm25(places) LIMIT 300", (q,)).fetchall()
+    rows = _place_rows(db, q)
+    if not rows:
+        loose = _loose_fts_query(text)
+        if loose != q:
+            rows = _place_rows(db, loose)
+    return _ranked(rows, text, near, limit)
+
+
+def _ranked(rows, text, near, limit):
+    """Order and trim the rows `search` found for `text`."""
     t = text.strip().lower()
     out, seen = [], set()
     for name, kind, area_, weight, lon, lat, score in rows:
@@ -491,6 +518,35 @@ CATEGORIES = {
     "charging": ("charging_station",),
     "groceries": ("supermarket", "convenience", "greengrocer"),
 }
+
+# What a driver types for a category, mapped to its CATEGORIES key. Only exact
+# phrases count, so "gas works park" is still a name search.
+CATEGORY_WORDS = {
+    "gas": "gas", "gas station": "gas", "petrol": "gas", "fuel": "gas",
+    "coffee": "coffee", "cafe": "coffee",
+    "food": "food", "restaurant": "food", "restaurants": "food",
+    "parking": "parking",
+    "charging": "charging", "ev": "charging", "charger": "charging",
+    "groceries": "groceries", "grocery": "groceries", "supermarket": "groceries",
+}
+
+
+def category_for(text):
+    """The CATEGORIES key a typed phrase means ("Gas Station " -> "gas"), or None."""
+    return CATEGORY_WORDS.get(" ".join((text or "").lower().split()))
+
+
+def search_with_categories(db, text, near=None, limit=12):
+    """`search`, but a typed category word puts the nearest places of that
+    category first, then the name matches, without repeats."""
+    key = category_for(text) if near else None
+    rows = nearby(db, key, near, limit) if key else []
+    seen = {(r["name"], r["area"]) for r in rows}
+    for r in search(db, text, near=near, limit=limit):
+        if (r["name"], r["area"]) not in seen:
+            seen.add((r["name"], r["area"]))
+            rows.append(r)
+    return rows[:limit]
 
 
 def nearby(db, category, near, limit=12):

@@ -60,11 +60,11 @@ Rectangle {
     Column {
         id: column
         anchors.centerIn: parent
-        spacing: 2
+        spacing: 0
         Icon {
             anchors.horizontalCenter: parent.horizontalCenter
             name: chip.shown === "coolant" ? "thermostat" : chip.shown === "voltage" ? "battery_alert" : chip.shown === "mil" ? "engine_check" : "speed"
-            size: 28
+            size: 26
             color: Theme.bg
         }
         Row {
@@ -91,6 +91,17 @@ Rectangle {
                       : chip.shown === "boost" ? Units.boostUnit
                       : ""
             }
+        }
+        // One word for what is wrong, so "12.1 V" reads as low rather than high.
+        Legend {
+            objectName: "engineWarningLegend"
+            anchors.horizontalCenter: parent.horizontalCenter
+            color: Theme.bg
+            text: chip.shown === "coolant" ? "Hot"
+                  : chip.shown === "boost" ? "Over"
+                  : chip.shown === "mil" ? "Engine"
+                  : chip.shown === "voltage" ? (vehicle.voltage < vehicle.limits.voltageLow ? "Low" : "High")
+                  : ""
         }
     }
 

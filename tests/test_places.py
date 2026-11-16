@@ -13,7 +13,10 @@ import time
 import unittest
 from pathlib import Path
 
-from backend.places import _fts_query, along_route, distance_m, looks_like_address, nearby, read_region, search, search_addresses, street_part
+from unittest import mock
+
+import backend.places as places
+from backend.places import _fts_query, _loose_fts_query, category_for, search_with_categories, along_route, distance_m, looks_like_address, nearby, read_region, search, search_addresses, street_part
 
 SEATTLE = (-122.3321, 47.6062)
 
@@ -134,6 +137,35 @@ class SearchTest(unittest.TestCase):
                                               "lon": -122.33, "lat": 47.64, "distance": -1}])
 
 
+class LooseSearchTest(unittest.TestCase):
+    def test_a_long_word_ending_in_s_loses_the_s(self):
+        self.assertEqual(_loose_fts_query("mcdonalds"), '"mcdonald"*')
+        self.assertEqual(_loose_fts_query("traders joes"), '"trader"* AND "joe"*')
+
+    def test_short_words_and_others_stay(self):
+        self.assertEqual(_loose_fts_query("gas bus is"), '"gas"* AND "bus"* AND "is"*')
+        self.assertEqual(_loose_fts_query("Gas Park"), '"gas"* AND "park"*')
+
+    def test_a_possessive_is_found_without_the_apostrophe(self):
+        db = index([("McDonald's", "fast_food", "Seattle", 1, -122.33, 47.61),
+                    ("Trader Joe's", "supermarket", "Seattle", 1, -122.34, 47.62)])
+        self.assertEqual(names(search(db, "mcdonalds")), ["McDonald's"])
+        self.assertEqual(names(search(db, "traders joes")), ["Trader Joe's"])
+
+    def test_a_normal_match_does_not_use_the_loose_query(self):
+        db = index([("Trader Joe's", "supermarket", "Seattle", 1, -122.34, 47.62)])
+        with mock.patch.object(places, "_loose_fts_query", wraps=places._loose_fts_query) as loose:
+            self.assertEqual(names(search(db, "trader")), ["Trader Joe's"])
+            loose.assert_not_called()
+            self.assertEqual(names(search(db, "trader joe's")), ["Trader Joe's"])
+            loose.assert_not_called()
+
+    def test_nothing_close_is_still_empty(self):
+        db = index([("McDonald's", "fast_food", "Seattle", 1, -122.33, 47.61)])
+        self.assertEqual(search(db, "pizzas hut"), [])
+        self.assertEqual(search(db, "zebras"), [])
+
+
 class NearbyTest(unittest.TestCase):
     def test_the_nearest_of_a_category_first(self):
         db = index([("Far Gas", "fuel", "Tacoma", 1, -122.44, 47.25),
@@ -145,6 +177,31 @@ class NearbyTest(unittest.TestCase):
         db = index([("Near Gas", "fuel", "Seattle", 1, -122.33, 47.61)])
         self.assertEqual(nearby(db, "nope", SEATTLE), [])
         self.assertEqual(nearby(db, "gas", None), [])
+
+
+class CategoryWordTest(unittest.TestCase):
+    def test_typed_words_map_to_a_category(self):
+        self.assertEqual(category_for("Gas Station "), "gas")
+        self.assertEqual(category_for("  COFFEE"), "coffee")
+        self.assertEqual(category_for("ev"), "charging")
+
+    def test_names_and_empty_are_not_categories(self):
+        self.assertIsNone(category_for("gas works"))
+        self.assertIsNone(category_for(""))
+        self.assertIsNone(category_for(None))
+
+    def test_the_nearest_station_beats_a_park_with_the_word_in_its_name(self):
+        db = index([("Gas Works Park", "park", "Seattle", 1, -122.3321, 47.6332),
+                    ("Shell", "fuel", "Seattle", 1, -122.3321, 47.6152)])
+        self.assertEqual(names(search_with_categories(db, "gas", SEATTLE)), ["Shell", "Gas Works Park"])
+        # Without a position the normal name search stands.
+        self.assertEqual(names(search_with_categories(db, "gas")), ["Gas Works Park"])
+
+    def test_no_repeats_and_a_cap(self):
+        db = index([(f"Gas {i}", "fuel", "Town", 1, -122.33, 47.60 + i / 1000) for i in range(20)])
+        out = search_with_categories(db, "gas", SEATTLE)
+        self.assertEqual(len(out), 12)
+        self.assertEqual(len({(r["name"], r["area"]) for r in out}), 12)
 
 
 class AlongRouteTest(unittest.TestCase):
@@ -340,6 +397,31 @@ class DecompressTest(unittest.TestCase):
         self.assertEqual(_decompress(b"raw", 1), b"raw")
         with self.assertRaises(ValueError):
             _decompress(b"x", 9)
+
+
+class SetHomeWorkSourceTest(unittest.TestCase):
+    """The 'Set Home' / 'Set Work' rows (QML text checks)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+
+    def body(self, name):
+        start = self.qml.index("function %s(" % name)
+        return self.qml[start:start + 400]
+
+    def test_save_as_is_cleared_when_the_panel_changes(self):
+        for name in ("closePanel", "openSearch", "cancelPlace"):
+            self.assertIn('saveAs = ""', self.body(name), name)
+
+    def test_choose_saves_only_a_different_place(self):
+        body = self.body("choose")
+        self.assertIn('!samePlace(home, p)) toggleHome(p)', body)
+        self.assertIn('!samePlace(work, p)) toggleWork(p)', body)
+
+    def test_the_rows_show_only_while_unset(self):
+        self.assertIn('visible: page.home === null\n                        icon: "home"', self.qml)
+        self.assertIn('title: "Set Work"', self.qml)
 
 
 if __name__ == "__main__":

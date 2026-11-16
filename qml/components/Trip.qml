@@ -69,27 +69,50 @@ Item {
         return ""
     }
 
+    // One step of counting, "now" in ms. The Timer can fire late when the Pi
+    // is busy and Qt does not catch up, so what is added is the time that
+    // really passed since the last step. A step of nothing or of more than
+    // 5 s (the clock stepped, or the app stalled) counts as the usual second.
+    property real lastTick: 0
+    property real sinceSave: 0            // seconds rolling since the last save
+
+    function tick(now) {
+        var dt = (now - trip.lastTick) / 1000
+        if (trip.lastTick <= 0 || dt <= 0 || dt > 5) dt = 1
+        trip.lastTick = now
+        trip.runningSeconds += dt
+        // Only a real clock step moves the start time, so what shows it
+        // is not woken every second.
+        var start = now - trip.runningSeconds * 1000
+        if (Math.abs(start - trip.started.getTime()) >= 30000)
+            trip.started = new Date(start)
+        if (typeof vehicle === "undefined") return
+        var moving = vehicle.speedKnown && vehicle.speed > 1
+        if (moving) {
+            var prevMetres = trip.metres, prevSeconds = trip.movingSeconds
+            trip.metres += vehicle.speed * 0.44704 * dt      // mph to metres over dt
+            trip.movingSeconds += dt
+            trip.sinceSave += dt
+            var text = trip.milestoneText(prevMetres, trip.metres, prevSeconds,
+                                          trip.movingSeconds, Units.metric)
+            if (text !== "") trip.milestone(text)
+            if (text !== "" || trip.sinceSave >= 30) {
+                trip.save()
+                trip.sinceSave = 0
+            }
+        }
+        if (vehicle.engineKnown && vehicle.boost > trip.peakBoost)
+            trip.peakBoost = vehicle.boost
+        // One save per stop; nothing while parked.
+        if (trip.wasMoving && !moving) {
+            trip.save()
+            trip.sinceSave = 0
+        }
+        trip.wasMoving = moving
+    }
+
     Timer {
         interval: 1000; running: true; repeat: true
-        onTriggered: {
-            trip.runningSeconds += 1
-            trip.started = new Date(Date.now() - trip.runningSeconds * 1000)
-            if (typeof vehicle === "undefined") return
-            var moving = vehicle.speedKnown && vehicle.speed > 1
-            if (moving) {
-                var prevMetres = trip.metres, prevSeconds = trip.movingSeconds
-                trip.metres += vehicle.speed * 0.44704      // mph to metres in this second
-                trip.movingSeconds += 1
-                var text = trip.milestoneText(prevMetres, trip.metres, prevSeconds,
-                                              trip.movingSeconds, Units.metric)
-                if (text !== "") trip.milestone(text)
-                if (text !== "" || trip.movingSeconds % 30 === 0) trip.save()
-            }
-            if (vehicle.engineKnown && vehicle.boost > trip.peakBoost)
-                trip.peakBoost = vehicle.boost
-            // One save per stop; nothing while parked.
-            if (trip.wasMoving && !moving) trip.save()
-            trip.wasMoving = moving
-        }
+        onTriggered: trip.tick(Date.now())
     }
 }

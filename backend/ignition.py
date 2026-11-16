@@ -142,10 +142,11 @@ class KeyOff(QObject):
     work (`error`)."""
     changed = pyqtSignal()
 
-    def __init__(self, obd, gps, settings, power_off, cancel_power=None, parent=None):
+    def __init__(self, obd, gps, settings, power_off, cancel_power=None, note=None, parent=None):
         super().__init__(parent)
         self._obd, self._gps, self._settings, self._power_off = obd, gps, settings, power_off
         self._cancel_power = cancel_power or (lambda: None)  # drops a power_off still waiting
+        self._note = note or (lambda text: None)   # the power log's note(): moments worth keeping
         self._asked = False                 # power_off was called, and not withdrawn since
         self._held = False                  # the OBD reader is told to keep quiet
         self._logic = KeyOffLogic()
@@ -155,10 +156,9 @@ class KeyOff(QObject):
         obd.reading.connect(self._answered)
         obd.quiet.connect(self._quiet)
         obd.voltage.connect(self._voltage)
+        # Ticks once a second, but only while the car is quiet (see _quiet and
+        # _tick): while the truck runs there's nothing for it to do.
         self._timer = QTimer(self, interval=1000, timeout=self._second)
-
-    def start(self):
-        self._timer.start()
 
     def _answered(self, values):
         self._logic.answered(values.get("speed"))
@@ -168,7 +168,12 @@ class KeyOff(QObject):
         self._tick()
 
     def _quiet(self):
+        first = self._logic.quiet_at is None and self._logic.seen_on
         self._logic.quiet(time.monotonic())
+        if self._logic.quiet_at is not None and not self._timer.isActive():
+            self._timer.start()             # the car's quiet: the once-a-second work starts
+        if first:
+            self._note("car quiet")
         if self._enabled and self._logic.seen_on:
             print(f"Key off? The car stopped answering: shutting down in "
                   f"{QUIET_S + WARN_S:g} s unless it answers again or the "
@@ -194,21 +199,42 @@ class KeyOff(QObject):
         left = self._logic.seconds_left(time.monotonic(), self._moving()) if self._enabled else None
         countdown = -1 if left is None else left
         if countdown != self._countdown:
+            if self._countdown < 0:
+                self._note("countdown")
+            elif countdown < 0 and not self._asked:
+                self._note(f"cancelled: {self._why_not()}")
             self._countdown = countdown
             self.changed.emit()
         if self._logic.power_off_now(left):
             print("Key off: the car has been quiet; shutting down", flush=True)
             self._hold(True)                # the adapter stays quiet while the Pi powers off
             self._asked = True
+            self._note("power off requested")
             self._power_off()
         elif self._asked and left is None:
             self._withdraw()                # the key came back (or it's moving) first
+        if self._logic.quiet_at is None and self._countdown < 0 and not self._asked:
+            self._timer.stop()              # the car answered and nothing's pending: no more wake-ups
+
+    def _why_not(self):
+        """Why there's no countdown now, for the log."""
+        logic = self._logic
+        if not self._enabled:
+            return "setting turned off"
+        if logic.quiet_at is None:
+            return "car answered"
+        if logic.kept_on:
+            return "kept on"
+        if logic.last_mph > MOVING_MPH or self._moving():
+            return "moving"
+        return "battery charging"
 
     def _withdraw(self):
         """Take back a power_off that's still waiting (for an update to
         finish): the reason for it is gone."""
         if self._asked:
             self._asked = False
+            self._note(f"power off withdrawn: {self._why_not()}")
             self._cancel_power()
             self._hold(False)
 
@@ -224,6 +250,7 @@ class KeyOff(QObject):
             return                          # not from here (Settings > Shut down)
         print(f"Key off: couldn't shut down: {why}", flush=True)
         self._asked = False
+        self._note(f"power off failed: {why}")
         self._logic.failed()
         self._hold(False)
         self._error = why

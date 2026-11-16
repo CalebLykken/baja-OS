@@ -143,6 +143,18 @@ def short_instruction(m):
         return _fallback(m)
 
 
+def exit_sign(m):
+    """(number, toward) for a highway exit maneuver ("165B", "I-5 S"); ('', '') for anything else."""
+    try:
+        if not isinstance(m, dict) or m.get("type") not in (20, 21):
+            return "", ""
+        sign = m.get("sign") if isinstance(m.get("sign"), dict) else {}
+        number, toward = _texts(sign.get("exit_number_elements")), _texts(sign.get("exit_toward_elements"))
+        return (number[0] if number else ""), (toward[0] if toward else "")
+    except Exception:
+        return "", ""
+
+
 def _short(m):
     kind = m.get("type")
     sign = m.get("sign") if isinstance(m.get("sign"), dict) else {}
@@ -1132,6 +1144,21 @@ class Router(QObject):
             return "You've arrived at " + self._route.name
         # The short form on screen; the spoken form chains the next step.
         return short_instruction(self._route.next_maneuver())
+
+    def _exit_sign(self):
+        if not self._route or self._arrived:
+            return "", ""
+        return exit_sign(self._route.next_maneuver())
+
+    @pyqtProperty(str, notify=progressChanged)
+    def exitNumber(self):
+        """The next maneuver's highway exit number ("165B"), '' if it isn't an exit."""
+        return self._exit_sign()[0]
+
+    @pyqtProperty(str, notify=progressChanged)
+    def exitToward(self):
+        """The first name on the exit's sign ("I-5 S"), '' if none."""
+        return self._exit_sign()[1]
 
     @pyqtProperty(str, notify=progressChanged)
     def maneuverIcon(self):

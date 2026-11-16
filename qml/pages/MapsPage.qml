@@ -875,6 +875,25 @@ Item {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
+                    Rectangle {                          // the green highway sign: EXIT 165B (the card is always dark, so it is the same by day and night)
+                        visible: page.hasRouting && routing.exitNumber !== "" && !routing.arrived
+                                 && !routing.computing && !turnCard.offNow && !turnCard.lostNow
+                        Layout.preferredHeight: 44
+                        Layout.preferredWidth: exitText.implicitWidth + 28
+                        radius: 8
+                        color: "#0a7d3b"
+                        border.width: 2
+                        border.color: "#ffffff"
+                        MapLabel {
+                            id: exitText
+                            anchors.centerIn: parent
+                            numeric: true
+                            text: "EXIT " + (page.hasRouting ? routing.exitNumber : "")
+                            color: "#ffffff"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.Bold
+                        }
+                    }
                     MapLabel {
                         visible: page.hasRouting && !routing.arrived && !routing.computing && !turnCard.offNow && !turnCard.lostNow
                         numeric: true

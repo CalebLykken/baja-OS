@@ -18,7 +18,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
 from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
-                             route_record, saved_route, short_instruction, tidy)
+                             exit_sign, route_record, saved_route, short_instruction, tidy)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -1163,6 +1163,31 @@ class ShortInstructionTest(unittest.TestCase):
         self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
         router.repeatLast()
         self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
+
+
+class ExitSignTest(unittest.TestCase):
+    EXIT = {"type": 20, "sign": {"exit_number_elements": [{"text": "165B"}],
+                                 "exit_toward_elements": [{"text": "I-5 S"}, {"text": "Tacoma"}]}}
+
+    def test_exit_gives_number_and_first_toward(self):
+        self.assertEqual(exit_sign(self.EXIT), ("165B", "I-5 S"))
+        self.assertEqual(exit_sign(dict(self.EXIT, type=21)), ("165B", "I-5 S"))
+
+    def test_turn_has_none(self):
+        self.assertEqual(exit_sign(dict(self.EXIT, type=10)), ("", ""))
+
+    def test_junk_never_raises(self):
+        for m in (None, "x", 5, {}, {"type": 20}, {"type": 20, "sign": None},
+                  {"type": 20, "sign": {"exit_number_elements": [5, None, {"text": 3}],
+                                        "exit_toward_elements": "I-5"}}):
+            self.assertEqual(exit_sign(m), ("", ""))
+
+
+class MapsPageExitChipTest(unittest.TestCase):
+    def test_turn_card_uses_exit_number(self):
+        from pathlib import Path
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("routing.exitNumber", qml)
 
 
 if __name__ == "__main__":

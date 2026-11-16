@@ -232,6 +232,22 @@ class FollowingTest(unittest.TestCase):
         self.assertEqual(self.said[-1], "You have arrived at Shop.")
         self.assertEqual(self.said.count("You have arrived at Shop."), 1)
 
+    def test_exit_number_follows_next_maneuver(self):
+        exit_step = step(20, 1, "Take exit 165B.")
+        exit_step["sign"] = {"exit_number_elements": [{"text": "165B"}],
+                             "exit_toward_elements": [{"text": "I-5 S"}]}
+        self.start(response([(0, 0), (0, 300), (0, 600), (0, 900)], [
+            step(1, 0, "Drive north."), exit_step, step(10, 2, "Turn right."),
+            step(4, 3, "You have arrived.")]))
+        self.assertEqual((self.router.exitNumber, self.router.exitToward), ("165B", "I-5 S"))
+        for n in range(310, 590, 10):
+            self.fix(0, n, 0)
+        self.assertEqual((self.router.exitNumber, self.router.exitToward), ("", ""))
+        for n in range(590, 900, 10):
+            self.fix(0, n, 0)
+        self.assertTrue(self.router.arrived)
+        self.assertEqual(self.router.exitNumber, "")
+
     def test_loop_ramp_said(self):
         self.start(LOOP_ROUTE)
         for e, n, heading, along in drive(LOOP, sideways=(0, 8, 9, 5)):

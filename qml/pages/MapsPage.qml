@@ -728,6 +728,17 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
+                    // The main road, and a warning if there is a toll.
+                    MapLabel {
+                        visible: page.hasRouting && routing.previewing && (routing.via !== "" || routing.hasToll)
+                        width: parent.width
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                        text: page.hasRouting ? (routing.via !== "" ? "via " + routing.via : "")
+                                                + (routing.hasToll ? (routing.via !== "" ? " \u00b7 " : "") + "Toll road" : "") : ""
+                        color: page.cDim
+                        font.pixelSize: Theme.fontBody
+                    }
                     MapLabel {
                         visible: page.hasRouting && routing.previewing && routing.stopCount > 0
                         width: parent.width

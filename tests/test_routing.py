@@ -18,7 +18,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
 from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
-                             exit_sign, route_record, saved_route, short_instruction, tidy)
+                             exit_sign, has_toll, route_record, saved_route, short_instruction, tidy, via_name)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -1181,6 +1181,47 @@ class ExitSignTest(unittest.TestCase):
                   {"type": 20, "sign": {"exit_number_elements": [5, None, {"text": 3}],
                                         "exit_toward_elements": "I-5"}}):
             self.assertEqual(exit_sign(m), ("", ""))
+
+
+class ViaTollTest(unittest.TestCase):
+    def test_via_longest_total(self):
+        ms = [{"street_names": ["Main St"], "length": 1.0}, {"street_names": ["5th Ave"], "length": 1.5},
+              {"street_names": ["Main St", "SR 9"], "length": "0.8"}]
+        self.assertEqual(via_name(ms), "Main St")       # 1.8 beats 1.5
+        ms[2]["length"] = 0.4
+        self.assertEqual(via_name(ms), "5th Ave")
+
+    def test_via_skips_and_never_raises(self):
+        ms = [{"street_names": ["Ferry Rd"], "length": 9, "ferry": True}, {"street_names": [], "length": 3},
+              {"street_names": ["A"], "length": "x"}, {"street_names": ["B"]}, None, "z",
+              {"street_names": [5], "length": 1}, {"street_names": "I-5", "length": 1}]
+        self.assertEqual(via_name(ms), "")
+        for odd in ([], None, 5, "x", {}):
+            self.assertEqual(via_name(odd), "")
+
+    def test_toll(self):
+        data = json.loads(json.dumps(ROUTE))
+        self.assertFalse(Route(data, "x").toll)
+        self.assertFalse(has_toll(None))
+        data["trip"]["legs"][0]["maneuvers"][1]["toll"] = True
+        self.assertTrue(Route(data, "x").toll)
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["summary"]["has_toll"] = True
+        self.assertTrue(Route(data, "x").toll)
+
+    def test_route_via(self):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["maneuvers"][0]["street_names"] = ["I-5 N"]
+        data["trip"]["legs"][0]["maneuvers"][0]["length"] = 2.2
+        self.assertEqual(Route(data, "x").via, "I-5 N")
+
+
+class MapsPageViaTest(unittest.TestCase):
+    def test_card_uses_via(self):
+        from pathlib import Path
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("routing.via", qml)
+        self.assertIn("routing.hasToll", qml)
 
 
 class MapsPageExitChipTest(unittest.TestCase):

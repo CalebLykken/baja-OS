@@ -244,6 +244,41 @@ def ferry_legs(maneuvers, unit_m=1000.0):
     return out
 
 
+def via_name(maneuvers):
+    """The road most of the route is on: the first street name with the
+    largest total length over the maneuvers. Ferries, unnamed steps and
+    odd lengths are skipped. "" when there is none; never raises."""
+    totals = {}
+    try:
+        for m in maneuvers:
+            if not isinstance(m, dict) or m.get("ferry") is True or m.get("type") == FERRY_ENTER:
+                continue
+            names = m.get("street_names")
+            if not isinstance(names, (list, tuple)) or not names or not isinstance(names[0], str):
+                continue
+            name = names[0].strip()
+            try:
+                n = float(m.get("length"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if name and math.isfinite(n) and n > 0:
+                totals[name] = totals.get(name, 0.0) + n
+        return max(totals, key=totals.get) if totals else ""
+    except Exception:
+        return ""
+
+
+def has_toll(data):
+    """Whether the route has a toll: the summary says so, or a maneuver is on one."""
+    try:
+        if data["trip"]["summary"].get("has_toll"):
+            return True
+        return any(isinstance(m, dict) and m.get("toll") is True
+                   for leg in data["trip"]["legs"] for m in leg.get("maneuvers", ()))
+    except Exception:
+        return False
+
+
 def tidy(text):
     """Valhalla chains spoken steps as "... Then Keep right"; lower-case the verb."""
     return re.sub(r"\bThen ([A-Z])", lambda m: "then " + m[1].lower(), text).replace(". then ", ". Then ")
@@ -403,6 +438,14 @@ class Route:
         # The router says what units its lengths and spoken text are in.
         unit_m = unit_metres(data["trip"].get("units"))
         self.ferries = ferry_legs(self.maneuvers, unit_m) if isinstance(self.maneuvers, list) else []
+        try:
+            self.via = via_name(self.maneuvers)
+        except Exception:
+            self.via = ""
+        try:
+            self.toll = bool(has_toll(data))
+        except Exception:
+            self.toll = False
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
         self.off = 0.0                # metres from the line
@@ -1089,6 +1132,15 @@ class Router(QObject):
     def shape(self):
         """The route as [[lon, lat], ...] for the map."""
         return [list(p) for p in self._route.shape] if self._route else []
+
+    @pyqtProperty(str, notify=changed)
+    def via(self):
+        """The main road of the route, for the preview card ("" if unknown)."""
+        return self._route.via if self._route else ""
+
+    @pyqtProperty(bool, notify=changed)
+    def hasToll(self):
+        return bool(self._route and self._route.toll)
 
     @pyqtProperty("QVariantList", notify=changed)
     def ferries(self):

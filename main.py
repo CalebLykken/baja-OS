@@ -38,7 +38,7 @@ if __name__ == "__main__":
 # set before Qt loads, so it lives above the PyQt imports.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
-from PyQt6.QtCore import QCoreApplication, QTimer, QUrl
+from PyQt6.QtCore import QCoreApplication, QTimer, QUrl, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -190,6 +190,7 @@ def main():
     # let SIGINT kill the process directly (matters when started over SSH).
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    qInstallMessageHandler(errorlog.qt_messages.handle)   # repeated Qt/QML warnings are counted, not flooded
     web_engine = init_web_engine()
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Baja Carputer")
@@ -360,6 +361,7 @@ def main():
     clock.mark("started")
     code = app.exec()
     mark_clean_exit()             # a normal end isn't a failed start (deploy/update-guard.sh)
+    errorlog.qt_messages.flush()
     errorlog.log.flush()          # repeats still being counted go to the journal now
     settings.close()              # everything on disk, writer thread stopped
     if scanner:

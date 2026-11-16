@@ -128,4 +128,73 @@ class ErrorLog:
             pass
 
 
+class QtMessages:
+    """The same limiter for Qt's own messages (QML 'Cannot read property',
+    'Binding loop detected', a Component warning), installed with
+    qInstallMessageHandler. A bad binding on a 5 Hz property would otherwise
+    write hundreds of journal lines a minute. Messages are told apart by mode
+    and text; the first few of each go to stderr as given (so file:line stays),
+    then they're only counted, with one summary line a minute. Fatal messages
+    are always printed. Never raises."""
+
+    def __init__(self, out=None, clock=time.monotonic, full=FULL_EACH,
+                 every=SUMMARY_EVERY_S, timer=threading.Timer):
+        self._out = out
+        self._clock = clock
+        self._full = full
+        self._every = every
+        self._timer_class = timer
+        self._lock = threading.Lock()
+        self._kinds = {}                # (mode, text) -> [seen, suppressed since the last summary]
+        self._timer = None
+
+    def handle(self, mode, context, message):
+        try:
+            fatal = getattr(mode, "name", str(mode)) == "QtFatalMsg"
+            key = (str(mode), str(message))
+            with self._lock:
+                if key not in self._kinds and len(self._kinds) >= MAX_KINDS:
+                    key = ("other", "")
+                entry = self._kinds.setdefault(key, [0, 0])
+                entry[0] += 1
+                if fatal or entry[0] <= self._full:
+                    out = self._out or sys.stderr
+                    print(message, file=out)
+                    if entry[0] == self._full and not fatal:
+                        print(f"(more of this message are counted, not logged: "
+                              f"a summary follows every {self._every}s)", file=out)
+                    out.flush()
+                else:
+                    entry[1] += 1
+                    self._arm()
+        except Exception:
+            pass
+
+    def _arm(self):
+        if self._timer is None:
+            try:
+                self._timer = self._timer_class(self._every, self.flush)
+                self._timer.daemon = True
+                self._timer.start()
+            except Exception:
+                self._timer = None
+
+    def flush(self):
+        """Write a summary line for each message with suppressed repeats."""
+        try:
+            with self._lock:
+                self._timer = None
+                out = self._out or sys.stderr
+                for (mode, text), entry in self._kinds.items():
+                    if entry[1]:
+                        first = text.splitlines()[0][:160] if text else "other messages"
+                        print(f"Same message {entry[1]:,} more times in the last "
+                              f"{self._every}s: {first}", file=out)
+                        entry[1] = 0
+                out.flush()
+        except Exception:
+            pass
+
+
 log = ErrorLog()
+qt_messages = QtMessages()

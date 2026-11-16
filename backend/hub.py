@@ -70,6 +70,8 @@ SWITCH_SETTLE_MS = 600
 SAVE_EVERY_MS = 5000       # while local music plays, its place is saved this often
 RESUME_SETTING = "spotifyResume"
 RESUME_URI_SETTING = "spotifyResumeUri"
+RECENT_ALBUMS_SETTING = "recentAlbums"    # JSON [[artist, title], ...], newest first
+RECENT_ALBUMS_KEPT = 8
 
 
 def _rounded_card(img, out, size=600, radius_frac=0.014):
@@ -165,6 +167,7 @@ class MediaHub(QObject):
     recentsChanged = pyqtSignal()
     resumeChanged = pyqtSignal()
     albumsChanged = pyqtSignal()        # the Pi's music was rescanned
+    recentAlbumsChanged = pyqtSignal()  # an album was played
     scanningChanged = pyqtSignal()
 
     def __init__(self, local, phone, spotify, volume=40, max_volume=100, settings=None, parent=None):
@@ -180,6 +183,9 @@ class MediaHub(QObject):
             if isinstance(modes, dict):
                 local.set_modes(modes.get("shuffle") is True, modes.get("repeat"))
             local.restore(saved.get("local"), play=self._was_playing)
+        self._recent_albums = self._read_recent_albums()
+        if saved is not None:
+            self._note_album(getattr(local, "album", -1))     # the album it resumed on
         self._save_timer = QTimer(self, interval=SAVE_EVERY_MS, timeout=self._save)
         self._resume_on = as_bool(settings.get(RESUME_SETTING), True) if settings else False
         self._resume_uri = str(settings.get(RESUME_URI_SETTING, "")) if settings else ""
@@ -236,6 +242,7 @@ class MediaHub(QObject):
         local.modesChanged.connect(self.modesChanged)
         if hasattr(local, "libraryChanged"):         # not the demo player
             local.libraryChanged.connect(self.albumsChanged)
+            local.libraryChanged.connect(self.recentAlbumsChanged)
             local.scanningChanged.connect(self.scanningChanged)
         self._recent_art = {}             # Spotify cover URL -> saved copy
         spotify.recentsChanged.connect(self._save_recent_art)
@@ -606,6 +613,53 @@ class MediaHub(QObject):
         """Albums of the Pi's own songs: [{title, artist, art, count, duration}]."""
         return self._sources["local"].albums
 
+    @pyqtProperty("QVariantList", notify=recentAlbumsChanged)
+    def recentAlbums(self):
+        """The albums played lately, newest first, as `albums` entries plus
+        their `index` in it. They are kept by artist and title, so a rescan
+        that renumbers the albums can't point at the wrong one; albums that
+        are gone are skipped."""
+        found = {}
+        for i, a in enumerate(getattr(self._sources["local"], "albums", [])):
+            found.setdefault((str(a["artist"]).casefold(), str(a["title"]).casefold()), (i, a))
+        out = []
+        for artist, title in self._recent_albums:
+            hit = found.get((artist.casefold(), title.casefold()))
+            if hit:
+                out.append(dict(hit[1], index=hit[0]))
+        return out
+
+    def _read_recent_albums(self):
+        try:
+            data = json.loads(str(self._settings.get(RECENT_ALBUMS_SETTING, ""))) if self._settings else []
+        except ValueError:
+            return []
+        if not isinstance(data, list):
+            return []
+        keys = []
+        for k in data:
+            if (isinstance(k, list) and len(k) == 2 and all(isinstance(x, str) for x in k)
+                    and not any(k[0].casefold() == o[0].casefold() and k[1].casefold() == o[1].casefold()
+                                for o in keys)):
+                keys.append(k)
+        return keys[:RECENT_ALBUMS_KEPT]
+
+    def _note_album(self, album):
+        """Put local album number `album` first in the recently played ones."""
+        albums = getattr(self._sources["local"], "albums", [])
+        if not 0 <= album < len(albums):
+            return
+        key = [str(albums[album]["artist"]), str(albums[album]["title"])]
+        same = [k for k in self._recent_albums
+                if k[0].casefold() == key[0].casefold() and k[1].casefold() == key[1].casefold()]
+        if self._recent_albums[:1] == same[:1] and same:
+            return
+        self._recent_albums = [key] + [k for k in self._recent_albums if k not in same]
+        self._recent_albums = self._recent_albums[:RECENT_ALBUMS_KEPT]
+        if self._settings:
+            self._settings.set(RECENT_ALBUMS_SETTING, json.dumps(self._recent_albums))
+        self.recentAlbumsChanged.emit()
+
     @pyqtProperty("QVariantList", notify=albumsChanged)
     def songs(self):
         """Every song of the Pi's own music by title: [{title, artist, index}]."""
@@ -778,6 +832,7 @@ class MediaHub(QObject):
         self._pause_others(keep="local")
         self._set_source("local")
         self._sources["local"].playAlbum(album, start)
+        self._note_album(album)
 
     @pyqtSlot(int)
     def playSong(self, index):

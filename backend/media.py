@@ -193,6 +193,10 @@ class MediaPlayer(QObject):
                 for a in self._albums]
 
     @pyqtProperty("QVariantList", constant=True)
+    def recentAlbums(self):
+        return []
+
+    @pyqtProperty("QVariantList", constant=True)
     def songs(self):
         order = sorted(range(len(DEMO_QUEUE)), key=lambda i: DEMO_QUEUE[i]["title"].casefold())
         return [{"title": DEMO_QUEUE[i]["title"], "artist": DEMO_QUEUE[i]["artist"], "index": i}

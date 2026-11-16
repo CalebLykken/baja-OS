@@ -23,6 +23,7 @@ Item {
     property bool eqOpen: false
     property string tab: "playing"             // "playing", "next", "albums", "songs" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
+    property string albumView: "all"           // "all" or "recent" on the Albums tab (kept while the app runs)
     property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     property bool searchOpen: false            // the Spotify tab shows search rather than recents
     property string spotifyView: "recent"      // "recent", "playlists", "albums" or "liked"
@@ -467,16 +468,25 @@ Item {
                 }
 
                 // ---- Albums: all of them ------------------------------------
-                // Back to the whole library in one tap.
+                // All or just the albums played lately, then back to the whole
+                // library in one tap.
                 Row {
                     id: playKeys
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12
                               rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
-                    height: Theme.touch
+                    height: 72
                     spacing: Theme.gap
+                    SegmentedControl {
+                        width: 320
+                        height: parent.height
+                        stretch: true
+                        options: [{ label: "All", value: "all" }, { label: "Recent", value: "recent" }]
+                        current: page.albumView
+                        onPicked: (v) => page.albumView = v
+                    }
                     TextButton {
-                        width: (parent.width - parent.spacing) / 2
+                        width: (parent.width - parent.spacing * 2 - 320) / 2
                         height: parent.height
                         primary: true
                         icon: "shuffle"
@@ -484,7 +494,7 @@ Item {
                         onClicked: media.shuffleAll()
                     }
                     TextButton {
-                        width: (parent.width - parent.spacing) / 2
+                        width: (parent.width - parent.spacing * 2 - 320) / 2
                         height: parent.height
                         icon: "play"
                         text: "Play all"
@@ -501,24 +511,31 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
-                    model: page.albums
+                    readonly property bool recent: page.albumView === "recent"
+                    model: recent ? media.recentAlbums : page.albums
                     delegate: CoverTile {
+                        // In Recent, `index` counts the list shown; modelData.index is the album's place.
+                        readonly property int albumNo: albumGrid.recent ? modelData.index : index
                         width: albumGrid.cellWidth
                         height: albumGrid.cellHeight
                         art: modelData.art
                         placeholder: "album"
                         title: modelData.title
                         subtitle: modelData.artist
-                        current: index === media.album
-                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = index }
+                        current: albumNo === media.album
+                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = albumNo }
                     }
                     EmptyState {
                         visible: albumGrid.count === 0
                         width: parent.width
                         height: albumGrid.height
                         icon: media.scanning ? "refresh" : "album"
-                        title: media.scanning ? "Reading your music" : "The shelf is empty"
-                        hint: media.scanning ? "Songs show up as they're found" : "Albums copied into ~/Music on the Pi show up here"
+                        title: media.scanning ? "Reading your music"
+                               : albumGrid.recent && media.albums.length > 0 ? "Nothing played yet"
+                               : "The shelf is empty"
+                        hint: media.scanning ? "Songs show up as they're found"
+                              : albumGrid.recent && media.albums.length > 0 ? "Albums you play show up here"
+                              : "Albums copied into ~/Music on the Pi show up here"
                     }
                 }
 
@@ -526,7 +543,7 @@ Item {
                 // rebuilds when the album list changes.
                 Column {
                     id: alphaRail
-                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 15
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && media.albums.length > 15
                     readonly property var buckets: AlphaIndex.buckets(page.albums.map(function (a) { return a.artist }))
                     width: 64
                     anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }

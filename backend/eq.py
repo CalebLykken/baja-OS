@@ -77,6 +77,11 @@ class Equalizer(QObject):
         self._settings = settings
         self._gains = self._load()
         self._mine = self._load("eqMine")
+        # A hand-tuned curve saved before 'Mine' existed would show as Custom
+        # and be lost by tapping Mine: keep it as Mine now.
+        if (not self._settings.get("eqMine", "")
+                and self._gains not in PRESETS.values()):
+            self._save_mine(self._gains)
         self._pw = bool(shutil.which("pw-cli"))
         self._node = None
         self._pending = None

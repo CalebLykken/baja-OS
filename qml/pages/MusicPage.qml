@@ -46,7 +46,7 @@ Item {
         target: media
         function onAlbumsChanged() {
             if (page.openAlbum < 0 || !page.openKey) return
-            var list = media.albums, found = -1
+            var list = page.albums, found = -1
             for (var i = 0; i < list.length; i++)
                 if (list[i].artist.toLowerCase() === page.openKey[0].toLowerCase()
                         && list[i].title.toLowerCase() === page.openKey[1].toLowerCase()) { found = i; break }
@@ -55,11 +55,23 @@ Item {
     }
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
+    // Each read of media.songs / media.albums makes Python rebuild the list, so
+    // everything on the page shares one read per change.
     readonly property var albums: media.albums
+    readonly property var songs: media.songs
     // The songs that play after this one, in the true order (a shuffle's too);
     // read once per change so the bindings below share it.
     readonly property var upNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
+    // What the Playing card says in its title while there is no song yet: nothing
+    // on the Pi, the Pi's music still being read, or Spotify just starting.
+    readonly property string titleText: idle ? (media.scanning ? "Reading your music" : "Nothing playing")
+                                        : media.title !== "" ? media.title
+                                        : media.source === "spotify" ? "Starting Spotify..." : ""
+    // The one-line hint under it when the Pi has nothing to play, so the
+    // owner knows what to do next rather than guessing.
+    readonly property string idleHint: media.scanning ? "Songs show up as they're found"
+                                                      : "Pair a phone in Settings, or copy songs to ~/Music"
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
     // Only while Spotify is what's playing or being looked at.
     readonly property string spotifyError: typeof spotify !== "undefined"
@@ -229,9 +241,10 @@ Item {
                         spacing: 6
                         SourceBadge { Layout.fillWidth: true }
                         Label {
+                            objectName: "nowTitle"
                             Layout.fillWidth: true
-                            text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-                            color: page.idle ? Theme.textDim : Theme.text
+                            text: page.titleText
+                            color: media.title === "" ? Theme.textDim : Theme.text
                             font.pixelSize: Theme.fontHero
                             font.weight: Font.DemiBold
                             lineHeight: 0.95
@@ -240,11 +253,15 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
+                            objectName: "nowArtist"
                             Layout.fillWidth: true
-                            text: page.spotifyError !== "" ? page.spotifyError : page.artistLine(media.artist, media.albumTitle)
+                            text: page.spotifyError !== "" ? page.spotifyError
+                                  : page.idle ? page.idleHint
+                                  : page.artistLine(media.artist, media.albumTitle)
                             color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                             font.pixelSize: Theme.fontBody
-                            maximumLineCount: 1
+                            wrapMode: Text.WordWrap          // the hint may take two lines
+                            maximumLineCount: 2
                             elide: Text.ElideRight
                         }
 
@@ -314,6 +331,7 @@ Item {
                         // the song only jumps on release, so a drag doesn't re-decode.
                         Item {
                             id: seekArea
+                            objectName: "seekArea"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 44
                             readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
@@ -328,6 +346,26 @@ Item {
                                 radius: 5
                                 value: seekArea.dragging ? seekArea.dragValue
                                                          : (media.duration > 0 ? media.position / media.duration : 0)
+                            }
+                            // The handle: it shows the bar can be dragged, and it grows while a
+                            // finger is on it. It sits on the end of the fill and is only drawn
+                            // where seeking works (not on a phone or with nothing playing).
+                            Rectangle {
+                                id: seekThumb
+                                objectName: "seekThumb"
+                                anchors.verticalCenter: parent.verticalCenter
+                                // shown, not value: it is clamped to the bar and follows the
+                                // fill's new-track sweep, so the thumb never leaves the fill end.
+                                x: seekBar.width * seekBar.shown - width / 2
+                                width: seekArea.dragging ? 36 : 28
+                                height: width
+                                radius: width / 2
+                                color: Theme.accent
+                                border.width: 2
+                                border.color: Theme.bg
+                                visible: seekArea.canSeek
+                                // Size changes only on press and release, so nothing runs at rest.
+                                Behavior on width { NumberAnimation { duration: 80 } }
                             }
                             MouseArea {
                                 anchors { fill: parent; bottomMargin: -28 }
@@ -344,9 +382,25 @@ Item {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                            // While dragging, the elapsed time turns accent and bold, and the right
+                            // side counts down the time left at the drag point.
+                            Label {
+                                objectName: "seekElapsed"
+                                text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position)
+                                color: seekArea.dragging ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: seekArea.dragging ? Font.Bold : Font.Normal
+                            }
                             Item { Layout.fillWidth: true }
-                            Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                            Label {
+                                objectName: "seekRemaining"
+                                text: page.idle ? ""
+                                      : seekArea.dragging
+                                        ? "−" + page.mmss(Math.max(0, media.duration - Math.round(seekArea.dragValue * media.duration)))
+                                        : page.mmss(media.duration)
+                                color: Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
                         }
                     }
 
@@ -414,7 +468,9 @@ Item {
                 heading: page.eqOpen ? "Equalizer"
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
-                                                  : "All songs on this Pi")
+                                                  : media.source === "phone" ? "On your phone"
+                                                  : media.shuffle ? "All songs, shuffled"
+                                                  : "All songs, A to Z")
                          : ""
 
                 // ---- Up next ------------------------------------------------
@@ -431,6 +487,7 @@ Item {
                 }
                 ListView {
                     id: queue
+                    reuseItems: true
                     visible: page.tab === "next" && !page.eqOpen
                     readonly property bool spotifyQueue: media.source === "spotify"
                     readonly property bool phoneQueue: media.source === "phone"
@@ -445,7 +502,7 @@ Item {
                         width: queue.width
                         number: index + 1
                         title: modelData.title
-                        subtitle: modelData.artist
+                        subtitle: page.artistLine(modelData.artist, "")
                         tappable: !queue.spotifyQueue
                         onHit: media.playIndex(modelData.index)
                     }
@@ -472,7 +529,7 @@ Item {
                 // library in one tap.
                 Row {
                     id: playKeys
-                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albums.length > 0
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12
                               rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
                     height: 72
@@ -511,6 +568,9 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
+                    // Reused delegates, and about two rows kept ready past the edges.
+                    reuseItems: true
+                    cacheBuffer: cellHeight * 2
                     readonly property bool recent: page.albumView === "recent"
                     model: recent ? media.recentAlbums : page.albums
                     delegate: CoverTile {
@@ -531,10 +591,10 @@ Item {
                         height: albumGrid.height
                         icon: media.scanning ? "refresh" : "album"
                         title: media.scanning ? "Reading your music"
-                               : albumGrid.recent && media.albums.length > 0 ? "Nothing played yet"
+                               : albumGrid.recent && page.albums.length > 0 ? "Nothing played yet"
                                : "The shelf is empty"
                         hint: media.scanning ? "Songs show up as they're found"
-                              : albumGrid.recent && media.albums.length > 0 ? "Albums you play show up here"
+                              : albumGrid.recent && page.albums.length > 0 ? "Albums you play show up here"
                               : "Albums copied into ~/Music on the Pi show up here"
                     }
                 }
@@ -543,7 +603,7 @@ Item {
                 // rebuilds when the album list changes.
                 Column {
                     id: alphaRail
-                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && media.albums.length > 15
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && page.albums.length > 15
                     readonly property var buckets: AlphaIndex.buckets(page.albums.map(function (a) { return a.artist }))
                     width: 64
                     anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
@@ -573,11 +633,12 @@ Item {
                 // Tap one to play it; the rest of the library follows.
                 ListView {
                     id: songList
+                    reuseItems: true
                     visible: page.tab === "songs" && !page.eqOpen
                     anchors { fill: parent; margins: 10
                               rightMargin: songRail.visible ? songRail.width + 24 : 10 }
                     clip: true
-                    model: media.songs
+                    model: page.songs
                     boundsBehavior: Flickable.StopAtBounds
                     delegate: SongRow {
                         width: songList.width
@@ -585,7 +646,7 @@ Item {
                         current: media.source === "local" && media.title === modelData.title
                                  && media.artist === modelData.artist
                         title: modelData.title
-                        subtitle: modelData.artist
+                        subtitle: page.artistLine(modelData.artist, "")
                         onHit: media.playSong(modelData.index)
                     }
                     EmptyState {
@@ -601,8 +662,8 @@ Item {
                 // The same jump rail as Albums, on the song titles.
                 Column {
                     id: songRail
-                    visible: page.tab === "songs" && !page.eqOpen && media.songs.length > 15
-                    readonly property var buckets: AlphaIndex.buckets(media.songs.map(function (s) { return s.title }), true)
+                    visible: page.tab === "songs" && !page.eqOpen && page.songs.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(page.songs.map(function (s) { return s.title }), true)
                     width: 64
                     anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
                     Repeater {
@@ -687,6 +748,7 @@ Item {
                     }
                     ListView {
                         id: albumSongs
+                        reuseItems: true
                         anchors { left: parent.left; right: parent.right; top: albumHead.bottom; bottom: parent.bottom; topMargin: 14 }
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -724,6 +786,8 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
+                    reuseItems: true
+                    cacheBuffer: cellHeight * 2
                     model: page.spotifyView === "recent" || !page.hasAccount ? media.spotifyRecents
                            : page.spotifyView === "playlists" ? spotifyAccount.playlists : spotifyAccount.albums
                     delegate: CoverTile {
@@ -754,6 +818,7 @@ Item {
                 // ---- Spotify: Liked Songs -----------------------------------
                 ListView {
                     id: likedList
+                    reuseItems: true
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                              && !page.needsLink && page.spotifyView === "liked"
                     anchors { fill: parent; margins: 12; topMargin: 96 }
@@ -866,6 +931,7 @@ Item {
                     }
                     ListView {
                         id: resultList
+                        reuseItems: true
                         anchors { left: parent.left; right: parent.right; top: searchHead.bottom; bottom: parent.bottom; topMargin: 10 }
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -940,8 +1006,8 @@ Item {
                                 Layout.preferredWidth: 1
                                 Label {
                                     width: parent.width
-                                    text: page.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-                                    color: page.idle ? Theme.textDim : Theme.text
+                                    text: page.titleText
+                                    color: media.title === "" ? Theme.textDim : Theme.text
                                     font.pixelSize: Theme.fontBody
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
@@ -1065,7 +1131,7 @@ Item {
             id: coverImage
             anchors { fill: parent; margins: Theme.border }
             source: parent.art
-            sourceSize: Qt.size(360, 360)          // decode small: there are many
+            sourceSize: Qt.size(256, 256)          // decode small: there are many (tiles are about 210 px)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
         }

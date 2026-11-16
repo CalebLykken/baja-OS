@@ -63,6 +63,19 @@ out = {"ref": {"readout": ref.property("fr"), "text": col(ref.property("t")), "d
                "warn": col(ref.property("w"))}}
 
 
+def width(props):
+    obj = make(props)
+    wait(100)
+    return obj.findChild(QObject, "readoutNumeral").property("width")
+
+
+out["widths"] = {
+    "slot": [width('value: "%s"; widest: "000"' % v) for v in ("5", "55", "555")],
+    "free": [width('value: "%s"' % v) for v in ("5", "55", "555")],
+    "dash": width('value: "—"; widest: "000"'),
+}
+
+
 def snap(key, props):
     obj = make(props)
     wait(300)
@@ -125,6 +138,16 @@ class ReadoutTest(unittest.TestCase):
         self.assertEqual(r["color"], self.out["ref"]["dim"])
         self.assertEqual(r["legend"], self.out["ref"]["dim"])
         self.assertEqual(r["scale"], 1)
+
+    def test_widest_holds_the_numeral_width(self):
+        slot = self.out["widths"]["slot"]
+        self.assertEqual(len(set(slot)), 1, slot)
+        self.assertEqual(self.out["widths"]["dash"], slot[0])
+
+    def test_without_widest_the_width_follows_the_text(self):
+        free = self.out["widths"]["free"]
+        self.assertLess(free[0], free[1])
+        self.assertLess(free[1], free[2])
 
 
 if __name__ == "__main__":

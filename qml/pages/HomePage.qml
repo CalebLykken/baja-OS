@@ -160,6 +160,7 @@ Item {
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: "Boost"
+                        widest: Units.metric ? "-0.00" : "-00.0"
                         value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
                         unit: Units.boostUnit
                         warning: vehicle.warnings.indexOf("boost") >= 0
@@ -169,6 +170,7 @@ Item {
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: page.warmingUp ? "Warming up" : "Coolant"
+                        widest: "000"
                         value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
                         unit: Units.tempUnit
                         warning: vehicle.warnings.indexOf("coolant") >= 0
@@ -178,6 +180,7 @@ Item {
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: "Battery"
+                        widest: "00.0"
                         value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
                         unit: "V"
                         warning: vehicle.warnings.indexOf("voltage") >= 0
@@ -189,6 +192,7 @@ Item {
                         // Speed is the figure a driver checks most, so it gets the big numeral.
                         numeralSize: 76
                         label: "Speed"
+                        widest: "000"
                         value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
                         unit: Units.speedUnit
                     }

@@ -11,21 +11,15 @@ ColumnLayout {
     // A true minus sign (U+2212) for cuts, like the rest of the numbers.
     function signed(v) { return v > 0 ? "+" + v : v < 0 ? "\u2212" + Math.abs(v) : "0" }
 
-    RowLayout {
+    // The presets span the panel. Tuning by hand shows no selection until
+    // it is saved as 'Mine' (done automatically by the backend).
+    SegmentedControl {
         Layout.fillWidth: true
-        spacing: 16
-        SegmentedControl {
-            options: eq.presetNames.map(n => ({ label: n, value: n }))
-            current: eq.preset
-            onPicked: (v) => eq.applyPreset(v)
-        }
-        Label {
-            visible: eq.preset === "Custom"
-            text: "Custom"
-            color: Theme.textDim
-            font.pixelSize: Theme.fontBody
-        }
-        Item { Layout.fillWidth: true }
+        height: 72
+        stretch: true
+        options: eq.presetNames.map(n => ({ label: n, value: n }))
+        current: eq.preset
+        onPicked: (v) => eq.applyPreset(v)
     }
 
     RowLayout {

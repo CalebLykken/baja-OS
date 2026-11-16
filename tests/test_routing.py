@@ -279,6 +279,16 @@ class GpsWiringTest(unittest.TestCase):
         self.report(0.0005, 0.003)
         self.assertEqual(self.router._off_count, 2)
 
+    def test_one_jump_off_the_line_is_not_off_route(self):
+        self.report(0.0004, 0.003)
+        self.assertFalse(self.router.offRoute)
+        self.report(0.0005, 0.003)
+        self.assertFalse(self.router.offRoute)
+        self.report(0.0006, 0.003)
+        self.assertTrue(self.router.offRoute)
+        self.report(0.0007, 0.0)                     # back on the line
+        self.assertFalse(self.router.offRoute)
+
     def test_going_stale_starts_the_count_again(self):
         self.report(0.0004, 0.003)
         self.report(0.0005, 0.003)

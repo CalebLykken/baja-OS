@@ -1270,4 +1270,5 @@ class Router(QObject):
 
     @pyqtProperty(bool, notify=progressChanged)
     def offRoute(self):
-        return bool(self._route and self._off_count > 0)
+        # the same run of fixes that triggers a reroute: one GPS jump is not "Off route"
+        return bool(self._route and self._off_count >= OFF_ROUTE_FIXES)

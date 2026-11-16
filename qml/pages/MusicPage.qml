@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import "../components"
+import "../components/AlphaIndex.js" as AlphaIndex
 
 // The Music page, full screen like Maps (the clock moves into the rail).
 //
@@ -20,12 +21,22 @@ Item {
     signal navigate(int index)
 
     property bool eqOpen: false
-    property string tab: "playing"             // "playing", "next", "albums" or "spotify"
+    property string tab: "playing"             // "playing", "next", "albums", "songs" or "spotify"
     property int openAlbum: -1                 // the album shown in Albums, or -1 for all of them
+    property string albumView: "all"           // "all" or "recent" on the Albums tab (kept while the app runs)
     property var openKey: null                 // [artist, title] of the open album: a rescan can renumber albums
     property bool searchOpen: false            // the Spotify tab shows search rather than recents
     property string spotifyView: "recent"      // "recent", "playlists", "albums" or "liked"
     readonly property bool hasAccount: typeof spotifyAccount !== "undefined"
+
+    // The artist, then the album: "Boxer Rebellion · Bed Liner Sessions".
+    // "Unknown artist" (untagged files) is left out.
+    function artistLine(artist, album) {
+        var parts = []
+        if (artist && artist !== "Unknown artist") parts.push(artist)
+        if (album) parts.push(album)
+        return parts.join(" \u00b7 ")
+    }
     readonly property bool libraryView: spotifyView !== "recent"
     readonly property bool needsLink: libraryView && hasAccount && !spotifyAccount.linked
     property bool typing: false                // the keyboard is up
@@ -45,13 +56,9 @@ Item {
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
-    // Read once per queueChanged, so bindings that only need one song don't
-    // rebuild the whole queue (every song on the Pi) on each song change.
-    // Skipped while Spotify plays, so Spotify queue events don't rebuild the
-    // Pi's whole song list. Local and phone sources keep the Pi queue, and
-    // _set_source emits sourceChanged and queueChanged, so it refreshes on switch back.
-    readonly property var queueSongs: media.source === "spotify" ? [] : media.queue
-    readonly property var spotifyNext: media.upNext
+    // The songs that play after this one, in the true order (a shuffle's too);
+    // read once per change so the bindings below share it.
+    readonly property var upNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
     // Only while Spotify is what's playing or being looked at.
@@ -60,14 +67,9 @@ Item {
 
     readonly property bool browsing: tab !== "playing" || eqOpen
     readonly property int barHeight: 84
-    // The song after this one, or null when that isn't known: the phone doesn't
-    // say, and a shuffle's order is the player's own.
-    readonly property var nextSong: {
-        if (media.source === "spotify") return page.spotifyNext.length > 0 ? page.spotifyNext[0] : null
-        if (media.source !== "local" || media.shuffle || media.repeat === "one") return null
-        var songs = page.queueSongs, after = media.index + 1
-        return after < songs.length ? songs[after] : media.repeat === "all" && songs.length > 1 ? songs[0] : null
-    }
+    // The song after this one, or null when there isn't one or it isn't known
+    // (the phone doesn't say).
+    readonly property var nextSong: page.upNext.length > 0 ? page.upNext[0] : null
 
     function show(which) {
         tab = which
@@ -112,6 +114,7 @@ Item {
                 options: [{ label: "Playing", value: "playing" },
                           { label: "Up next", value: "next" },
                           { label: "Albums", value: "albums" },
+                          { label: "Songs", value: "songs" },
                           { label: "Spotify", value: "spotify" }]
                 current: page.tab
                 onPicked: (v) => page.show(v)
@@ -188,20 +191,27 @@ Item {
                         Layout.preferredHeight: Theme.touch
                         spacing: Theme.gap
                         // The Pi's own music and Spotify: the phone has no way to set these from here.
-                        WideKey {
+                        ModeKey {
+                            objectName: "shuffleKey"
                             visible: media.hasModes
                             icon: "shuffle"
+                            text: "Shuffle"
                             active: media.shuffle
                             onClicked: media.toggleShuffle()
                         }
-                        WideKey {
+                        ModeKey {
+                            objectName: "repeatKey"
                             visible: media.hasModes
                             icon: media.repeat === "one" ? "repeat_one" : "repeat"
+                            text: media.repeat === "one" ? "Repeat 1" : (media.repeat === "off" ? "Repeat off" : "Repeat")
                             active: media.repeat !== "off"
                             onClicked: media.cycleRepeat()
                         }
-                        WideKey {
+                        ModeKey {
+                            objectName: "eqKey"
                             icon: "equalizer"
+                            text: eq.preset
+                            active: eq.preset !== "Flat"
                             onClicked: page.eqOpen = true
                         }
                     }
@@ -231,10 +241,44 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                            text: page.spotifyError !== "" ? page.spotifyError : page.artistLine(media.artist, media.albumTitle)
                             color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                             font.pixelSize: Theme.fontBody
+                            maximumLineCount: 1
                             elide: Text.ElideRight
+                        }
+
+                        // Other places to play from: the phone, or back to the Pi's songs.
+                        // Not shown with nothing to switch to.
+                        Row {
+                            id: otherSources
+                            visible: media.otherSources.length > 0
+                            Layout.fillWidth: true
+                            spacing: Theme.gap
+                            Repeater {
+                                model: media.otherSources
+                                delegate: Rectangle {
+                                    height: 64
+                                    width: Math.min(chipRow.implicitWidth + 40, otherSources.width)
+                                    radius: height / 2
+                                    color: chipTap.pressed ? Theme.panelHi : Theme.panel
+                                    border.width: 1
+                                    border.color: Theme.line
+                                    RowLayout {
+                                        id: chipRow
+                                        anchors { fill: parent; leftMargin: 20; rightMargin: 20 }
+                                        spacing: 10
+                                        Icon { name: modelData.name === "phone" ? "bluetooth" : "music"; size: 28; color: Theme.accent }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: modelData.label
+                                            font.pixelSize: Theme.fontSmall
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    TapHandler { id: chipTap; onTapped: media.useSource(modelData.name) }
+                                }
+                            }
                         }
                         Item { Layout.fillHeight: true }
 
@@ -371,77 +415,215 @@ Item {
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
                                                   : "All songs on this Pi")
-                         : page.tab === "albums" ? (page.openAlbum >= 0 ? "" : "Albums on this Pi")
                          : ""
 
                 // ---- Up next ------------------------------------------------
+                // The song playing, pinned, then what follows it in the true
+                // play order (a shuffle's too).
+                SongRow {
+                    id: nowRow
+                    visible: page.tab === "next" && !page.eqOpen && media.title !== ""
+                    anchors { top: parent.top; left: parent.left; right: parent.right; margins: 10; topMargin: 52 }
+                    current: true
+                    title: media.title
+                    subtitle: "Now playing" + (page.artistLine(media.artist, "") !== "" ? "  \u00b7  " + page.artistLine(media.artist, "") : "")
+                    tappable: false
+                }
                 ListView {
                     id: queue
                     visible: page.tab === "next" && !page.eqOpen
                     readonly property bool spotifyQueue: media.source === "spotify"
-                    anchors { fill: parent; margins: 10; topMargin: 52 }
+                    readonly property bool phoneQueue: media.source === "phone"
+                    anchors {
+                        fill: parent; margins: 10
+                        topMargin: 52 + (nowRow.visible ? nowRow.height + 4 : 0)
+                    }
                     clip: true
-                    model: spotifyQueue ? page.spotifyNext : page.queueSongs
+                    model: page.upNext
                     boundsBehavior: Flickable.StopAtBounds
-                    // Open on the playing song, and follow it as it changes.
-                    function showPlaying() {
-                        if (visible && !spotifyQueue && media.index >= 0 && count > 0)
-                            positionViewAtIndex(media.index, ListView.Center)
-                    }
-                    onVisibleChanged: Qt.callLater(showPlaying)
-                    onCountChanged: Qt.callLater(showPlaying)
-                    Connections {
-                        target: media
-                        function onTrackChanged() { Qt.callLater(queue.showPlaying) }
-                    }
                     delegate: SongRow {
                         width: queue.width
                         number: index + 1
-                        current: !queue.spotifyQueue && index === media.index
                         title: modelData.title
                         subtitle: modelData.artist
                         tappable: !queue.spotifyQueue
-                        onHit: media.playIndex(index)
+                        onHit: media.playIndex(modelData.index)
                     }
                     EmptyState {
                         visible: queue.count === 0
                         width: parent.width
                         height: queue.height
-                        icon: queue.spotifyQueue ? "queue" : media.scanning ? "refresh" : "music"
-                        title: queue.spotifyQueue ? "Nothing queued" : media.scanning ? "Reading your music" : "No songs yet"
-                        hint: queue.spotifyQueue ? "Songs you queue in Spotify line up here"
+                        icon: queue.spotifyQueue || queue.phoneQueue || nowRow.visible ? "queue"
+                              : media.scanning ? "refresh" : "music"
+                        title: queue.phoneQueue ? "Your phone picks what plays next"
+                               : queue.spotifyQueue ? "Nothing queued"
+                               : nowRow.visible ? "That is the last song"
+                               : media.scanning ? "Reading your music" : "No songs yet"
+                        hint: queue.phoneQueue ? ""
+                              : queue.spotifyQueue ? "Songs you queue in Spotify line up here"
+                              : nowRow.visible ? (media.repeat === "off" ? "Turn repeat on to start over" : "")
                               : media.scanning ? "Songs show up as they're found"
                               : "Copy albums into ~/Music on the Pi"
                     }
                 }
 
                 // ---- Albums: all of them ------------------------------------
+                // All or just the albums played lately, then back to the whole
+                // library in one tap.
+                Row {
+                    id: playKeys
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12
+                              rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
+                    height: 72
+                    spacing: Theme.gap
+                    SegmentedControl {
+                        width: 320
+                        height: parent.height
+                        stretch: true
+                        options: [{ label: "All", value: "all" }, { label: "Recent", value: "recent" }]
+                        current: page.albumView
+                        onPicked: (v) => page.albumView = v
+                    }
+                    TextButton {
+                        width: (parent.width - parent.spacing * 2 - 320) / 2
+                        height: parent.height
+                        primary: true
+                        icon: "shuffle"
+                        text: "Shuffle all"
+                        onClicked: media.shuffleAll()
+                    }
+                    TextButton {
+                        width: (parent.width - parent.spacing * 2 - 320) / 2
+                        height: parent.height
+                        icon: "play"
+                        text: "Play all"
+                        onClicked: media.playAll()
+                    }
+                }
+
                 GridView {
                     id: albumGrid
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen
-                    anchors { fill: parent; margins: 12; topMargin: 52 }
+                    anchors { fill: parent; margins: 12; topMargin: playKeys.visible ? playKeys.height + 24 : 12
+                              rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
-                    model: page.albums
+                    readonly property bool recent: page.albumView === "recent"
+                    model: recent ? media.recentAlbums : page.albums
                     delegate: CoverTile {
+                        // In Recent, `index` counts the list shown; modelData.index is the album's place.
+                        readonly property int albumNo: albumGrid.recent ? modelData.index : index
                         width: albumGrid.cellWidth
                         height: albumGrid.cellHeight
                         art: modelData.art
                         placeholder: "album"
                         title: modelData.title
                         subtitle: modelData.artist
-                        current: index === media.album
-                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = index }
+                        current: albumNo === media.album
+                        onHit: { page.openKey = [modelData.artist, modelData.title]; page.openAlbum = albumNo }
                     }
                     EmptyState {
                         visible: albumGrid.count === 0
                         width: parent.width
                         height: albumGrid.height
                         icon: media.scanning ? "refresh" : "album"
-                        title: media.scanning ? "Reading your music" : "The shelf is empty"
-                        hint: media.scanning ? "Songs show up as they're found" : "Albums copied into ~/Music on the Pi show up here"
+                        title: media.scanning ? "Reading your music"
+                               : albumGrid.recent && media.albums.length > 0 ? "Nothing played yet"
+                               : "The shelf is empty"
+                        hint: media.scanning ? "Songs show up as they're found"
+                              : albumGrid.recent && media.albums.length > 0 ? "Albums you play show up here"
+                              : "Albums copied into ~/Music on the Pi show up here"
+                    }
+                }
+
+                // Jump rail: big letter buckets for a long library. It only
+                // rebuilds when the album list changes.
+                Column {
+                    id: alphaRail
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && media.albums.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(page.albums.map(function (a) { return a.artist }))
+                    width: 64
+                    anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
+                    Repeater {
+                        model: alphaRail.buckets
+                        delegate: Item {
+                            width: alphaRail.width
+                            height: Math.max(56, alphaRail.height / 9)
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                font.pixelSize: Theme.fontSmall
+                                font.bold: modelData.index >= 0
+                                color: Theme.text
+                                opacity: modelData.index >= 0 ? 1 : 0.3
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: modelData.index >= 0
+                                onClicked: albumGrid.positionViewAtIndex(Math.floor(modelData.index / 5) * 5, GridView.Beginning)
+                            }
+                        }
+                    }
+                }
+
+                // ---- Songs: every song, A to Z ------------------------------
+                // Tap one to play it; the rest of the library follows.
+                ListView {
+                    id: songList
+                    visible: page.tab === "songs" && !page.eqOpen
+                    anchors { fill: parent; margins: 10
+                              rightMargin: songRail.visible ? songRail.width + 24 : 10 }
+                    clip: true
+                    model: media.songs
+                    boundsBehavior: Flickable.StopAtBounds
+                    delegate: SongRow {
+                        width: songList.width
+                        numbered: false
+                        current: media.source === "local" && media.title === modelData.title
+                                 && media.artist === modelData.artist
+                        title: modelData.title
+                        subtitle: modelData.artist
+                        onHit: media.playSong(modelData.index)
+                    }
+                    EmptyState {
+                        visible: songList.count === 0
+                        width: parent.width
+                        height: songList.height
+                        icon: media.scanning ? "refresh" : "music"
+                        title: media.scanning ? "Reading your music" : "No songs yet"
+                        hint: media.scanning ? "Songs show up as they're found" : "Copy albums into ~/Music on the Pi"
+                    }
+                }
+
+                // The same jump rail as Albums, on the song titles.
+                Column {
+                    id: songRail
+                    visible: page.tab === "songs" && !page.eqOpen && media.songs.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(media.songs.map(function (s) { return s.title }), true)
+                    width: 64
+                    anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
+                    Repeater {
+                        model: songRail.buckets
+                        delegate: Item {
+                            width: songRail.width
+                            height: Math.max(56, songRail.height / 9)
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                font.pixelSize: Theme.fontSmall
+                                font.bold: modelData.index >= 0
+                                color: Theme.text
+                                opacity: modelData.index >= 0 ? 1 : 0.3
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: modelData.index >= 0
+                                onClicked: songList.positionViewAtIndex(modelData.index, ListView.Beginning)
+                            }
+                        }
                     }
                 }
 
@@ -820,6 +1002,49 @@ Item {
         Layout.preferredWidth: 1
     }
 
+    // A mode key that says what it does: an icon over a short label. On, it is
+    // filled with the accent and outlined; off, it is a plain key. Same press
+    // travel as IconButton, so nothing animates except a touch.
+    component ModeKey: Rectangle {
+        id: key
+        property string icon
+        property string text
+        property bool active: false
+        signal clicked()
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: Theme.touch
+        radius: Theme.radius
+        border.width: Theme.border
+        border.color: active ? Theme.accent : Theme.line
+        color: active ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.22)
+                      : (keyTap.pressed ? Theme.line : Theme.panelHi)
+        scale: keyTap.pressed ? 0.97 : 1
+        Behavior on scale { id: keySpring; NumberAnimation { duration: keySpring.targetValue < 1 ? 70 : 180; easing.type: keySpring.targetValue < 1 ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
+        Column {
+            anchors.centerIn: parent
+            width: parent.width - 12
+            spacing: 4
+            Icon {
+                anchors.horizontalCenter: parent.horizontalCenter
+                name: key.icon
+                size: 36
+                color: key.active ? Theme.accent : Theme.textDim
+            }
+            Label {
+                objectName: "modeKeyLabel"
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: key.text
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+                color: key.active ? Theme.accent : Theme.textDim
+                elide: Text.ElideRight
+            }
+        }
+        TapHandler { id: keyTap; onTapped: key.clicked() }
+    }
+
     // A cover: the picture, or a quiet tile with an icon when there isn't one.
     component Cover: Rectangle {
         property string art
@@ -950,6 +1175,7 @@ Item {
     component SongRow: Rectangle {
         id: row
         property int number
+        property bool numbered: true           // false: no number column, the title starts at the edge
         property bool current: false
         property string title
         property string subtitle
@@ -961,18 +1187,18 @@ Item {
         color: current || rowTap.pressed ? Theme.panelHi : "transparent"
         Item {
             id: num
-            width: 52
+            width: row.numbered ? 52 : 6
             height: parent.height
             anchors { left: parent.left; leftMargin: 10 }
             Icon {
-                visible: row.current
+                visible: row.numbered && row.current
                 anchors.verticalCenter: parent.verticalCenter
                 name: "equalizer"
                 size: 24
                 color: Theme.accent
             }
             Label {
-                visible: !row.current
+                visible: row.numbered && !row.current
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.number
                 color: Theme.textDim

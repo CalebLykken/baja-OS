@@ -29,7 +29,14 @@ Card {
     property int prevWindowMs: 1500
     readonly property real slideX: shift.x
     readonly property string liveTitle: np.idle ? (media.scanning ? "Reading your music" : "Nothing playing") : media.title
-    readonly property string liveArtist: media.artist
+    // The artist, then the album: "Boxer Rebellion · Bed Liner Sessions".
+    // "Unknown artist" (untagged files) is left out.
+    readonly property string liveArtist: {
+        var parts = []
+        if (media.artist && media.artist !== "Unknown artist") parts.push(media.artist)
+        if (media.albumTitle) parts.push(media.albumTitle)
+        return parts.join(" \u00b7 ")
+    }
 
     Component.onCompleted: {
         shownTitle = liveTitle
@@ -147,8 +154,7 @@ Card {
                     text: np.shownArtist
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
+                    wrapMode: Text.NoWrap
                     elide: Text.ElideRight
                 }
             }

@@ -38,7 +38,7 @@ from backend.gapless import GaplessEngine
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
 REPEATS = ("all", "one", "off")      # the order the key cycles; "all" is how it always played
-NO_SONG = {"title": "", "artist": "", "art": "", "duration": 0}
+NO_SONG = {"title": "", "artist": "", "album": "", "art": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
@@ -109,7 +109,9 @@ def _extract_art(path, audio):
     return QUrl.fromLocalFile(str(out)).toString()
 
 
-CACHE_VERSION = 1
+# 2: songs titled from their file names are tidied (tidy_title), so the first scan
+# after an update reads every cached song again, once, in the background.
+CACHE_VERSION = 2
 TRACK_STRINGS = ("path", "title", "artist", "art", "album", "albumArtist")
 TRACK_INTS = ("duration", "disc", "track")
 TRACK_KEYS = set(TRACK_STRINGS + TRACK_INTS)
@@ -225,6 +227,23 @@ def signature(folder):
     return _signature_of(_listing(folder))
 
 
+_LEADING_ID = re.compile(r"^\d{4,}[_\-.]+")      # freesound-style "575780__author__name"
+_LEADING_NUMBER = re.compile(r"^\d{1,3}(?:\s*[-.]\s+|\s+|\s*-\s*(?=\D))")     # "01 ", "01 - ", "1. ", "01-Intro"
+
+
+def tidy_title(stem):
+    """A readable title from a file name with no title tag: underscores become
+    spaces, runs of spaces and dashes collapse, and a leading track number or
+    download id goes. A name that's nothing but digits ("2112") or empties out
+    is kept as it was."""
+    name = _LEADING_ID.sub("", stem)
+    name = name.replace("_", " ")
+    name = re.sub(r"\s{2,}", " ", name)
+    name = re.sub(r"-{2,}", "-", name)
+    name = _LEADING_NUMBER.sub("", name.strip()).strip(" -")
+    return name or stem
+
+
 def _read_track(path, folder_art):
     """(track dict, whether its art came from the file itself) for one file,
     or (None, False) if it can't be read."""
@@ -239,7 +258,7 @@ def _read_track(path, folder_art):
         embedded = _extract_art(path, audio)
         return {
             "path": str(path),
-            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
+            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or tidy_title(path.stem),
             "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
             "duration": int(audio.info.length),
             "art": embedded or folder_art(path.parent),
@@ -413,6 +432,9 @@ def resume_point(albums, tracks, state):
     return album, index, position
 
 
+UP_NEXT_MAX = 40                        # songs the Up next tab lists
+
+
 def play_order(count, first, shuffle):
     """Queue positions in the order they play: folder order, or (shuffle)
     every song once, `first` leading."""
@@ -456,6 +478,7 @@ class LibraryPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()
+    upNextChanged = pyqtSignal()        # what plays after this song changed (song, order, repeat)
     modesChanged = pyqtSignal()         # shuffle or repeat
     libraryChanged = pyqtSignal()       # the albums (a scan found other songs)
     scanningChanged = pyqtSignal()
@@ -559,6 +582,7 @@ class LibraryPlayer(QObject):
             self._queue = queue
         self.libraryChanged.emit()
         self.queueChanged.emit()
+        self.upNextChanged.emit()
         if index != old_index or queue[index] != was:    # moved, or retagged / a new cover
             self.trackChanged.emit()
 
@@ -572,6 +596,7 @@ class LibraryPlayer(QObject):
             self.restore(state, play)
         self.libraryChanged.emit()
         self.queueChanged.emit()
+        self.upNextChanged.emit()
         self.start()
 
     def cancel_autoplay(self):
@@ -588,6 +613,7 @@ class LibraryPlayer(QObject):
     def _reorder(self):
         """The play order for the queue as it is, the current song first."""
         self._order = play_order(len(self._queue), self._index if self._queue else 0, self._shuffle)
+        self.upNextChanged.emit()
 
     def _after(self, index, failed=False):
         """The song that follows `index` by itself (also called on the audio
@@ -633,6 +659,7 @@ class LibraryPlayer(QObject):
         self._order = play_order(len(self._queue), first, self._shuffle)
         self._index = first
         self._engine.play_from(self._index, play=False)
+        self.upNextChanged.emit()
         self.trackChanged.emit()
         self.positionChanged.emit()
         self.playingChanged.emit()
@@ -646,6 +673,7 @@ class LibraryPlayer(QObject):
         if reorder:
             self._reorder()
         self._engine.play_from(self._index)
+        self.upNextChanged.emit()
         self.trackChanged.emit()
         self.positionChanged.emit()
         self.playingChanged.emit()
@@ -654,6 +682,7 @@ class LibraryPlayer(QObject):
         """The next song started by itself (no gap): show it."""
         if 0 <= index < len(self._queue) and index != self._index:
             self._index = index
+            self.upNextChanged.emit()
             self.trackChanged.emit()
             self.positionChanged.emit()
 
@@ -675,6 +704,10 @@ class LibraryPlayer(QObject):
         return self._song()["artist"]
 
     @pyqtProperty(str, notify=trackChanged)
+    def albumTitle(self):
+        return self._song().get("album", "")
+
+    @pyqtProperty(str, notify=trackChanged)
     def art(self):
         return self._song()["art"]
 
@@ -690,12 +723,37 @@ class LibraryPlayer(QObject):
     def queue(self):
         return [{"title": t["title"], "artist": t["artist"]} for t in self._queue]
 
+    @pyqtProperty("QVariantList", notify=upNextChanged)
+    def upNext(self):
+        """The songs that follow this one in the true play order (shuffle and
+        repeat included), up to UP_NEXT_MAX: [{title, artist, index}], `index`
+        being the queue position for playIndex(). Reads only, like _after."""
+        out = []
+        if not self._queue:
+            return out
+        at = self._index
+        while len(out) < UP_NEXT_MAX:
+            at = step(self._order, at, 1, self._repeat == "all")
+            if at is None or at == self._index or not 0 <= at < len(self._queue):
+                break
+            song = self._queue[at]
+            out.append({"title": song["title"], "artist": song["artist"], "index": at})
+        return out
+
     @pyqtProperty("QVariantList", notify=libraryChanged)
     def albums(self):
         return [{"title": a["title"], "artist": a["artist"], "art": a["art"],
                  "count": len(a["tracks"]),
                  "duration": sum(self._all[i]["duration"] for i in a["tracks"])}
                 for a in self._albums]
+
+    @pyqtProperty("QVariantList", notify=libraryChanged)
+    def songs(self):
+        """Every song by title, A to Z: [{title, artist, index}], where `index`
+        is the song's place in the folder-order list playSong takes."""
+        order = sorted(range(len(self._all)), key=lambda i: self._all[i]["title"].casefold())
+        return [{"title": self._all[i]["title"], "artist": self._all[i]["artist"], "index": i}
+                for i in order]
 
     @pyqtProperty(bool, notify=scanningChanged)
     def scanning(self):
@@ -792,6 +850,7 @@ class LibraryPlayer(QObject):
     def cycleRepeat(self):
         self._repeat = REPEATS[(REPEATS.index(self._repeat) + 1) % len(REPEATS)]
         self._engine.refresh_next()
+        self.upNextChanged.emit()
         self.modesChanged.emit()
 
     @pyqtSlot(int, int)
@@ -818,6 +877,32 @@ class LibraryPlayer(QObject):
         self._reorder()
         self.queueChanged.emit()
         self.playIndex(0)
+
+    @pyqtSlot(int)
+    def playSong(self, all_index):
+        """Play one song from the Songs list (`index` there); every song is the
+        queue, so the library keeps playing after it. Out of range does nothing."""
+        if not 0 <= all_index < len(self._all):
+            return
+        self._queue = list(self._all)
+        self._album = -1
+        self._reorder()
+        self.queueChanged.emit()
+        self.playIndex(all_index)
+
+    @pyqtSlot()
+    def shuffleAll(self):
+        """Every song, shuffled, from a random one: the one-tap way back from
+        a single album to the whole library."""
+        if not self._all:
+            return
+        self._shuffle = True
+        self._queue = list(self._all)
+        self._album = -1
+        self.modesChanged.emit()
+        self._reorder()
+        self.queueChanged.emit()
+        self.playIndex(random.randrange(len(self._queue)))
 
     @pyqtSlot(int)
     def setVolume(self, value):

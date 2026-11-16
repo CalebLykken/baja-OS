@@ -34,6 +34,7 @@ PRESETS = {
     "Vocal": [-2, -1, 2, 4, 1],
     "Bright": [0, 0, 0, 3, 6],
 }
+MINE = "Mine"               # the driver's own saved curve (settings key eqMine)
 CHECK_EVERY_MS = 5000       # filter missing: look for it
 FOUND_CHECK_MS = 30000      # filter running: only a PipeWire restart can change it
 
@@ -75,6 +76,7 @@ class Equalizer(QObject):
         super().__init__(parent)
         self._settings = settings
         self._gains = self._load()
+        self._mine = self._load("eqMine")
         self._pw = bool(shutil.which("pw-cli"))
         self._node = None
         self._pending = None
@@ -98,8 +100,8 @@ class Equalizer(QObject):
         self._timer.start()
 
     # ---- saved state --------------------------------------------------------
-    def _load(self):
-        raw = str(self._settings.get("eq", "") or "")
+    def _load(self, key="eq"):
+        raw = str(self._settings.get(key, "") or "")
         try:
             gains = [max(-LIMIT, min(LIMIT, int(v))) for v in raw.split(",")]
         except ValueError:
@@ -108,6 +110,11 @@ class Equalizer(QObject):
 
     def _save(self):
         self._settings.set("eq", ",".join(str(g) for g in self._gains))
+
+    def _save_mine(self, gains):
+        """Remember the driver's own curve as the 'Mine' preset."""
+        self._mine = list(gains)
+        self._settings.set("eqMine", ",".join(str(g) for g in self._mine))
 
     # ---- talking to PipeWire ------------------------------------------------
     def _check(self):
@@ -190,17 +197,17 @@ class Equalizer(QObject):
     def gains(self):
         return list(self._gains)
 
-    @pyqtProperty("QStringList", constant=True)
+    @pyqtProperty("QStringList", notify=changed)
     def presetNames(self):
-        return list(PRESETS)
+        return list(PRESETS) + [MINE]
 
     @pyqtProperty(str, notify=changed)
     def preset(self):
-        """The preset the gains match, or 'Custom'."""
+        """The preset the gains match, 'Mine' for the saved curve, or 'Custom'."""
         for name, gains in PRESETS.items():
             if gains == self._gains:
                 return name
-        return "Custom"
+        return MINE if self._gains == self._mine else "Custom"
 
     @pyqtSlot(int, int)
     def setGain(self, index, db):
@@ -208,8 +215,15 @@ class Equalizer(QObject):
             gains = list(self._gains)
             gains[index] = db
             self._set_all(gains)
+            # Hand tuning is remembered; a curve that is just a built-in
+            # preset is not, so picking a preset never overwrites 'Mine'.
+            if self._gains not in PRESETS.values() and self._gains != self._mine:
+                self._save_mine(self._gains)
+                self.changed.emit()
 
     @pyqtSlot(str)
     def applyPreset(self, name):
-        if name in PRESETS:
+        if name == MINE:
+            self._set_all(self._mine)
+        elif name in PRESETS:
             self._set_all(PRESETS[name])

@@ -14,7 +14,7 @@ from unittest import mock
 from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import Gps
-from backend.roadinfo import GAP_S, TRACE_EVERY_S, RoadInfo, parse_match
+from backend.roadinfo import GAP_S, HELD_MAX_S, TRACE_EVERY_S, RoadInfo, parse_match
 
 app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -197,10 +197,6 @@ class ParseMatchTest(unittest.TestCase):
                 self.assertIsNone(parse_match(answer))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HeldLimitTest(unittest.TestCase):
     """A red light must not lose the limit sign, and a parked truck runs no timer."""
 
@@ -259,3 +255,18 @@ class HeldLimitTest(unittest.TestCase):
         self.assertFalse(self.info._timer.isActive())
         self.gps._apply(real(300))
         self.assertTrue(self.info._timer.isActive())
+
+    def test_a_parked_truck_drifting_a_little_drops_the_limit_in_the_end(self):
+        self.gps._apply(dict(real(3), lat=47.0033, speed=0.0))   # about 33 m of drift, under HELD_AWAY_M
+        self.now += HELD_MAX_S - 10
+        self.info._check()
+        self.assertEqual(self.info.speedLimit, 50)
+        self.assertTrue(self.info._timer.isActive())
+        self.now += 20
+        self.info._check()
+        self.assertEqual(self.info.speedLimit, 0)
+        self.assertFalse(self.info._timer.isActive())
+
+
+if __name__ == "__main__":
+    unittest.main()

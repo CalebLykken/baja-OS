@@ -672,7 +672,10 @@ Item {
                 clip: true
                 spacing: 6
                 boundsBehavior: Flickable.StopAtBounds
-                model: maps.results
+                // Waiting for a search (the 180 ms debounce or the search itself):
+                // the last search's rows don't stay on screen meanwhile.
+                readonly property bool waiting: searchDelay.running || (page.hasMaps && maps.searching)
+                model: searchDelay.running ? [] : maps.results
                 header: Heading {
                     width: resultList.width
                     visible: page.saveAs !== ""
@@ -690,10 +693,10 @@ Item {
                     onHit: page.choose(modelData)
                 }
                 MapLabel {
-                    visible: resultList.count === 0
+                    visible: resultList.count === 0 && (resultList.waiting || page.panel === "results" || page.query.trim() !== "")
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Nothing by that name in the offline map"
+                    text: resultList.waiting ? "Searching..." : "Nothing by that name in the offline map"
                     color: page.cDim
                     font.pixelSize: Theme.fontBody
                 }
@@ -1173,6 +1176,7 @@ Item {
         // turn card or search panel otherwise (top centre is taken by the
         // Home/Work keys when browsing).
         Rectangle {
+            id: outsideChip
             readonly property bool shown: page.map !== null && page.map.outside && page.mapReady
             visible: shown
             x: whereTo.visible ? 16 : page.panelWidth + 32
@@ -1185,6 +1189,33 @@ Item {
                 id: outsideText
                 anchors.centerIn: parent
                 text: "Outside the offline map"
+                color: page.cOnBanner
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+        }
+
+        // ================================================================================
+        // The GPS signal is lost (a tunnel, a garage): the map and the route hold the
+        // last position, so guidance has stopped following the truck. Same place as the
+        // outside chip, one row below it when both show. Not shown for the demo drive.
+        Rectangle {
+            id: gpsLostChip
+            readonly property bool shown: page.mapReady && typeof gps !== "undefined" && gps !== null
+                                          && gps.stale && gps.source !== "demo"
+            visible: shown
+            x: outsideChip.x
+            y: outsideChip.y + (outsideChip.visible ? 64 : 0)
+            width: gpsLostText.implicitWidth + 44
+            height: 56
+            radius: page.cRadius
+            color: page.cBanner
+            border.width: 3
+            border.color: page.cRed
+            MapLabel {
+                id: gpsLostText
+                anchors.centerIn: parent
+                text: "GPS signal lost"
                 color: page.cOnBanner
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold

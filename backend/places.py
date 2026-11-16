@@ -448,14 +448,41 @@ def _fts_query(text):
     return " AND ".join(f'"{w}"*' for w in words)
 
 
+def _loose_fts_query(text):
+    """Like _fts_query, but a longer word ending in 's' drops the 's' first.
+    The index splits "McDonald's" into "mcdonald" and "s", so "mcdonalds" and
+    "traders joes" need this to match "Trader Joe's"."""
+    words = [w for w in "".join(c if c.isalnum() else " " for c in text.lower()).split() if w]
+    parts = []
+    for w in words:
+        if len(w) > 3 and w.endswith("s"):
+            w = w[:-1]
+        parts.append(f'"{w}"*')
+    return " AND ".join(parts)
+
+
+def _place_rows(db, q):
+    return db.execute("SELECT name, kind, area, weight, lon, lat, bm25(places) FROM places"
+                      " WHERE places MATCH ? ORDER BY bm25(places) LIMIT 300", (q,)).fetchall()
+
+
 def search(db, text, near=None, limit=12):
     """Best matches for `text`, nearest first among equally good names.
-    `near` is (lon, lat) to measure distance from."""
+    `near` is (lon, lat) to measure distance from. When nothing matches as
+    typed, a second try allows for possessives and plurals."""
     q = _fts_query(text)
     if not q:
         return []
-    rows = db.execute("SELECT name, kind, area, weight, lon, lat, bm25(places) FROM places"
-                      " WHERE places MATCH ? ORDER BY bm25(places) LIMIT 300", (q,)).fetchall()
+    rows = _place_rows(db, q)
+    if not rows:
+        loose = _loose_fts_query(text)
+        if loose != q:
+            rows = _place_rows(db, loose)
+    return _ranked(rows, text, near, limit)
+
+
+def _ranked(rows, text, near, limit):
+    """Order and trim the rows `search` found for `text`."""
     t = text.strip().lower()
     out, seen = [], set()
     for name, kind, area_, weight, lon, lat, score in rows:

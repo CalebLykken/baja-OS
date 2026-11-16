@@ -211,6 +211,7 @@ class MapService(QObject):
 
     changed = pyqtSignal()
     resultsChanged = pyqtSignal()
+    searchingChanged = pyqtSignal()
     _progress = pyqtSignal(str, bool)      # message, still running
     _found = pyqtSignal(str, object)       # query, results
 
@@ -226,6 +227,7 @@ class MapService(QObject):
         self._update_message = ""
         self._query = ""
         self._results = []
+        self._searching = False             # a search is out and its answer hasn't come
         self._progress.connect(self._on_progress)
         self._found.connect(self._on_found)
         self.refresh()
@@ -317,14 +319,26 @@ class MapService(QObject):
         self.changed.emit()
 
     # ---- place search -------------------------------------------------------
+    def _begin(self, key, notify=True):
+        """A search for `key` has started: the last search's rows go, and the
+        list says Searching until this one's answer comes. `notify` False
+        keeps the rows signal quiet (the along-route card reads it)."""
+        self._query = key
+        self._results = []
+        self._searching = True
+        self.searchingChanged.emit()
+        if notify:
+            self.resultsChanged.emit()
+
     @pyqtSlot(str, float, float)
     def search(self, text, lon, lat):
         """Look `text` up in the offline place index, nearest to (lon, lat)
         among equally good matches (0, 0 for no position)."""
-        self._query = text
         if not text.strip():
+            self._query = text
             self._on_found(text, [])
             return
+        self._begin(text)
         index = self._data_dir / places.INDEX_NAME
         near = (lon, lat) if (lon or lat) else None
 
@@ -360,7 +374,7 @@ class MapService(QObject):
     def searchNearby(self, category, lon, lat):
         """The nearest places of a category ("gas", "coffee", "food", ...)."""
         key = "category:" + category
-        self._query = key
+        self._begin(key)
         index = self._data_dir / places.INDEX_NAME
 
         def work():
@@ -382,7 +396,7 @@ class MapService(QObject):
         """Places of a category along the route ahead (from `into_seg` metres
         along segment `start_seg`), in the order reached."""
         key = "along:" + category
-        self._query = key
+        self._begin(key, notify=False)      # the along card shows rows only once they're its own
         index = self._data_dir / places.INDEX_NAME
         try:
             line = [(float(p[0]), float(p[1])) for p in shape]
@@ -407,12 +421,19 @@ class MapService(QObject):
         if text != self._query:
             return                          # an older search finishing late
         self._results = [dict(r, label=_describe(r["kind"], r["area"])) for r in rows]
+        self._searching = False
+        self.searchingChanged.emit()
         self.resultsChanged.emit()
 
     @pyqtProperty("QVariantList", notify=resultsChanged)
     def results(self):
         """[{name, label, lon, lat, distance (m, or -1)}] for the last search."""
         return self._results
+
+    @pyqtProperty(bool, notify=searchingChanged)
+    def searching(self):
+        """True from the start of a search until its answer arrives."""
+        return self._searching
 
     @pyqtProperty(bool, notify=changed)
     def canSearch(self):

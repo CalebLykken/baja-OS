@@ -20,6 +20,7 @@ CHECK_EVERY_MS = 3000
 MOVING_MS = 2.0           # below this the fixes are too close together to match
 KEEP_S = 20               # a limit older than this (no match since) is dropped
 HELD_AWAY_M = 80          # stopped, a limit is kept (a red light) until the truck is this far from where it was matched
+HELD_MAX_S = 600          # a held limit is dropped after this long even if the truck hasn't moved away (drift)
 GAP_S = 5.0               # a few missed fixes is still one drive; longer and the old points can't be trusted to join up
 TRACE_EVERY_S = 0.8       # the trace keeps about one fix a second, however often they come
 MAX_KMH = 200             # no posted limit is above this; a bigger number is a bad answer
@@ -109,8 +110,8 @@ class RoadInfo(QObject):
         moving = self._gps.speed >= MOVING_MS
         # a limit is only dropped when the truck is driving on without a new match, or has
         # gone elsewhere; sitting at a light, matches stop but the road hasn't changed
-        if (self._limit and time.monotonic() - self._at > KEEP_S
-                and (moving or self._moved_away())):
+        age = time.monotonic() - self._at
+        if self._limit and age > KEEP_S and (moving or self._moved_away() or age > HELD_MAX_S):
             self._limit, self._name = 0, ""
             self.changed.emit()
         if not moving and not self._busy and not self._limit:

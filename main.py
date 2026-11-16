@@ -15,6 +15,7 @@ import faulthandler
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 # set before Qt loads, so it lives above the PyQt imports.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
-from PyQt6.QtCore import QCoreApplication, QTimer, QUrl, qInstallMessageHandler
+from PyQt6.QtCore import QCoreApplication, QSocketNotifier, QTimer, QUrl, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -121,6 +122,32 @@ def make_media_player(music_dir, demo_flag=None, on_pi=None):
     return LibraryPlayer(tracks, scanning=not tracks)
 
 
+def install_sigterm(on_term):
+    """Run on_term on SIGTERM, waking the idle event loop to do it.
+
+    Python's C-level handler only flags the signal; the Python handler runs
+    when the interpreter next gets a turn, which an idle Qt loop never gives
+    it. set_wakeup_fd makes the signal write a byte to a socket, and the
+    notifier on the other end wakes the loop, so no polling timer is needed.
+    Returns the objects to keep referenced."""
+    read_end, write_end = socket.socketpair()
+    read_end.setblocking(False)
+    write_end.setblocking(False)
+    signal.set_wakeup_fd(write_end.fileno())
+    signal.signal(signal.SIGTERM, on_term)
+    notifier = QSocketNotifier(read_end.fileno(), QSocketNotifier.Type.Read)
+
+    def drain():
+        # Reading is all that's needed: running this slot is what lets Python
+        # deliver the handler.
+        try:
+            read_end.recv(4096)
+        except OSError:
+            pass
+    notifier.activated.connect(drain)
+    return read_end, write_end, notifier
+
+
 def log_exception(exc_type, exc, tb):
     """Log an uncaught error and carry on. Without its own sys.excepthook,
     PyQt aborts the whole dashboard (exit 134) when an exception escapes a
@@ -201,8 +228,8 @@ def main():
     # Changes are written a moment after they're made, on a thread of their
     # own; write what's waiting, and wait until it's on disk, when the app
     # quits or when systemd stops it (SIGTERM would otherwise end the process
-    # on the spot). Python only sees the signal when it gets to run, so a
-    # timer gives it a turn.
+    # on the spot). Python only runs its handler when it gets a turn, so the
+    # signal also writes a byte to a socket that Qt watches (install_sigterm).
     # The trip saves first (a restart at a stop, the updater's, would otherwise
     # lose what it counted since its last save), then settings go to disk.
     trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
@@ -213,9 +240,7 @@ def main():
         # Posted, not called: quit() before app.exec() is running does nothing,
         # and a stop during start-up must still end the dashboard.
         QTimer.singleShot(0, QCoreApplication.quit)
-    signal.signal(signal.SIGTERM, on_sigterm)
-    sigterm_poll = QTimer(interval=250, timeout=lambda: None)
-    sigterm_poll.start()
+    sigterm_wake = install_sigterm(on_sigterm)
     vehicle = VehicleData(settings, demo=args.demo)
     # Real engine data from the OBD-II adapter whenever the car answers.
     obd = ObdReader(baro=settings.get("baro"))

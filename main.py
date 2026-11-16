@@ -397,6 +397,9 @@ def main():
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine
+    # Qt can still log while QGuiApplication and WebEngine are torn down; don't
+    # let those messages call back into Python while it shuts down.
+    qInstallMessageHandler(None)
     return code
 
 

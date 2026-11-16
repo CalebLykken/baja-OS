@@ -8,6 +8,7 @@ logging never raises.
 import io
 import json
 import unittest
+from unittest import mock
 
 from backend.errorlog import ErrorLog, QtMessages
 from PyQt6.QtCore import QtMsgType
@@ -204,6 +205,16 @@ class QtMessagesTest(unittest.TestCase):
         for _ in range(6):
             self.qt.handle(QtMsgType.QtFatalMsg, self.ctx, "fatal thing")
         self.assertEqual(self.out.getvalue().count("fatal thing"), 6)
+
+    def test_the_category_prefix_is_kept(self):
+        with mock.patch("backend.errorlog.qFormatLogMessage",
+                        lambda mode, ctx, msg: f"qml: {msg}"):
+            self.qt.handle(QtMsgType.QtWarningMsg, object(), "hello")
+        self.assertEqual(self.out.getvalue(), "qml: hello\n")
+
+    def test_a_message_that_cant_be_formatted_prints_as_given(self):
+        self.qt.handle(QtMsgType.QtWarningMsg, None, "hello")   # None isn't a context
+        self.assertEqual(self.out.getvalue(), "hello\n")
 
     def test_a_broken_stderr_does_not_raise(self):
         class Broken:

@@ -17,6 +17,8 @@ import threading
 import time
 import traceback
 
+from PyQt6.QtCore import qFormatLogMessage
+
 FULL_EACH = 3          # tracebacks logged in full per distinct error
 SUMMARY_EVERY_S = 60
 MAX_KINDS = 200        # distinct errors remembered; the rest share one entry
@@ -148,6 +150,16 @@ class QtMessages:
         self._kinds = {}                # (mode, text) -> [seen, suppressed since the last summary]
         self._timer = None
 
+    @staticmethod
+    def _format(mode, context, message):
+        """The line Qt itself would print, so the category prefix ('qml: ',
+        'qt.xxx: ') and QT_MESSAGE_PATTERN are kept. The plain message if Qt
+        can't format it."""
+        try:
+            return qFormatLogMessage(mode, context, message)
+        except Exception:
+            return message
+
     def handle(self, mode, context, message):
         try:
             fatal = getattr(mode, "name", str(mode)) == "QtFatalMsg"
@@ -159,7 +171,7 @@ class QtMessages:
                 entry[0] += 1
                 if fatal or entry[0] <= self._full:
                     out = self._out or sys.stderr
-                    print(message, file=out)
+                    print(self._format(mode, context, message), file=out)
                     if entry[0] == self._full and not fatal:
                         print(f"(more of this message are counted, not logged: "
                               f"a summary follows every {self._every}s)", file=out)

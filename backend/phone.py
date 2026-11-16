@@ -119,6 +119,27 @@ def _latlon(value):
     return None
 
 
+_GEOHASH = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+
+def decode_geohash(text):
+    """(lat, lon) at the centre of a geohash cell, or None if it isn't one.
+    Waze share links carry their position this way, so no lookup is needed."""
+    text = (text or "").strip().lower()
+    if not text or any(c not in _GEOHASH for c in text):
+        return None
+    lat, lon = [-90.0, 90.0], [-180.0, 180.0]
+    even = True                           # bits alternate, starting with longitude
+    for c in text:
+        bits = _GEOHASH.index(c)
+        for shift in (4, 3, 2, 1, 0):
+            span = lon if even else lat
+            mid = (span[0] + span[1]) / 2
+            span[0 if (bits >> shift) & 1 else 1] = mid
+            even = not even
+    return (lat[0] + lat[1]) / 2, (lon[0] + lon[1]) / 2
+
+
 class LinkUnreachable(Exception):
     """A maps short link couldn't be opened (offline, rate limited, server down)."""
 
@@ -208,6 +229,20 @@ def parse_map_url(url):
             m = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
             if m:
                 ll = (float(m[1]), float(m[2]))
+    elif "waze" in host:
+        label = qs.get("q") or ""
+        for key in ("ll", "to"):
+            value = qs.get(key) or ""
+            ll = ll or _latlon(value[3:] if value.startswith("ll.") else value)
+        m = re.search(r"/ul/h([0-9a-z]+)", path, re.I)
+        if not ll and m:
+            ll = decode_geohash(m[1])
+    elif "openstreetmap" in host:
+        ll = _latlon(f"{qs.get('mlat', '')},{qs.get('mlon', '')}")
+        # The #map= fragment is only the view, so it is a fallback, never a named place.
+        m = re.search(r"map=\d+/(-?\d+(?:\.\d+)?)/(-?\d+(?:\.\d+)?)", parts.fragment)
+        if not ll and m:
+            ll = _latlon(f"{m[1]},{m[2]}")
     return ll, label.strip()
 
 

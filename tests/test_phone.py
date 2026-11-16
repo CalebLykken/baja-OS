@@ -345,6 +345,68 @@ class SpotifyLinkTest(ServerTest):
         self.assertEqual(self.request("GET", "/send")[0], 403)
 
 
+def _encode_geohash(lat, lon, length):
+    """An independent geohash encoder, to check decode_geohash against."""
+    alphabet = "0123456789bcdefghjkmnpqrstuvwxyz"
+    lat_r, lon_r, out, bits, even = [-90.0, 90.0], [-180.0, 180.0], "", [], True
+    while len(out) < length:
+        rng, value = (lon_r, lon) if even else (lat_r, lat)
+        mid = (rng[0] + rng[1]) / 2
+        bits.append(1 if value >= mid else 0)
+        rng[0 if value >= mid else 1] = mid
+        even = not even
+        if len(bits) == 5:
+            out += alphabet[int("".join(map(str, bits)), 2)]
+            bits = []
+    return out
+
+
+class WazeOsmLinkTest(unittest.TestCase):
+    def test_geohash_round_trip(self):
+        code = _encode_geohash(47.6062, -122.3321, 9)
+        self.assertTrue(code.startswith("c23nb"))
+        lat, lon = phone.decode_geohash(code)
+        self.assertAlmostEqual(lat, 47.6062, delta=0.001)
+        self.assertAlmostEqual(lon, -122.3321, delta=0.001)
+        lat, lon = phone.decode_geohash("c23nb62w2")
+        self.assertAlmostEqual(lat, 47.6062, delta=0.001)
+        self.assertAlmostEqual(lon, -122.3321, delta=0.001)
+
+    def test_geohash_junk(self):
+        self.assertIsNone(phone.decode_geohash("a!?"))
+        self.assertIsNone(phone.decode_geohash(""))
+        self.assertIsNone(phone.decode_geohash(None))
+
+    def test_waze_ll(self):
+        self.assertEqual(phone.parse_map_url("https://waze.com/ul?ll=47.6062%2C-122.3321&navigate=yes"),
+                         ((47.6062, -122.3321), ""))
+
+    def test_waze_to_prefix_and_label(self):
+        self.assertEqual(phone.parse_map_url("https://www.waze.com/ul?to=ll.47.6,-122.3&q=Pike%20Place"),
+                         ((47.6, -122.3), "Pike Place"))
+
+    def test_waze_geohash_path(self):
+        ll, label = phone.parse_map_url("https://waze.com/ul/hc23nb62w2")
+        self.assertAlmostEqual(ll[0], 47.6062, delta=0.001)
+        self.assertAlmostEqual(ll[1], -122.3321, delta=0.001)
+        self.assertEqual(label, "")
+
+    def test_waze_junk(self):
+        self.assertEqual(phone.parse_map_url("https://waze.com/ul?ll=abc"), (None, ""))
+        self.assertEqual(phone.parse_map_url("https://waze.com/ul/h!!"), (None, ""))
+
+    def test_osm_marker(self):
+        self.assertEqual(phone.parse_map_url("https://www.openstreetmap.org/?mlat=47.6&mlon=-122.3"),
+                         ((47.6, -122.3), ""))
+
+    def test_osm_fragment_view(self):
+        self.assertEqual(phone.parse_map_url("https://www.openstreetmap.org/#map=17/47.6/-122.3"),
+                         ((47.6, -122.3), ""))
+
+    def test_osm_junk(self):
+        self.assertEqual(phone.parse_map_url("https://www.openstreetmap.org/?mlat=x&mlon=y"), (None, ""))
+
+
 class ParseMapUrlTest(unittest.TestCase):
     PIKE = (47.6097, -122.3422)
 

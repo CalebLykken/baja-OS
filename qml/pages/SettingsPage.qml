@@ -24,6 +24,20 @@ Item {
     ]
     function mmss(s) { return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
 
+    // Does this section need the driver's attention? The list shows a dot
+    // for it, so a problem is seen without opening each section. Reads the
+    // live properties, so the dot follows them as they change.
+    function attention(i) {
+        if (i === 2)   // Wi-Fi: joined to nothing that reaches the internet
+            return typeof network !== "undefined" && network.checked && !network.online
+        if (i === 3)   // Bluetooth: new phones can't be confirmed
+            return typeof bluetooth !== "undefined" && !bluetooth.agentOk && bluetooth.agentProblem !== ""
+        if (i === 5)   // System: power supply or temperature warning, or a low supply reading
+            return typeof system !== "undefined" && (system.power !== ""
+                || (typeof powerLog !== "undefined" && powerLog.supply >= 0 && powerLog.lowest < 4.8))
+        return false
+    }
+
     // Scan for networks only while the Wi-Fi section is on screen.
     readonly property bool wifiShown: visible && section === 2
     onWifiShownChanged: if (typeof wifi !== "undefined") wifi.setScanning(wifiShown)
@@ -68,10 +82,22 @@ Item {
                 model: page.sections
                 Rectangle {
                     readonly property bool selected: page.section === index
+                    readonly property bool needsAttention: page.attention(index)
                     width: list.width
                     height: 64
                     radius: Theme.radius
                     color: !selected && tap.pressed ? Theme.panel : "transparent"
+
+                    // A warning dot at the right edge, clear of the 28 px icon and the label.
+                    Rectangle {
+                        objectName: "attentionDot"
+                        visible: parent.needsAttention
+                        anchors { right: parent.right; rightMargin: 16; verticalCenter: parent.verticalCenter }
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: Theme.warn
+                    }
 
                     Row {
                         anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }

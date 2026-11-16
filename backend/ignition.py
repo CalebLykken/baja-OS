@@ -156,10 +156,9 @@ class KeyOff(QObject):
         obd.reading.connect(self._answered)
         obd.quiet.connect(self._quiet)
         obd.voltage.connect(self._voltage)
+        # Ticks once a second, but only while the car is quiet (see _quiet and
+        # _tick): while the truck runs there's nothing for it to do.
         self._timer = QTimer(self, interval=1000, timeout=self._second)
-
-    def start(self):
-        self._timer.start()
 
     def _answered(self, values):
         self._logic.answered(values.get("speed"))
@@ -171,6 +170,8 @@ class KeyOff(QObject):
     def _quiet(self):
         first = self._logic.quiet_at is None and self._logic.seen_on
         self._logic.quiet(time.monotonic())
+        if self._logic.quiet_at is not None and not self._timer.isActive():
+            self._timer.start()             # the car's quiet: the once-a-second work starts
         if first:
             self._note("car quiet")
         if self._enabled and self._logic.seen_on:
@@ -212,6 +213,8 @@ class KeyOff(QObject):
             self._power_off()
         elif self._asked and left is None:
             self._withdraw()                # the key came back (or it's moving) first
+        if self._logic.quiet_at is None and self._countdown < 0 and not self._asked:
+            self._timer.stop()              # the car answered and nothing's pending: no more wake-ups
 
     def _why_not(self):
         """Why there's no countdown now, for the log."""

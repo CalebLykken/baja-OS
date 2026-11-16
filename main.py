@@ -382,7 +382,6 @@ def main():
     spotify_account.start()
     knob.start()
     obd.start()
-    key_off.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()

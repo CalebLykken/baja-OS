@@ -71,9 +71,9 @@ Window {
     }
     Connections {
         target: Units
-        function onMetricChanged() { settings.set("metric", Units.metric ? "true" : "false") }
-        function onClock24Changed() { settings.set("clock24", Units.clock24 ? "true" : "false") }
-        function onAppearanceChanged() { settings.set("appearance", Units.appearance) }
+        function onMetricChanged() { if (typeof settings !== "undefined") settings.set("metric", Units.metric ? "true" : "false") }
+        function onClock24Changed() { if (typeof settings !== "undefined") settings.set("clock24", Units.clock24 ? "true" : "false") }
+        function onAppearanceChanged() { if (typeof settings !== "undefined") settings.set("appearance", Units.appearance) }
     }
 
     // Light by day, dark at night (by the sun where the truck is), unless
@@ -377,12 +377,13 @@ Window {
     }
 
     // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
-    // Never fully black, and it lets touches through to the UI below.
+    // Never fully black, and it lets touches through to the UI below. No
+    // dimming at all without the display object.
     Rectangle {
         anchors.fill: parent
-        visible: !display.hardware
+        visible: typeof display !== "undefined" && !display.hardware
         color: "black"
-        opacity: (1 - display.brightness / 100) * 0.85
+        opacity: visible ? (1 - display.brightness / 100) * 0.85 : 0
     }
 
     // "Screen off": a black layer over the pages and the dim overlay (Display

@@ -179,20 +179,27 @@ Item {
                         Layout.preferredHeight: Theme.touch
                         spacing: Theme.gap
                         // The Pi's own music and Spotify: the phone has no way to set these from here.
-                        WideKey {
+                        ModeKey {
+                            objectName: "shuffleKey"
                             visible: media.hasModes
                             icon: "shuffle"
+                            text: "Shuffle"
                             active: media.shuffle
                             onClicked: media.toggleShuffle()
                         }
-                        WideKey {
+                        ModeKey {
+                            objectName: "repeatKey"
                             visible: media.hasModes
                             icon: media.repeat === "one" ? "repeat_one" : "repeat"
+                            text: media.repeat === "one" ? "Repeat 1" : (media.repeat === "off" ? "Repeat off" : "Repeat")
                             active: media.repeat !== "off"
                             onClicked: media.cycleRepeat()
                         }
-                        WideKey {
+                        ModeKey {
+                            objectName: "eqKey"
                             icon: "equalizer"
+                            text: eq.preset
+                            active: eq.preset !== "Flat"
                             onClicked: page.eqOpen = true
                         }
                     }
@@ -842,6 +849,49 @@ Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         Layout.preferredWidth: 1
+    }
+
+    // A mode key that says what it does: an icon over a short label. On, it is
+    // filled with the accent and outlined; off, it is a plain key. Same press
+    // travel as IconButton, so nothing animates except a touch.
+    component ModeKey: Rectangle {
+        id: key
+        property string icon
+        property string text
+        property bool active: false
+        signal clicked()
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: Theme.touch
+        radius: Theme.radius
+        border.width: Theme.border
+        border.color: active ? Theme.accent : Theme.line
+        color: active ? Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.22)
+                      : (keyTap.pressed ? Theme.line : Theme.panelHi)
+        scale: keyTap.pressed ? 0.97 : 1
+        Behavior on scale { id: keySpring; NumberAnimation { duration: keySpring.targetValue < 1 ? 70 : 180; easing.type: keySpring.targetValue < 1 ? Easing.OutQuad : Easing.OutBack; easing.overshoot: 2.5 } }
+        Column {
+            anchors.centerIn: parent
+            width: parent.width - 12
+            spacing: 4
+            Icon {
+                anchors.horizontalCenter: parent.horizontalCenter
+                name: key.icon
+                size: 36
+                color: key.active ? Theme.accent : Theme.textDim
+            }
+            Label {
+                objectName: "modeKeyLabel"
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: key.text
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+                color: key.active ? Theme.accent : Theme.textDim
+                elide: Text.ElideRight
+            }
+        }
+        TapHandler { id: keyTap; onTapped: key.clicked() }
     }
 
     // A cover: the picture, or a quiet tile with an icon when there isn't one.

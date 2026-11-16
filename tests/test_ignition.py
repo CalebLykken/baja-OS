@@ -447,5 +447,38 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(len(self.battery_lines()), int(VOLTS_FOR_S))
 
 
+    def with_notes(self):
+        self.notes = []
+        self.k = KeyOff(self.obd, FakeGps(), FakeSettings(), power_off=lambda: self.powered.append(self.now),
+                        cancel_power=lambda: self.cancelled.append(self.now), note=self.notes.append)
+
+    def test_notes_for_a_quiet_spell_that_the_car_ends(self):
+        self.with_notes()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.k._quiet()                             # repeats aren't new
+        self.now += QUIET_S + 1
+        self.k._tick()
+        self.k._answered({"speed": 0})
+        self.assertEqual(self.notes, ["car quiet", "countdown", "cancelled: car answered"])
+
+    def test_notes_for_keep_on_and_for_power_off(self):
+        self.with_notes()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + 1
+        self.k._tick()
+        self.k.keepOn()
+        self.assertEqual(self.notes, ["car quiet", "countdown", "cancelled: kept on"])
+        self.notes.clear()
+        self.k._answered({"speed": 0})
+        self.k._quiet()
+        self.now += QUIET_S + WARN_S
+        self.k._tick()
+        self.k.power_failed("no polkit rule")
+        self.assertEqual(self.notes[:3], ["car quiet", "countdown", "power off requested"])
+        self.assertIn("power off failed: no polkit rule", self.notes)
+
+
 if __name__ == "__main__":
     unittest.main()

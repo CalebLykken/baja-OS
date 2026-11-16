@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from glob import glob
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from backend.system import cpu_temp, fan_rpm, memory_mb
 LOG_DIR = Path.home() / ".local/share/baja-os/power"
 EVERY_S = 2.0
 SYNC_EVERY = 5          # samples between forcing them to the card; events go at once
+MAX_NOTES = 200         # notes waiting for the writer; a stuck writer drops the oldest
 KEEP_BOOTS = 30         # log files kept (about 0.3 MB per hour of driving)
 POWER_NODE = "/proc/device-tree/chosen/power"   # what the firmware decided at boot
 
@@ -197,6 +199,7 @@ class PowerLog(QObject):
         self._folder = Path(folder)
         self._file = None
         self._lock = threading.Lock()   # two threads write
+        self._notes = deque(maxlen=MAX_NOTES)   # (stamp, text) from other threads
         self._battery = None          # the car's latest reading
         self._supply = None
         self._lowest = None
@@ -215,6 +218,20 @@ class PowerLog(QObject):
     def battery(self, volts):
         """The car's battery, from the OBD adapter. Any thread."""
         self._battery = volts
+
+    def note(self, text):
+        """Something the dashboard saw (the car going quiet, the key-off
+        prompt), for the log. Any thread, never blocks: it's queued with the
+        time it happened, and the sampling thread writes it within EVERY_S."""
+        self._notes.append((self._stamp(), text))
+
+    def _drain_notes(self):
+        while True:
+            try:
+                stamp, text = self._notes.popleft()
+            except IndexError:
+                return
+            self.event(text, stamp)
 
     def _begin(self):
         try:
@@ -237,6 +254,7 @@ class PowerLog(QObject):
                     "|battery V|screen|free MB|app MB\n")
         threading.Thread(target=self._kernel, daemon=True).start()
         while True:
+            self._drain_notes()
             self._sample_once()
             time.sleep(EVERY_S)
 
@@ -289,9 +307,11 @@ class PowerLog(QObject):
     def _stamp(self):
         return f"{time.strftime('%H:%M:%S')}|{time.monotonic():.1f}"
 
-    def event(self, text):
+    def event(self, text, stamp=None):
+        """Write an EVENT line, stamped now unless `stamp` says when it happened.
+        Forces it to the card, so not from the UI thread (use note())."""
         print(f"Power log: {text}", flush=True)
-        self._write(f"EVENT|{self._stamp()}|{text}\n")
+        self._write(f"EVENT|{stamp or self._stamp()}|{text}\n")
         self._sync()
 
     def _write(self, line):

@@ -1180,21 +1180,6 @@ Item {
                 }
                 Note { text: "Update pulls what Check found and restarts the dashboard. It won't run while driving, while directions are on, or if files here were changed over SSH." }
             }
-
-            Section {
-                Layout.fillWidth: true
-                heading: "Version"
-                Label {
-                    font.pixelSize: Theme.fontBody
-                    text: "Baja OS " + (system.version || "(unknown version)")
-                }
-                Label {
-                    visible: network.ip !== ""
-                    color: Theme.textDim
-                    font.pixelSize: Theme.fontBody
-                    text: "ssh " + network.user + "@" + network.ip
-                }
-            }
         }
     }
 
@@ -1227,6 +1212,23 @@ Item {
                 Layout.fillWidth: true
                 Label { text: "Baja OS"; font.pixelSize: Theme.fontHero; font.weight: Font.DemiBold }
                 Label { text: "The dashboard for a 2005 Subaru Baja Turbo"; color: Theme.textDim; font.pixelSize: Theme.fontBody }
+                Label {
+                    font.pixelSize: Theme.fontBody
+                    text: "Baja OS " + (system.version || "(unknown version)")
+                }
+                Label {
+                    visible: system.restarts >= 0
+                    color: system.restarts >= 3 ? Theme.warn : Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "Restarted " + system.restarts + (system.restarts === 1 ? " time" : " times")
+                          + " since the Pi booted"
+                }
+                Label {
+                    visible: network.ip !== ""
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "ssh " + network.user + "@" + network.ip
+                }
                 Label {
                     visible: typeof vehicle !== "undefined" && vehicle.simulated
                     Layout.fillWidth: true

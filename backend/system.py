@@ -100,6 +100,17 @@ def version_text():
         return ""
 
 
+def restart_count():
+    """How many times systemd has restarted baja-os since the Pi booted, or
+    None if it can't say (not a Pi, no such service, odd output)."""
+    try:
+        out = subprocess.run(["systemctl", "show", "baja-os", "-p", "NRestarts", "--value"],
+                             capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return int(out) if out.isdigit() else None
+
+
 def power(action):
     """Ask systemd to 'reboot' or 'poweroff': '' once it has said yes, else
     why not (no polkit rule from setup-pi.sh, logind said no, not a Pi)."""
@@ -135,6 +146,7 @@ class SystemInfo(QObject):
     _power_done = pyqtSignal(str)
     _version_done = pyqtSignal(str)
     _clock_done = pyqtSignal(bool)
+    _restarts_done = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -143,6 +155,7 @@ class SystemInfo(QObject):
                    "errors": 0}
         self._version = ""         # read in the first check: it can run git
         self._version_read = False
+        self._restarts = -1        # read with the version; -1 until known
         self._clock_ok = False     # chrony has set the clock; asked each check until it has
         self._busy = False
         self._can_power = None     # asked once: it only changes with setup-pi.sh's polkit rule
@@ -156,6 +169,7 @@ class SystemInfo(QObject):
         self._power_done.connect(self._powered)
         self._version_done.connect(self._got_version)
         self._clock_done.connect(self._got_clock)
+        self._restarts_done.connect(self._got_restarts)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
@@ -194,6 +208,11 @@ class SystemInfo(QObject):
                 except Exception:
                     version = ""
                 safe_emit(self, "_version_done", version)
+                try:
+                    restarts = restart_count()
+                except Exception:
+                    restarts = None
+                safe_emit(self, "_restarts_done", -1 if restarts is None else restarts)
             v = {}       # stays empty if a reading crashes, and _apply keeps the old values
             try:
                 used, total = memory_mb()
@@ -222,6 +241,11 @@ class SystemInfo(QObject):
     def _got_version(self, version):
         if version != self._version:
             self._version = version
+            self.changed.emit()
+
+    def _got_restarts(self, n):
+        if n != self._restarts:
+            self._restarts = n
             self.changed.emit()
 
     def _apply(self, v):
@@ -272,6 +296,12 @@ class SystemInfo(QObject):
     @pyqtProperty(str, notify=changed)
     def version(self):
         return self._version
+
+    @pyqtProperty(int, notify=changed)
+    def restarts(self):
+        """Times the dashboard service has been restarted since the Pi
+        booted (crashes and updates), or -1 if unknown."""
+        return self._restarts
 
     @pyqtProperty(bool, notify=changed)
     def clockSynced(self):

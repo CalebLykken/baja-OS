@@ -51,16 +51,31 @@ LIMITS = {
 }
 
 
-def warnings(coolant, voltage, boost, mil=False):
+# How far back in range a reading must be before its warning clears, so one
+# hovering on a limit doesn't flicker the warning on and off.
+CLEAR = {
+    "coolant": 5.0,             # °F
+    "boost": 1.0,               # psi
+    "voltage": 0.3,             # volts, inside both limits
+}
+
+
+def warnings(coolant, voltage, boost, mil=False, active=()):
     """The engine readings out of range, most urgent first: 'coolant',
     'voltage' and 'boost', then 'mil' (the check-engine lamp is on). A
-    voltage of None (not read lately) can't warn."""
+    voltage of None (not read lately) can't warn. `active` names the ones
+    already warning: those stay until the reading is back in range by the
+    CLEAR margin."""
     found = []
-    if coolant > LIMITS["coolantHigh"]:
+    held = "coolant" in active
+    if coolant > LIMITS["coolantHigh"] - (CLEAR["coolant"] if held else 0.0):
         found.append("coolant")
-    if voltage is not None and not LIMITS["voltageLow"] <= voltage <= LIMITS["voltageHigh"]:
-        found.append("voltage")
-    if boost > LIMITS["boostHigh"]:
+    if voltage is not None:
+        m = CLEAR["voltage"] if "voltage" in active else 0.0
+        if not LIMITS["voltageLow"] + m <= voltage <= LIMITS["voltageHigh"] - m:
+            found.append("voltage")
+    held = "boost" in active
+    if boost > LIMITS["boostHigh"] - (CLEAR["boost"] if held else 0.0):
         found.append("boost")
     if mil:
         found.append("mil")
@@ -104,6 +119,7 @@ class VehicleData(QObject):
         self._voltage = 14.2
         self._gear = 1
         self._live = False
+        self._active = []         # the warnings now latched (see CLEAR)
         self._volts_real = False  # `_voltage` is the adapter's reading, current
         self._mil, self._codes, self._codes_count = False, [], 0   # the check-engine lamp, from the car
         self._gps = None
@@ -298,9 +314,11 @@ class VehicleData(QObject):
         'mil' (the check-engine lamp is on), from the car only: the
         simulation never warns."""
         if not self._live:
+            self._active = []
             return []
-        return warnings(self._coolant, self._voltage if self._volts_real else None, self._boost,
-                        mil=self._mil)
+        self._active = warnings(self._coolant, self._voltage if self._volts_real else None,
+                                self._boost, mil=self._mil, active=self._active)
+        return list(self._active)
 
     @pyqtProperty(bool, notify=codesChanged)
     def milOn(self):

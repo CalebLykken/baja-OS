@@ -98,6 +98,47 @@ class ThresholdTest(unittest.TestCase):
         self.assertEqual(warnings(coolant=240, voltage=11, boost=17), ["coolant", "voltage", "boost"])
 
 
+class HysteresisTest(unittest.TestCase):
+    def test_coolant_latches_until_clearly_cool(self):
+        v = VehicleData()
+        for temp, want in ((231, ["coolant"]), (229, ["coolant"]), (224, []), (230.5, ["coolant"])):
+            v.apply_obd({"coolant": temp, "voltage": 14.1, "boost": 2})
+            self.assertEqual(v.warnings, want, temp)
+
+    def test_boost_latches_until_clearly_lower(self):
+        v = VehicleData()
+        for psi, want in ((15.5, ["boost"]), (14.5, ["boost"]), (13.9, []), (15.2, ["boost"])):
+            v.apply_obd({"coolant": 190, "voltage": 14.1, "boost": psi})
+            self.assertEqual(v.warnings, want, psi)
+
+    def test_voltage_latches_until_clearly_in_range(self):
+        v = truck()
+        v.apply_voltage(11.9)
+        v.apply_obd(DRIVING)
+        self.assertEqual(v.warnings, ["voltage"])
+        v.apply_voltage(12.1)
+        self.assertEqual(v.warnings, ["voltage"])
+        v.apply_voltage(12.4)
+        self.assertEqual(v.warnings, [])
+        v.apply_voltage(12.1)
+        self.assertEqual(v.warnings, [])        # not latched again until it crosses the limit
+
+    def test_going_quiet_empties_the_latch(self):
+        v = VehicleData()
+        v.apply_obd({"coolant": 235, "voltage": 14.1, "boost": 2})
+        self.assertEqual(v.warnings, ["coolant"])
+        v.lost_obd()
+        self.assertEqual(v.warnings, [])
+        v.apply_obd({"coolant": 228, "voltage": 14.1, "boost": 2})
+        self.assertEqual(v.warnings, [])
+
+    def test_the_plain_function_has_no_memory(self):
+        self.assertEqual(warnings(**{**FINE, "coolant": 229}), [])
+        self.assertEqual(warnings(**{**FINE, "coolant": 229}, active=["coolant"]), ["coolant"])
+        self.assertEqual(warnings(**{**FINE, "voltage": 12.1}), [])
+        self.assertEqual(warnings(**{**FINE, "voltage": 12.1}, active=["voltage"]), ["voltage"])
+
+
 class LiveOnlyTest(unittest.TestCase):
     def test_simulated_data_never_warns(self):
         v = VehicleData()

@@ -49,6 +49,7 @@ print(json.dumps({
     "names": list(theme.property("styleNames").toVariant()),
     "night": theme.property("styles").toVariant(),
     "day": theme.property("lightStyles").toVariant(),
+    "titles": theme.property("styleTitles").toVariant(),
 }))
 '''
 
@@ -96,6 +97,10 @@ class StyleTableTest(unittest.TestCase):
     def test_day_holds_colours_only(self):
         for n in self.out["names"]:
             self.assertLessEqual(set(self.out["day"][n]), set(COLOURS), n)
+
+    def test_every_style_has_a_title(self):
+        for n in self.out["names"]:
+            self.assertTrue(self.out["titles"].get(n), n)
 
     def test_main_choices_match(self):
         self.assertEqual(main_choices(), self.out["names"])

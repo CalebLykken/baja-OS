@@ -85,6 +85,9 @@ QtObject {
         }
     })
     readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic"]
+    // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
+    readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
+                                          rally: "Rally", atlantic: "Atlantic" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

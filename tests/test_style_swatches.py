@@ -1,5 +1,5 @@
 """Off-Pi tests for the Style preview tiles in Settings > Display > Look: the
-picker keeps its joined control, the tiles are static, follow day/night and
+picker is a grid of tiles, the tiles are static, follow day/night and
 pick their style on a tap. Runs in a subprocess (other modules hold a
 QCoreApplication).
 
@@ -18,24 +18,23 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGE = (ROOT / "qml/pages/SettingsPage.qml").read_text()
 
 
-def swatch_body():
-    start = PAGE.index("component StyleSwatch:")
-    end = PAGE.index("component Note:", start)
-    return PAGE[start:end]
+TILE = (ROOT / "qml/components/themes/StyleTile.qml").read_text()
 
 
 class SwatchSourceTest(unittest.TestCase):
-    def test_style_control_kept(self):
-        self.assertRegex(PAGE, r'label: "Style"\s+SegmentedControl \{[^}]*?options: Theme\.styleNames')
+    def test_picker_replaces_joined_control(self):
+        self.assertRegex(PAGE, r"StylePicker \{")
+        self.assertNotIn("options: Theme.styleNames", PAGE)
+        self.assertIn('import "../components/themes"', PAGE)
 
-    def test_component_and_row_exist(self):
-        self.assertIn("component StyleSwatch: Rectangle", PAGE)
-        self.assertIn('objectName: "stylePreviews"', PAGE)
+    def test_tile_has_ring_and_name(self):
+        self.assertIn("Rectangle {\n", TILE)
+        self.assertIn('objectName: "ring"', TILE)
+        self.assertIn('Accessible.name: title + " style"', TILE)
 
     def test_nothing_moves(self):
-        body = swatch_body()
         for word in ("Animation", "Behavior", "Timer", "Canvas", "layer.", "ShaderEffect", "Image"):
-            self.assertIsNone(re.search(r"\b" + re.escape(word), body), word)
+            self.assertIsNone(re.search(r"\b" + re.escape(word), TILE), word)
 
 
 try:
@@ -76,8 +75,8 @@ out["expect_dark"] = {n: styles[n]["bg"] for n in names}
 out["expect_light"] = {n: {**styles[n], **light.get(n, {})}["bg"] for n in names}
 
 for n in names:
-    sw = make('import QtQuick\nimport "qml/components"\nimport "qml/pages"\n'
-              'SettingsPage.StyleSwatch { styleName: "%s" }' % n)
+    sw = make('import QtQuick\nimport "qml/components/themes"\n'
+              'StyleTile { styleName: "%s" }' % n)
     theme.setProperty("dark", True)
     out["dark"][n] = sw.property("color").name()
     theme.setProperty("dark", False)

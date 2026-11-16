@@ -255,6 +255,13 @@ class DataUseTests(unittest.TestCase):
         du.setLimit(10)
         self.assertFalse(du.overLimit)
 
+    def test_limit_follows_this_months_figure(self):
+        du = self.roll(stamp(2026, 11, 2))
+        du.setLimit(10)
+        self.assertEqual(du.text, "0 KB of 10 GB (2.1 GB last month)")
+        du.setLimit(0)
+        self.assertEqual(du.text, "0 KB (2.1 GB last month)")
+
     def test_garbage_saved_limit_reads_as_off(self):
         for bad in ("lots", None, "", "-4", "1e9x", [1]):
             self.settings.d["dataLimitGb"] = bad

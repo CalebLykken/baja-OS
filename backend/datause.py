@@ -157,10 +157,15 @@ class DataUse(QObject):
 
     @pyqtProperty(str, notify=changed)
     def text(self):
+        # The limit sits right after this month's figure, so it can't be read
+        # as applying to last month's.
+        now = format_bytes(self._bytes)
+        if self._limit:
+            now += f" of {self._limit} GB"
         prev = self._last_month()
         if not prev:
-            return format_bytes(self._bytes)
-        return f"{format_bytes(self._bytes)} ({format_bytes(prev)} last month)"
+            return now
+        return f"{now} ({format_bytes(prev)} last month)"
 
     @pyqtProperty(int, notify=changed)
     def limitGb(self):

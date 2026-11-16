@@ -496,7 +496,7 @@ Item {
                     font.pixelSize: Theme.fontBody
                     color: dataUse.overLimit ? Theme.warn : Theme.textDim
                     font.weight: dataUse.overLimit ? Font.DemiBold : Font.Normal
-                    text: "Data this month: " + dataUse.text + (dataUse.limitGb > 0 ? " of " + dataUse.limitGb + " GB" : "")
+                    text: "Data this month: " + dataUse.text
                 }
                 Note {
                     visible: dataUse.available
@@ -514,7 +514,7 @@ Item {
                 }
                 Note {
                     visible: dataUse.available
-                    text: "The line turns amber after this much in a month. It only warns; nothing is switched off."
+                    text: "The line turns red after this much in a month. It only warns; nothing is switched off."
                 }
             }
 
@@ -663,6 +663,8 @@ Item {
                 heading: "Saved, not in range"
                 visible: wifi.canControl && wifi.savedElsewhere.length > 0
 
+                // A scan with the same names hands the Repeater an equal list, which
+                // it ignores, so the rows (and a half-done "Forget") survive scans.
                 Repeater {
                     model: wifi.savedElsewhere
                     delegate: RowLayout {
@@ -681,6 +683,7 @@ Item {
                             font.pixelSize: Theme.fontSmall
                         }
                         ConfirmButton {
+                            objectName: "savedForget"
                             Layout.preferredHeight: 56
                             text: "Forget"
                             confirmText: "Sure?"

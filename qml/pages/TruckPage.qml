@@ -6,7 +6,8 @@ import "../assets/truck"
 
 // The Baja in 3D: turns slowly on its own, drag sideways to spin it (let go
 // mid-swipe and it keeps turning, then slows). Opening the page whips it
-// round once, at most every 30 s. Tap the name five times within 3 s for a
+// round once, at most every 30 s. It rests after 90 s with no touch, and any
+// touch wakes it. Tap the name five times within 3 s for a
 // showroom double spin and a one-line aside. Only
 // renders while this page is on screen (PageHost hides it otherwise), so
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
@@ -21,11 +22,26 @@ Item {
 
     property real spin: -35            // degrees, around the vertical axis
     property bool dragging: false
+    property bool resting: false       // true after 90 s with no touch
 
-    // Slow idle turntable; pauses while you drag and for a moment after.
+    // Rest after 90 s with no touch: the turntable stops so the Pi can cool
+    // in a hot cab. Any touch, a spin or reopening the page wakes it again.
+    // A one-shot animation rather than a Timer, so no timer runs idle.
+    SequentialAnimation {
+        id: restTimer
+        PauseAnimation { duration: 90000 }
+        ScriptAction { script: page.resting = true }
+    }
+    function wake() {
+        resting = false
+        restTimer.restart()
+    }
+
+    // Slow idle turntable; pauses while you drag, for a moment after, and
+    // once it has rested.
     NumberAnimation on spin {
         id: turntable
-        running: page.visible && !page.dragging && !resume.running && !intro.running && !flick.running
+        running: page.visible && !page.dragging && !page.resting && !resume.running && !intro.running && !flick.running
         from: page.spin; to: page.spin + 360
         duration: 48000
         loops: Animation.Infinite
@@ -73,6 +89,7 @@ Item {
         eggTaps++
         if (eggTaps < 5) return
         eggTaps = 0
+        wake()
         eggLine = eggLines[eggIndex]
         eggIndex = (eggIndex + 1) % eggLines.length
         flick.stop()
@@ -88,8 +105,13 @@ Item {
         PauseAnimation { duration: 4000 }
         ScriptAction { script: page.eggLine = "" }
     }
-    onVisibleChanged: if (visible) playIntro()
-    Component.onCompleted: if (visible) playIntro()
+    // Off screen nothing runs: the rest timer stops and the page wakes on return.
+    // Reopening wakes the truck even when the open spin is still cooling down.
+    onVisibleChanged: {
+        if (visible) { wake(); playIntro() }
+        else restTimer.stop()
+    }
+    Component.onCompleted: if (visible) { wake(); playIntro() }
 
     // Flick: a swipe released at speed keeps turning and slows to a stop.
     NumberAnimation {
@@ -195,6 +217,7 @@ Item {
         property real lastVxAt: 0      // when lastVx was recorded (ms)
         onActiveChanged: {
             page.dragging = active
+            page.wake()
             if (active) {
                 intro.stop()
                 flick.stop()
@@ -217,6 +240,10 @@ Item {
         onCentroidChanged: if (active) { lastVx = centroid.velocity.x; lastVxAt = Date.now() }
         onTranslationChanged: if (active) page.spin = startSpin + translation.x * 0.35
     }
+
+    // Any tap on the page wakes a rested truck. Taps on the name still reach
+    // its own handler below, so the easter egg is unaffected.
+    TapHandler { onTapped: page.wake() }
 
     // The truck's name, plus this trip in the same strip as Home's readouts.
     Column {

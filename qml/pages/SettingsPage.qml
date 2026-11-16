@@ -713,8 +713,45 @@ Item {
                         onClicked: bluetooth.setPairing(!bluetooth.pairing)
                     }
                 }
-                Note {
-                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”, then tap Pair on this screen when the code matches the phone's (some phones show none). Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
+                // Pairing steps: shown while no phone is paired or pairing is open,
+                // and only when the adapter is there. Step 1 is the current one until
+                // pairing opens; then steps 2 and 3 are.
+                Column {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    visible: bluetooth.available && (bluetooth.paired.length === 0 || bluetooth.pairing)
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "1  Tap Pair phone"
+                        color: bluetooth.pairing ? Theme.textDim : Theme.text
+                        font.weight: bluetooth.pairing ? Font.Normal : Font.DemiBold
+                    }
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "2  On the phone, open Bluetooth settings and pick Baja OS"
+                        color: bluetooth.pairing ? Theme.text : Theme.textDim
+                        font.weight: bluetooth.pairing ? Font.DemiBold : Font.Normal
+                    }
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "3  Tap Pair here when the codes match (some phones show none)"
+                        color: bluetooth.pairing ? Theme.text : Theme.textDim
+                        font.weight: bluetooth.pairing ? Font.DemiBold : Font.Normal
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: bluetooth.available && bluetooth.paired.length > 0 && !bluetooth.pairing
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "Once paired, the phone reconnects by itself and its music plays through the truck."
                 }
             }
 

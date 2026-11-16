@@ -63,6 +63,15 @@ QtObject {
             accent: "#4fb8cc", warn: "#ff5436", ok: "#7cc47a",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
             radius: 12, border: 1, gauge: "arc", backdrop: "none"
+        },
+        // Desert: sand and terracotta-brown, with turquoise as the accent. The
+        // turquoise sits well away from the red-orange warning colour.
+        desert: {
+            bg: "#18120c", panel: "#251c13", panelTop: "#2c2218", panelHi: "#37291c",
+            line: "#5a4631", text: "#f1e3c8", textDim: "#b19c7c",
+            accent: "#3fc1b0", warn: "#ff5a36", ok: "#b6c96a",
+            font: "", numFont: "Nimbus Sans", numItalic: false, numWeight: Font.Bold,
+            radius: 8, border: 2, gauge: "arc", backdrop: "topo"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -99,12 +108,20 @@ QtObject {
             bg: "#f0f1f2", panel: "#ffffff", panelTop: "#ffffff", panelHi: "#e3e5e8",
             line: "#c4c8ce", text: "#0a0b0d", textDim: "#555b64",
             accent: "#0a7388", warn: "#c8321a", ok: "#2f7d2c"
+        },
+        // Desert by day: sand paper and dark brown text, with the turquoise
+        // deepened to hold on the light ground.
+        desert: {
+            bg: "#eadfc6", panel: "#f8f1e1", panelTop: "#fcf8ee", panelHi: "#e2d5b6",
+            line: "#cbb994", text: "#2a2014", textDim: "#6d5d44",
+            accent: "#0b766a", warn: "#c4321f", ok: "#5a7a1e"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
-                                          rally: "Rally", atlantic: "Atlantic", midnight: "Midnight" })
+                                          rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
+                                          desert: "Desert" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

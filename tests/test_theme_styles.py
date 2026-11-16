@@ -113,6 +113,19 @@ class StyleTableTest(unittest.TestCase):
         self.assertIn("midnight", main_choices())
         self.assertEqual(self.out["titles"]["midnight"], "Midnight")
 
+    def test_desert_is_sand_and_turquoise(self):
+        # Desert: brown panels and sand text at night, sand paper by day,
+        # with a turquoise accent that stays apart from the warning red.
+        night = self.out["night"]["desert"]
+        day = self.out["day"]["desert"]
+        self.assertEqual(night["bg"], "#18120c")
+        self.assertEqual(night["accent"], "#3fc1b0")
+        self.assertEqual(day["bg"], "#eadfc6")
+        self.assertEqual(day["accent"], "#0b766a")
+        self.assertEqual(night["numFont"], "Nimbus Sans")
+        self.assertIn("desert", main_choices())
+        self.assertEqual(self.out["titles"]["desert"], "Desert")
+
 
 if __name__ == "__main__":
     unittest.main()

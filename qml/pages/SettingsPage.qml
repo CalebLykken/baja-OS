@@ -24,6 +24,20 @@ Item {
     ]
     function mmss(s) { return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + s % 60 }
 
+    // Does this section need the driver's attention? The list shows a dot
+    // for it, so a problem is seen without opening each section. Reads the
+    // live properties, so the dot follows them as they change.
+    function attention(i) {
+        if (i === 2)   // Wi-Fi: joined to nothing that reaches the internet
+            return typeof network !== "undefined" && network.checked && !network.online
+        if (i === 3)   // Bluetooth: new phones can't be confirmed
+            return typeof bluetooth !== "undefined" && !bluetooth.agentOk && bluetooth.agentProblem !== ""
+        if (i === 5)   // System: power supply or temperature warning, or a low supply reading
+            return typeof system !== "undefined" && (system.power !== ""
+                || (typeof powerLog !== "undefined" && powerLog.supply >= 0 && powerLog.lowest < 4.8))
+        return false
+    }
+
     // Scan for networks only while the Wi-Fi section is on screen.
     readonly property bool wifiShown: visible && section === 2
     onWifiShownChanged: if (typeof wifi !== "undefined") wifi.setScanning(wifiShown)
@@ -68,10 +82,22 @@ Item {
                 model: page.sections
                 Rectangle {
                     readonly property bool selected: page.section === index
+                    readonly property bool needsAttention: page.attention(index)
                     width: list.width
                     height: 64
                     radius: Theme.radius
                     color: !selected && tap.pressed ? Theme.panel : "transparent"
+
+                    // A warning dot at the right edge, clear of the 28 px icon and the label.
+                    Rectangle {
+                        objectName: "attentionDot"
+                        visible: parent.needsAttention
+                        anchors { right: parent.right; rightMargin: 16; verticalCenter: parent.verticalCenter }
+                        width: 12
+                        height: 12
+                        radius: 6
+                        color: Theme.warn
+                    }
 
                     Row {
                         anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
@@ -179,70 +205,6 @@ Item {
             font.weight: Font.DemiBold
         }
         IconButton { icon: "add"; size: 60; onClicked: stepUp() }
-    }
-
-    // A static preview of one Style in its own colours, shape and numerals.
-    // Plain rectangles and text only: nothing moves, nothing polls.
-    component StyleSwatch: Rectangle {
-        id: sw
-        property string styleName: "amber"
-        readonly property var t: Theme.dark ? Theme.styles[styleName]
-            : Object.assign({}, Theme.styles[styleName], Theme.lightStyles[styleName] || {})
-        readonly property bool picked: styleName === Theme.style
-        objectName: "swatch_" + styleName
-        Accessible.role: Accessible.Button
-        Accessible.name: styleName + " style"
-        width: 140
-        height: 92
-        color: tap.pressed ? t.panelHi : t.bg
-        radius: t.radius
-        border.width: t.border
-        border.color: t.line
-
-        // The selected ring, around the tile.
-        Rectangle {
-            objectName: "ring"
-            visible: sw.picked
-            anchors.fill: parent
-            anchors.margins: -4
-            z: -1
-            color: "transparent"
-            radius: sw.t.radius + 4
-            border.width: 3
-            border.color: Theme.accent
-        }
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 10
-            color: sw.t.panel
-            radius: sw.t.radius
-            border.width: sw.t.border
-            border.color: sw.t.line
-            Rectangle {
-                width: 4
-                radius: 2
-                color: sw.t.accent
-                anchors { left: parent.left; top: parent.top; bottom: parent.bottom; margins: 8 }
-            }
-            Text {
-                anchors.centerIn: parent
-                text: "88"
-                color: sw.t.text
-                font.family: sw.t.numFont
-                font.italic: sw.t.numItalic
-                font.weight: sw.t.numWeight
-                font.pixelSize: 40
-            }
-            Rectangle {
-                width: 10; height: 10; radius: 5
-                color: sw.t.ok
-                anchors { right: parent.right; top: parent.top; margins: 8 }
-            }
-        }
-        TapHandler {
-            id: tap
-            onTapped: Theme.style = sw.styleName
-        }
     }
 
     component Note: Label {
@@ -751,8 +713,48 @@ Item {
                         onClicked: bluetooth.setPairing(!bluetooth.pairing)
                     }
                 }
-                Note {
-                    text: "Pairing stays open for two minutes. On the phone, open Bluetooth settings and pick “Baja OS”, then tap Pair on this screen when the code matches the phone's (some phones show none). Once paired, the phone reconnects by itself and its music plays through the truck, with track info and volume on this screen."
+                // Pairing steps: shown while no phone is paired or pairing is open,
+                // and only when the adapter is there and on (so "Tap Pair phone" never
+                // points at a hidden button). Step 1 is the current one until
+                // pairing opens; then steps 2 and 3 are.
+                Column {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    visible: bluetooth.available && bluetooth.adapterPresent
+                             && (bluetooth.paired.length === 0 || bluetooth.pairing)
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "1  Tap Pair phone"
+                        color: bluetooth.pairing ? Theme.textDim : Theme.text
+                        font.weight: bluetooth.pairing ? Font.Normal : Font.DemiBold
+                    }
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "2  On the phone, open Bluetooth settings and pick Baja OS"
+                        color: bluetooth.pairing ? Theme.text : Theme.textDim
+                        font.weight: bluetooth.pairing ? Font.DemiBold : Font.Normal
+                    }
+                    Label {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        text: "3  Tap Pair here when the codes match (some phones show none)"
+                        color: bluetooth.pairing ? Theme.text : Theme.textDim
+                        font.weight: bluetooth.pairing ? Font.DemiBold : Font.Normal
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: bluetooth.available && bluetooth.adapterPresent
+                             && bluetooth.paired.length > 0 && !bluetooth.pairing
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontBody
+                    text: "Once paired, the phone reconnects by itself and its music plays through the truck."
                 }
             }
 
@@ -1066,14 +1068,27 @@ Item {
                         label: "Memory used"
                         value: system.memTotal > 0 ? (system.memUsed / 1024).toFixed(1) : "–"
                         unit: system.memTotal > 0 ? "of " + Math.round(system.memTotal / 1024) + " GB" : ""
+                        // Nearly out of memory: more than 90 % in use.
+                        warning: system.memTotal > 0 && system.memUsed > 0.9 * system.memTotal
                     }
                     Readout {
                         Layout.fillWidth: true; Layout.preferredWidth: 1
                         label: "Storage free"
                         value: system.diskTotal > 0 ? Math.round(system.diskFree) : "–"
                         unit: system.diskTotal > 0 ? "of " + Math.round(system.diskTotal) + " GB" : ""
+                        // Under 2 GB left: the map update and the logs need room.
+                        warning: system.diskTotal > 0 && system.diskFree < 2
                     }
-                    Item { Layout.fillWidth: true; Layout.preferredWidth: 1 }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Pi supply"
+                        // The lowest reading since start stays in the unit, so the
+                        // dip is still visible after the voltage recovers.
+                        value: powerLog.supply < 0 ? "–" : powerLog.supply.toFixed(2)
+                        unit: powerLog.supply < 0 ? ""
+                              : (powerLog.lowest >= 0 ? "V, low " + powerLog.lowest.toFixed(2) : "V")
+                        warning: powerLog.supply >= 0 && powerLog.lowest < 4.8
+                    }
                 }
                 Label {
                     Layout.fillWidth: true
@@ -1082,13 +1097,6 @@ Item {
                     color: system.power !== "" || system.errors > 0 ? Theme.warn : Theme.textDim
                     text: (system.power !== "" ? system.power : "Power supply and temperature are fine")
                           + (system.errors > 0 ? " · " + system.errors + (system.errors === 1 ? " error" : " errors") + " since start" : "")
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: powerLog.supply >= 0
-                    font.pixelSize: Theme.fontBody
-                    color: powerLog.lowest < 4.8 ? Theme.warn : Theme.textDim
-                    text: "Pi supply " + powerLog.supply.toFixed(2) + " V, lowest " + powerLog.lowest.toFixed(2) + " V"
                 }
             }
 

@@ -43,6 +43,7 @@ SYNC_EVERY = 5          # samples between forcing them to the card; events go at
 MAX_NOTES = 200         # notes waiting for the writer; a stuck writer drops the oldest
 KEEP_BOOTS = 30         # log files kept (about 0.3 MB per hour of driving)
 POWER_NODE = "/proc/device-tree/chosen/power"   # what the firmware decided at boot
+CPUFREQ_NODE = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"   # CPU clock, kHz
 
 FLAGS = {
     0x1: "under-voltage now",
@@ -90,6 +91,13 @@ def read_throttled():
 
 
 def read_clock_mhz():
+    """The CPU clock in MHz. The kernel's cpufreq node (kHz) is read directly,
+    since a vcgencmd spawn every sample is three forks a second for nothing;
+    vcgencmd is only asked when the node is missing or doesn't hold a number."""
+    try:
+        return int(Path(CPUFREQ_NODE).read_text().strip()) // 1000
+    except (OSError, ValueError):
+        pass
     try:
         return int(_run("vcgencmd", "measure_clock", "arm").strip().split("=")[1]) // 1000000
     except (IndexError, ValueError):

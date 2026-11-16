@@ -117,6 +117,7 @@ Item {
             value: Units.boost(vehicle.boost); minValue: Units.boost(-15); maxValue: Units.boost(20)
             markValue: Units.boost(0)   // where vacuum ends and boost begins
             warnAbove: Units.boost(vehicle.limits.boostHigh)
+            warnMargin: Units.boost(1) - Units.boost(0)   // 1 psi, in the display units
             peakHold: true
         }
         Gauge {
@@ -125,6 +126,7 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.coolant); minValue: Units.temp(100); maxValue: Units.temp(260)
             warnAbove: Units.temp(vehicle.limits.coolantHigh)
+            warnMargin: Units.metric ? 5 / 1.8 : 5   // 5 °F as a difference
             peakHold: true
         }
         Gauge {
@@ -133,6 +135,7 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.intake); minValue: Units.temp(0); maxValue: Units.temp(200)
             warnAbove: Units.temp(vehicle.limits.intakeHigh)
+            warnMargin: Units.metric ? 5 / 1.8 : 5   // 5 °F as a difference
             peakHold: true
         }
         Gauge {
@@ -141,6 +144,7 @@ Item {
             known: vehicle.voltageKnown
             value: vehicle.voltage; minValue: 10; maxValue: 16
             warnAbove: vehicle.limits.voltageHigh; warnBelow: vehicle.limits.voltageLow
+            warnMargin: 0.3
         }
     }
 }

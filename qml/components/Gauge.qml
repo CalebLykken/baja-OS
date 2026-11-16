@@ -30,7 +30,25 @@ Card {
     property string note: ""        // an optional small line under the unit ("0-60 7.3 s")
     property real markValue: NaN    // a fixed reference mark on the face (boost: where vacuum ends)
 
-    readonly property bool warning: known && (value > warnAbove || value < warnBelow)
+    // The warning latches: it sets once the reading goes past a limit and clears
+    // only when the reading is back inside by warnMargin (in the gauge's own
+    // units). A reading hovering on a limit then doesn't flip the numeral and
+    // the lit blocks on every sample. With the default margin of 0 it clears at
+    // the limit itself.
+    property real warnMargin: 0
+    property bool warning: false
+    function _updateWarning() {
+        if (!known) {
+            warning = false
+            return
+        }
+        if (value > warnAbove || value < warnBelow) {
+            warning = true
+            return
+        }
+        if (value <= warnAbove - warnMargin && value >= warnBelow + warnMargin)
+            warning = false
+    }
     // Same one-shot cue as the Home readouts (Readout.qml): on the false-to-true
     // edge the numeral double-pulses once, at most every 30 s so a reading
     // sitting on a limit doesn't keep pulsing. A hidden page stays loaded, so a
@@ -69,9 +87,19 @@ Card {
         ready = true
         peak = peakHold && known ? value : Number.NEGATIVE_INFINITY
         updatePeakShown()
+        _updateWarning()
     }
-    onValueChanged: if (ready && peakHold && known && value > peak) peak = value
-    onKnownChanged: if (ready && peakHold && known && value > peak) peak = value
+    onValueChanged: {
+        if (ready && peakHold && known && value > peak) peak = value
+        if (ready) _updateWarning()
+    }
+    onKnownChanged: {
+        if (ready && peakHold && known && value > peak) peak = value
+        if (ready) _updateWarning()
+    }
+    onWarnAboveChanged: if (ready) _updateWarning()
+    onWarnBelowChanged: if (ready) _updateWarning()
+    onWarnMarginChanged: if (ready) _updateWarning()
     // A units switch rescales min/max, so the old peak is meaningless. Clear it
     // rather than set it to value: value and min/max can update in either order.
     onMinValueChanged: if (ready) peak = Number.NEGATIVE_INFINITY

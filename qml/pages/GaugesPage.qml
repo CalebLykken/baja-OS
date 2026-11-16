@@ -39,7 +39,10 @@ Item {
 
     Rectangle {
         id: strip
-        readonly property bool shown: vehicle.codes.length > 0
+        objectName: "codeStrip"
+        // Shown while the check-engine light is on, even when the codes have not
+        // been read yet, so the driver is never told nothing about a lit lamp.
+        readonly property bool shown: vehicle.codes.length > 0 || vehicle.milOn
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: shown ? list.implicitHeight + 16 : 0
         visible: shown
@@ -51,6 +54,18 @@ Item {
             id: list
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
             spacing: 2
+            Label {
+                // The lamp itself, first, so it reads even with no codes listed.
+                objectName: "lampLabel"
+                visible: vehicle.milOn
+                width: list.width
+                text: "Check engine light on" + (vehicle.codeCount > 0 ? "  ·  " + vehicle.codeCount
+                                                + (vehicle.codeCount === 1 ? " code" : " codes") : "")
+                color: Theme.warn
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+            }
             Repeater {
                 model: vehicle.codes.slice(0, 4)
                 Row {
@@ -72,8 +87,11 @@ Item {
                 }
             }
             Label {
-                visible: vehicle.codes.length > 4
-                text: "+" + (vehicle.codes.length - 4) + " more"
+                objectName: "moreLabel"
+                // The count can be higher than the codes read so far.
+                readonly property int more: Math.max(vehicle.codeCount, vehicle.codes.length) - 4
+                visible: more > 0
+                text: "+" + more + " more"
                 color: Theme.textDim
                 font.pixelSize: Theme.fontSmall
             }
@@ -82,6 +100,7 @@ Item {
 
     GridLayout {
         id: grid
+        objectName: "gaugeGrid"
         anchors { left: parent.left; right: parent.right; top: parent.top }
         anchors.bottom: strip.shown ? strip.top : parent.bottom
         anchors.bottomMargin: strip.shown ? Theme.gap : 0

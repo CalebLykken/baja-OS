@@ -83,7 +83,8 @@ component.setData(b"""import QtQuick
 QtObject { property real rpm: 3000; property string gear: "5"; property bool engineKnown: true
  property bool speedKnown: true; property real speed: 45; property real boost: 5; property real coolant: 190
  property real intake: 90; property real voltage: 13.8; property bool voltageKnown: true
- property var codes: []; property real zeroToSixty: 7.3; property real zeroToHundred: 12.4
+ property var codes: []; property bool milOn: false; property int codeCount: 0
+ property real zeroToSixty: 7.3; property real zeroToHundred: 12.4
  property var limits: ({rpmHigh: 6000, boostHigh: 15, coolantHigh: 230, intakeHigh: 150,
                         coolantCold: 160, voltageHigh: 15, voltageLow: 11.5}) }""", QUrl.fromLocalFile(str(ROOT / "v.qml")))
 vehicle = component.create()
@@ -91,6 +92,10 @@ view.rootContext().setContextProperty("vehicle", vehicle)
 # An optional coolant reading (degrees F) for this run; the default is 190.
 if len(sys.argv) > 5:
     vehicle.setProperty("coolant", float(sys.argv[5]))
+# Optional trouble-code state for this run: {"milOn": ..., "codeCount": ..., "codes": [...]}.
+if len(sys.argv) > 6:
+    for name, value in json.loads(sys.argv[6]).items():
+        vehicle.setProperty(name, value)
 
 metric = sys.argv[2] == "metric"
 style = sys.argv[3]
@@ -160,13 +165,32 @@ coolant_gauge = [g for g in gauges if str(g.property("label")) == "Coolant"][0]
 coolant_note = find(coolant_gauge, lambda i: i.objectName() == "gaugeNote")[0]
 out["coolant_note"] = coolant_note.property("text")
 out["coolant_note_visible"] = coolant_note.isVisible()
+
+
+def text_of(item):
+    return item.property("text") if item is not None else None
+
+
+# The trouble-code strip under the grid, and the grid above it.
+strip_items = find(page, lambda i: i.objectName() == "codeStrip")
+lamp = find(page, lambda i: i.objectName() == "lampLabel")
+more = find(page, lambda i: i.objectName() == "moreLabel")
+grid_items = find(page, lambda i: i.objectName() == "gaugeGrid")
+out["strip_visible"] = bool(strip_items) and strip_items[0].isVisible()
+out["lamp_visible"] = bool(lamp) and lamp[0].isVisible()
+out["lamp_text"] = text_of(lamp[0]) if lamp else None
+out["more_visible"] = bool(more) and more[0].isVisible()
+out["more_text"] = text_of(more[0]) if more else None
+out["grid_h"] = grid_items[0].height() if grid_items else None
 print(json.dumps(out))
 '''
 
 
-def measure(units, style, coolant=None):
+def measure(units, style, coolant=None, state=None):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     extra = [] if coolant is None else [str(coolant)]
+    if state is not None:
+        extra = [str(coolant if coolant is not None else 190.0), json.dumps(state)]
     with tempfile.TemporaryDirectory() as tmp:
         result = subprocess.run([sys.executable, "-c", SCRIPT, str(ROOT), units, style, tmp, *extra],
                                 cwd=ROOT, capture_output=True, text=True, timeout=60, env=env)
@@ -272,6 +296,58 @@ class CoolantWarmingTests(unittest.TestCase):
 
 class CoolantWarmingMetricTests(CoolantWarmingTests):
     units = "metric"
+
+
+class CheckEngineStripTests(unittest.TestCase):
+    """The strip under the grid says so while the check-engine light is on, even
+    before the codes are read; it is hidden when there is no lamp and no code."""
+    units = "imperial"
+    STORED = [{"code": "P0301", "text": "Cylinder 1 misfire", "pending": False},
+              {"code": "P0171", "text": "System too lean", "pending": False},
+              {"code": "P0420", "text": "Catalyst efficiency", "pending": True},
+              {"code": "P0442", "text": "EVAP leak", "pending": False}]
+
+    @classmethod
+    def setUpClass(cls):
+        style = STYLES[0]
+        cls.style = style
+        cls.clear = measure(cls.units, style, 190.0, {"milOn": False, "codeCount": 0, "codes": []})
+        cls.lamp_no_codes = measure(cls.units, style, 190.0, {"milOn": True, "codeCount": 0, "codes": []})
+        cls.lamp_counted = measure(cls.units, style, 190.0,
+                                   {"milOn": True, "codeCount": 6, "codes": cls.STORED})
+        cls.codes_no_lamp = measure(cls.units, style, 190.0,
+                                    {"milOn": False, "codeCount": 1, "codes": cls.STORED[:1]})
+
+    def test_no_lamp_and_no_codes_hides_the_strip(self):
+        o = self.clear
+        self.assertFalse(o["strip_visible"])
+        self.assertFalse(o["lamp_visible"])
+        self.assertFalse(o["more_visible"])
+
+    def test_lamp_on_without_codes_shows_the_strip_and_the_line(self):
+        o = self.lamp_no_codes
+        self.assertTrue(o["strip_visible"])
+        self.assertTrue(o["lamp_visible"])
+        self.assertEqual(o["lamp_text"], "Check engine light on")
+        self.assertFalse(o["more_visible"])
+
+    def test_lamp_on_with_codes_counts_them_and_adds_more_line(self):
+        o = self.lamp_counted
+        self.assertTrue(o["strip_visible"])
+        self.assertEqual(o["lamp_text"], "Check engine light on  \u00b7  6 codes")
+        self.assertTrue(o["more_visible"])
+        self.assertEqual(o["more_text"], "+2 more")
+
+    def test_codes_without_lamp_still_show_the_strip_without_the_line(self):
+        o = self.codes_no_lamp
+        self.assertTrue(o["strip_visible"])
+        self.assertFalse(o["lamp_visible"])
+        self.assertFalse(o["more_visible"])
+
+    def test_strip_shrinks_the_grid_only_when_shown(self):
+        self.assertGreater(self.clear["grid_h"], self.lamp_no_codes["grid_h"])
+        # Four code rows and the "+2 more" line make the strip taller, so the grid is shorter.
+        self.assertGreater(self.lamp_no_codes["grid_h"], self.lamp_counted["grid_h"])
 
 
 if __name__ == "__main__":

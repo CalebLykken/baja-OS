@@ -38,12 +38,18 @@ MATERIALS = {
     # the same way.)
     "carpaint.": {"baseColor": '"#1d3557"', "metalness": "0", "roughness": "0.24"},
     "carpaint_second": {"baseColor": '"#1d3557"', "metalness": "0", "roughness": "0.75"},
-    "clearglass": {"baseColor": '"#0d1013"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                   "alphaMode": "PrincipledMaterial.Opaque"},
-    "windowglass": {"baseColor": '"#0d1013"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                    "alphaMode": "PrincipledMaterial.Opaque"},
-    "darkglass": {"baseColor": '"#0a0b0d"', "roughness": "0.45", "metalness": "0", "specularAmount": "0.2",
-                  "alphaMode": "PrincipledMaterial.Opaque"},
+    "clearglass": {"baseColor": '"#0d1013"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                   "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    "windowglass": {"baseColor": '"#0d1013"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                    "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    "darkglass": {"baseColor": '"#0a0b0d"', "roughness": "0.8", "metalness": "0", "specularAmount": "0.08",
+                  "cullMode": "PrincipledMaterial.BackFaceCulling", "alphaMode": "PrincipledMaterial.Opaque"},
+    # The thin glass shells draw only their outer face (the inner one mirrored
+    # the studio panels a second time and z-fought), with a rough, dim lobe so
+    # the bright panels blur into a soft grade instead of jagged white streaks.
+    # The small bright metal parts are roughened a touch for the same reason.
+    "mirror.": {"roughness": "0.08"},
+    "chrome.": {"roughness": "0.1"},
     "lens_clear": {"baseColor": '"#ffffff"', "opacity": "0.22", "roughness": "0.03",
                    "alphaMode": "PrincipledMaterial.Blend"},
     "rim.": {"roughness": "0.35"},

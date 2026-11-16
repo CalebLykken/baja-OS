@@ -47,7 +47,21 @@ from backend import errorlog, safe_emit
 
 PORTS = ("/dev/serial/by-id/*OBDLink*", "/dev/serial/by-id/*ELM*", "/dev/ttyUSB*")
 FAST = (0x0C, 0x0B, 0x0D)            # RPM, manifold pressure, speed: every round
-SLOW = (0x05, 0x0F, "ATRV")          # coolant, intake air, battery: one per round
+COOL_EVERY = 8                       # rounds between coolant (and between intake) questions
+
+
+def slow_item(turn):
+    """The one extra question for this round, or None. The battery (ATRV) is
+    answered by the adapter, not the K-line, so it takes every other round.
+    Coolant and intake air move over minutes: each gets one of the other
+    rounds in every COOL_EVERY, coolant first so it shows at once. The rest
+    of the rounds ask only the fast PIDs, so boost and RPM update sooner."""
+    if turn % 2:
+        return "ATRV"
+    slot = turn % COOL_EVERY
+    if slot == 0:
+        return 0x05
+    return 0x0F if slot == COOL_EVERY // 2 else None
 GIVE_UP_AFTER = 5                    # unanswered requests in a row: the car's gone
 ROUND_MIN_S = 0.1                    # at most 10 updates a second, however fast the car
 # Waiting for the car: often at first (key just turned off and on), then
@@ -555,7 +569,8 @@ class ObdReader(QObject):
             started = time.monotonic()
             self._read_codes(elm, codes)
             values = {}
-            for item in FAST + (SLOW[turn % len(SLOW)],):
+            extra = slow_item(turn)
+            for item in FAST + ((extra,) if extra is not None else ()):
                 if self._held.is_set():
                     break
                 if item == "ATRV":

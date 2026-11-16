@@ -5,8 +5,9 @@ import "../components"
 // Six live gauges in a 3x2 grid. Warning thresholds (vehicle.limits, from
 // backend/vehicle.py) turn a gauge red. A reading that isn't known (the car
 // isn't answering) shows a dash instead of a number; the speed is also known
-// from the GPS. RPM, speed and boost hold a peak tell-tale marker (see
-// Gauge.qml); tap one of those gauges to clear its peak. While the car
+// from the GPS. RPM, speed, boost, coolant and intake hold a peak tell-tale
+// marker (see Gauge.qml), so after a hill or a hot day you can see how hot it
+// got; tap one of those gauges to clear its peak. While the car
 // reports trouble codes (vehicle.codes), a strip under the grid lists each
 // with its description.
 Item {
@@ -113,7 +114,8 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "Boost"; unit: Units.boostUnit; decimals: Units.boostDecimals
             known: vehicle.engineKnown
-            value: Units.boost(vehicle.boost); minValue: Units.boost(-20); maxValue: Units.boost(20)
+            value: Units.boost(vehicle.boost); minValue: Units.boost(-15); maxValue: Units.boost(20)
+            markValue: Units.boost(0)   // where vacuum ends and boost begins
             warnAbove: Units.boost(vehicle.limits.boostHigh)
             peakHold: true
         }
@@ -123,6 +125,7 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.coolant); minValue: Units.temp(100); maxValue: Units.temp(260)
             warnAbove: Units.temp(vehicle.limits.coolantHigh)
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -130,6 +133,7 @@ Item {
             known: vehicle.engineKnown
             value: Units.temp(vehicle.intake); minValue: Units.temp(0); maxValue: Units.temp(200)
             warnAbove: Units.temp(vehicle.limits.intakeHigh)
+            peakHold: true
         }
         Gauge {
             Layout.fillWidth: true; Layout.fillHeight: true

@@ -94,6 +94,30 @@ class BitmapTest(unittest.TestCase):
         self.assertFalse(pid_supported([0xFF, 0xFF], 0x20, 0x33))
 
 
+class SlowItemTest(unittest.TestCase):
+    """Coolant and intake are asked rarely so boost and RPM come faster."""
+
+    def test_the_schedule(self):
+        items = [obd.slow_item(t) for t in range(16)]
+        self.assertEqual(items[0], 0x05)                  # coolant in the very first round
+        self.assertEqual(items.count("ATRV"), 8)
+        self.assertEqual(items.count(0x05), 2)
+        self.assertEqual(items.count(0x0F), 2)
+        self.assertEqual(items.count(None), 4)
+
+    def test_sixteen_rounds_of_questions(self):
+        elm = CannedElm(IDLING, rounds=16)
+        readings, _ = poll(ObdReader(), elm)
+        asked = elm.asked[:[i for i, c in enumerate(elm.asked) if c == "010C"][16]]
+        for command, count in (("0105", 2), ("010F", 2), ("ATRV", 8),
+                               ("010C", 16), ("010B", 16), ("010D", 16)):
+            self.assertEqual(asked.count(command), count, command)
+        first = readings[:8]
+        for key in ("coolant", "intake", "voltage"):
+            self.assertTrue(any(key in r for r in first), key)
+        self.assertIn("coolant", readings[0])
+
+
 class FindingBaroPidTest(unittest.TestCase):
     """Whether the car answers PID 0x33, from the two support bitmaps."""
 

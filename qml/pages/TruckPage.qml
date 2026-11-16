@@ -243,6 +243,57 @@ Item {
         }
     }
 
+    // One-glance health line at the top right: the check-engine lamp and
+    // codes, else the first warning, else "Engine OK" with the battery.
+    // Hidden unless the car is answering (no clutter in demo or key-off).
+    // Purely bindings, so it costs nothing idle; a tap opens Gauges.
+    Card {
+        id: status
+        readonly property bool have: typeof vehicle !== "undefined" && vehicle.engineKnown && vehicle.live
+        readonly property int codes: have ? vehicle.codeCount : 0
+        readonly property var names: ({ coolant: "Overheating", voltage: "Battery", boost: "Overboost" })
+        readonly property string other: {
+            if (!have) return ""
+            var w = vehicle.warnings
+            for (var i = 0; i < w.length; i++)
+                if (w[i] !== "mil") return names[w[i]] || w[i]
+            return ""
+        }
+        readonly property bool check: have && (vehicle.milOn || codes > 0)
+        readonly property bool bad: check || other !== ""
+
+        visible: have
+        anchors { right: parent.right; top: parent.top; rightMargin: 8; topMargin: 4 }
+        width: statusRow.implicitWidth + 32
+        height: 64
+        tappable: true
+        onTapped: page.navigate(3)
+
+        Row {
+            id: statusRow
+            anchors.centerIn: parent
+            spacing: 10
+            Icon {
+                name: "engine_check"; size: 28
+                color: status.bad ? Theme.warn : Theme.ok
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Label {
+                text: status.check ? "Check engine" + (status.codes > 0 ? " \u00b7 " + status.codes + (status.codes === 1 ? " code" : " codes") : "")
+                      : status.other !== "" ? status.other : "Engine OK"
+                color: status.bad ? Theme.warn : Theme.ok
+                font.pixelSize: Theme.fontSmall + 2; font.weight: Font.DemiBold
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Label {
+                visible: status.have && vehicle.voltageKnown && !status.bad
+                text: status.have ? vehicle.voltage.toFixed(1) + " V" : ""
+                color: Theme.textDim; font.pixelSize: Theme.fontSmall
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
+
     Card {
         id: readouts
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
@@ -251,7 +302,7 @@ Item {
         readonly property real minutes: page.trip ? Math.floor(page.trip.movingSeconds / 60) : 0
 
         RowLayout {
-            anchors { fill: parent; margins: 20 }
+            anchors { fill: parent; leftMargin: 14; rightMargin: 14; topMargin: 20; bottomMargin: 20 }
             Readout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: page.trip ? "Trip since " + Units.timeText(page.trip.started) : "Trip"
@@ -269,6 +320,12 @@ Item {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: "Average"
                 value: page.trip && page.trip.movingSeconds > 0 ? Math.round(Units.speed(page.trip.averageMph)) : "—"
+                unit: Units.speedUnit
+            }
+            Readout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Top speed"
+                value: vehicle.topSpeed > 0 ? Math.round(Units.speed(vehicle.topSpeed)) : "—"
                 unit: Units.speedUnit
             }
             Readout {

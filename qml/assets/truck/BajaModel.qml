@@ -21,7 +21,7 @@ Node {
         objectName: "chrome.173"
         baseColor: "#fff1f2f6"
         metalness: 1
-        roughness: 0.04500000178813934
+        roughness: 0.1
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
     }
@@ -55,11 +55,11 @@ Node {
         id: clearglass_173_material
         objectName: "clearglass.173"
         baseColor: "#0d1013"
-        roughness: 0.45
-        cullMode: PrincipledMaterial.NoCulling
+        roughness: 0.8
+        cullMode: PrincipledMaterial.BackFaceCulling
         alphaMode: PrincipledMaterial.Opaque
         metalness: 0
-        specularAmount: 0.2
+        specularAmount: 0.08
     }
     PrincipledMaterial {
         id: carpaint_173_material
@@ -75,7 +75,7 @@ Node {
         objectName: "mirror.163"
         baseColor: "#fff6f8f9"
         metalness: 1
-        roughness: 0.012000000104308128
+        roughness: 0.08
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
     }
@@ -83,21 +83,21 @@ Node {
         id: windowglass_162_material
         objectName: "windowglass.162"
         baseColor: "#0d1013"
-        roughness: 0.45
-        cullMode: PrincipledMaterial.NoCulling
+        roughness: 0.8
+        cullMode: PrincipledMaterial.BackFaceCulling
         alphaMode: PrincipledMaterial.Opaque
         metalness: 0
-        specularAmount: 0.2
+        specularAmount: 0.08
     }
     PrincipledMaterial {
         id: darkglass_022_material
         objectName: "darkglass.022"
         baseColor: "#0a0b0d"
-        roughness: 0.45
-        cullMode: PrincipledMaterial.NoCulling
+        roughness: 0.8
+        cullMode: PrincipledMaterial.BackFaceCulling
         alphaMode: PrincipledMaterial.Opaque
         metalness: 0
-        specularAmount: 0.2
+        specularAmount: 0.08
     }
     PrincipledMaterial {
         id: interior_160_material

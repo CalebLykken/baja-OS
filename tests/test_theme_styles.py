@@ -185,7 +185,7 @@ class StyleTableTest(unittest.TestCase):
         self.assertEqual(night["accent"], "#3fc1b0")
         self.assertEqual(day["bg"], "#eadfc6")
         self.assertEqual(day["accent"], "#0b766a")
-        self.assertEqual(night["numFont"], "Nimbus Sans")
+        self.assertEqual(night["numFont"], "")   # the plain sans (Theme.sans); Nimbus Sans went italic on the Pi
         self.assertEqual(night["backdrop"], "dunes")
         self.assertIn("desert", main_choices())
         self.assertEqual(self.out["titles"]["desert"], "Desert")

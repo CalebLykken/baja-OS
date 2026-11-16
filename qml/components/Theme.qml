@@ -71,7 +71,7 @@ QtObject {
             bg: "#18120c", panel: "#251c13", panelTop: "#2c2218", panelHi: "#37291c",
             line: "#5a4631", text: "#f1e3c8", textDim: "#b19c7c",
             accent: "#3fc1b0", warn: "#ff5a36", ok: "#b6c96a",
-            font: "", numFont: "Nimbus Sans", numItalic: false, numWeight: Font.Bold,
+            font: "", numFont: "", numItalic: false, numWeight: Font.Bold,   // not Nimbus Sans: italic on the Pi at regular weight
             radius: 8, border: 2, gauge: "arc", backdrop: "dunes"
         },
         // Glacier: ice cyan on deep teal-black. The roundest look, with
@@ -194,9 +194,10 @@ QtObject {
 
     // A style's font "" means the plain sans. Qt on the Pi's screen (eglfs)
     // doesn't take fontconfig's default for an empty family: it lands on the
-    // first family installed, C059, a book serif. So "" is Nimbus Sans, the
-    // Pi's Helvetica; a Mac without it falls back to its own sans as before.
-    readonly property string sans: "Nimbus Sans"
+    // first family installed, C059, a book serif. So "" is Liberation Sans
+    // (Arial's metrics, so layouts fit as they do on a Mac). Not Nimbus Sans:
+    // Qt there picks its Italic face for the regular weight.
+    readonly property string sans: "Liberation Sans"
     function family(f) { return f ? f : sans }
     readonly property string font: family(s.font)
     readonly property string numFont: family(s.numFont)

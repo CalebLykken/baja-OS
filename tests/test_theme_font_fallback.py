@@ -3,7 +3,8 @@
 A style may leave font or numFont as "" to mean the plain sans. On the Pi's
 screen (eglfs) Qt doesn't turn an empty family into fontconfig's default: it
 picks the first family installed, C059, a book serif, so Atlantic and Amber
-came out in a serif face. Theme.font and Theme.numFont map "" to Theme.sans.
+came out in a serif face. Theme.font and Theme.numFont map "" to Theme.sans,
+Liberation Sans (Nimbus Sans drew its regular weight in italic there).
 Runs in a subprocess (other modules hold a QCoreApplication).
 
     python3 -m unittest tests.test_theme_font_fallback
@@ -70,8 +71,8 @@ class FontFallbackTest(unittest.TestCase):
                 self.assertTrue(num, "numFont")
 
     def test_empty_means_the_sans(self):
-        self.assertEqual(self.out["sans"], "Nimbus Sans")
-        self.assertEqual(self.out["styles"]["atlantic night"][0], "Nimbus Sans")
+        self.assertEqual(self.out["sans"], "Liberation Sans")
+        self.assertEqual(self.out["styles"]["atlantic night"][0], "Liberation Sans")
         self.assertEqual(self.out["styles"]["trail night"][0], "URW Gothic")   # a named family is kept
 
 

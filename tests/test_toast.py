@@ -157,6 +157,57 @@ class ToastTest(unittest.TestCase):
 
 MAIN = ROOT / "qml" / "Main.qml"
 
+PHONE_SCRIPT = r'''
+import json, sys
+from PyQt6.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+
+class Bluetooth(QObject):
+    changed = pyqtSignal()
+
+    def __init__(self, name):
+        super().__init__()
+        self._name = name
+
+    @pyqtProperty(str, notify=changed)
+    def deviceName(self):
+        return self._name
+
+    def set(self, name):
+        self._name = name
+        self.changed.emit()
+
+
+app = QGuiApplication(sys.argv)
+QML = "import QtQuick\nItem {\n id: root\n property var toasts: []\n" \
+      " function notify(t, i) { toasts = toasts.concat([t]) }\n" + sys.argv[1] + "\n}\n"
+
+
+def run(start, steps):
+    engine = QQmlEngine()
+    bt = Bluetooth(start)
+    engine.rootContext().setContextProperty("bluetooth", bt)
+    comp = QQmlComponent(engine)
+    comp.setData(QML.encode(), QUrl())
+    root = comp.create()
+    if root is None:
+        print([e.toString() for e in comp.errors()])
+        sys.exit(1)
+    for name in steps:
+        bt.set(name)
+    return [str(t) for t in root.property("toasts").toVariant()] \
+        if hasattr(root.property("toasts"), "toVariant") else list(root.property("toasts"))
+
+
+print(json.dumps({
+    "first": run("", ["Baja phone"]),
+    "later": run("", ["Baja phone", "", "Baja phone", "Baja phone"]),
+    "already": run("Baja phone", ["Baja phone", "Renamed"]),
+}))
+'''
+
 
 class PhoneAndGpsToasts(unittest.TestCase):
     """Main.qml: the phone's connect and the first GPS lock each get one toast."""
@@ -181,6 +232,27 @@ class PhoneAndGpsToasts(unittest.TestCase):
         self.assertIn('gps.source === "gps"', body)
         self.assertIn("root.gpsLockShown = true", body)
         self.assertIn('root.notify("GPS locked", "gps_fixed")', body)
+
+    def test_phone_start_is_not_a_binding(self):
+        # A binding on deviceName updates before the handler runs, so the
+        # handler would see lastPhone already set and never toast.
+        self.assertIn('property string lastPhone: ""\n', self.src)
+        self.assertNotIn("lastPhone: typeof bluetooth", self.src)
+
+    def test_phone_toast_runs_on_first_connect(self):
+        # The real Main.qml block, against a fake bluetooth object.
+        start = self.src.index("    property string lastPhone")
+        end = self.src.index("    // The GPS finding its first fix")
+        block = self.src[start:end]
+        result = subprocess.run([sys.executable, "-c", PHONE_SCRIPT, block], cwd=ROOT,
+                                capture_output=True, text=True, timeout=60,
+                                env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["first"], ["Phone connected: Baja phone"])
+        # A drop-out and reconnect toasts again; a rename while connected doesn't.
+        self.assertEqual(out["later"], ["Phone connected: Baja phone"] * 2)
+        self.assertEqual(out["already"], [])
 
     def test_both_go_through_the_toast_gating(self):
         body = self.src.split("function notify", 1)[1].split("}", 1)[0]

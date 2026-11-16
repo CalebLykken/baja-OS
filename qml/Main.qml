@@ -330,9 +330,12 @@ Window {
     // route there now. Only the connect, not each change of name, and no
     // toast on disconnect (a phone flaps in and out of range).
     // Starts at the phone already there, if it is, so its name isn't a "connect".
-    property string lastPhone: typeof bluetooth !== "undefined" ? bluetooth.deviceName : ""
+    // Set once, not bound: a binding would follow deviceName before the
+    // handler below runs, so the first connect would never toast.
+    property string lastPhone: ""
     Connections {
         target: typeof bluetooth !== "undefined" ? bluetooth : null
+        Component.onCompleted: if (typeof bluetooth !== "undefined") root.lastPhone = bluetooth.deviceName
         function onChanged() {
             var name = bluetooth.deviceName
             if (root.lastPhone === "" && name !== "") root.notify("Phone connected: " + name, "bluetooth")

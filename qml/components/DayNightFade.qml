@@ -20,7 +20,9 @@ Rectangle {
             if (!fade.armed) return
             // Theme.dark is already the new scheme, so the colour to hold is
             // the one it just left.
-            fade.color = Theme.dark ? Theme.lightStyles[Theme.style].bg : Theme.base.bg
+            // A style without a day set stays on its night colours by day.
+            fade.color = Theme.dark ? (Theme.lightStyles[Theme.style] || Theme.base).bg
+                                    : Theme.base.bg
             fade.opacity = 1
             fadeOut.restart()
         }

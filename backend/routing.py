@@ -636,6 +636,8 @@ class Router(QObject):
         self._gen = 0                 # number of the latest request; older answers are dropped
         self._error = ""
         self._off_count = 0
+        self._off_said = False        # "Off route" spoken this episode
+        self._fail_said = False       # and "can't find a new route"
         self._off_since = 0.0         # when the current run of off-route fixes began
         self._clock = time.monotonic  # for off-route timing (tests use a fake one)
         self._last_reroute = 0.0
@@ -822,6 +824,9 @@ class Router(QObject):
                 self._save()
                 if self._stops_failed:
                     self.stopsFailed.emit(self._stops_failed)
+            if reroute and self._started and self._off_said and not self._fail_said:
+                self._fail_said = True
+                self._say("Can't find a new route. Keep going on the line.")
             self._stops_failed = ""
             self.changed.emit()
             return
@@ -832,10 +837,12 @@ class Router(QObject):
         self._arrival_summary = ""
         self._arrive_timer.stop()
         self._off_count = 0
+        carry_on = self._off_said       # "Off route" was just said: don't say "Rerouting" too
+        self._off_said = self._fail_said = False
         self._spoken = set()
         self._route.locate(self._gps.lon, self._gps.lat)
         if reroute and self._started and not self._gps.stale:
-            self._begin("Rerouting. ")
+            self._begin("Okay. " if carry_on else "Rerouting. ")
         if resumed and resumed["started"]:
             self._go(f"Continuing to {self._stops[0][0] if self._stops else name}. ")
             self._go_at = self._go_eta = None       # no honest start time after a restart
@@ -1032,6 +1039,7 @@ class Router(QObject):
         self._started = False
         self._go_at = self._go_eta = None
         self._arrival_summary = ""
+        self._off_said = self._fail_said = False
         self._route = None
         self._last_said = ""
         self._dest = None
@@ -1094,11 +1102,16 @@ class Router(QObject):
                     and not self._computing
                     and now - self._last_reroute > REROUTE_EVERY_S and self._dest):
                 self._last_reroute = now
+                if not self._off_said:
+                    self._off_said = True
+                    self._say("Off route. Finding a new route.")
                 while r.passed_stop(self._gps.heading, self._gps.speed):
                     self._leave_stop(r)
                 self._request(*self._dest, reroute=True)
         else:
             self._off_count = 0
+            if r.off <= OFF_ROUTE_M:
+                self._off_said = self._fail_said = False
         self.progressChanged.emit()
 
     # ---- what QML sees ------------------------------------------------------------

@@ -819,6 +819,20 @@ class LibraryPlayer(QObject):
         self.queueChanged.emit()
         self.playIndex(0)
 
+    @pyqtSlot()
+    def shuffleAll(self):
+        """Every song, shuffled, from a random one: the one-tap way back from
+        a single album to the whole library."""
+        if not self._all:
+            return
+        self._shuffle = True
+        self._queue = list(self._all)
+        self._album = -1
+        self.modesChanged.emit()
+        self._reorder()
+        self.queueChanged.emit()
+        self.playIndex(random.randrange(len(self._queue)))
+
     @pyqtSlot(int)
     def setVolume(self, value):
         value = max(0, min(100, int(value)))

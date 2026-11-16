@@ -371,7 +371,7 @@ Item {
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
                                                   : "All songs on this Pi")
-                         : page.tab === "albums" ? (page.openAlbum >= 0 ? "" : "Albums on this Pi")
+                         : page.tab === "albums" ? ("")
                          : ""
 
                 // ---- Up next ------------------------------------------------
@@ -416,10 +416,34 @@ Item {
                 }
 
                 // ---- Albums: all of them ------------------------------------
+                // Back to the whole library in one tap.
+                Row {
+                    id: playKeys
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                    height: Theme.touch
+                    spacing: Theme.gap
+                    TextButton {
+                        width: (parent.width - parent.spacing) / 2
+                        height: parent.height
+                        primary: true
+                        icon: "shuffle"
+                        text: "Shuffle all"
+                        onClicked: media.shuffleAll()
+                    }
+                    TextButton {
+                        width: (parent.width - parent.spacing) / 2
+                        height: parent.height
+                        icon: "play"
+                        text: "Play all"
+                        onClicked: media.playAll()
+                    }
+                }
+
                 GridView {
                     id: albumGrid
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen
-                    anchors { fill: parent; margins: 12; topMargin: 52 }
+                    anchors { fill: parent; margins: 12; topMargin: playKeys.visible ? playKeys.height + 24 : 12 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)

@@ -197,6 +197,10 @@ class MediaPlayer(QObject):
             self.queueChanged.emit()
         self.playIndex(0)
 
+    @pyqtSlot()
+    def shuffleAll(self):
+        self.playAll()                  # the demo has no modes to shuffle
+
     def _start_playing(self, index):
         self._set_index(max(0, min(index, len(self._queue) - 1)))
         if not self._playing:

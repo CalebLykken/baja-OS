@@ -736,6 +736,16 @@ class MediaHub(QObject):
         self._set_source("local")
         self._sources["local"].playAll()
 
+    @pyqtSlot()
+    def shuffleAll(self):
+        self._pause_others(keep="local")
+        self._set_source("local")
+        local = self._sources["local"]
+        if hasattr(local, "shuffleAll"):
+            local.shuffleAll()
+        else:
+            local.playAll()             # the demo player has no modes
+
     @pyqtSlot(str)
     def playSpotify(self, uri):
         """Play a song, album or playlist through Spotify; the hub switches

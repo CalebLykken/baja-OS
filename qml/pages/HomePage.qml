@@ -201,7 +201,7 @@ Item {
 
         Card {
             Layout.fillWidth: true
-            Layout.preferredHeight: 128
+            Layout.preferredHeight: 152
             tappable: true
             onTapped: page.navigate(3)
 
@@ -209,6 +209,7 @@ Item {
                 anchors { fill: parent; margins: 20 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignBottom
                     Layout.preferredWidth: 1
                     label: "Boost"
                     value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
@@ -217,6 +218,7 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignBottom
                     Layout.preferredWidth: 1
                     label: page.warmingUp ? "Warming up" : "Coolant"
                     value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
@@ -225,6 +227,7 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignBottom
                     Layout.preferredWidth: 1
                     label: "Battery"
                     value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
@@ -233,7 +236,10 @@ Item {
                 }
                 Readout {
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 1
+                    Layout.alignment: Qt.AlignBottom
+                    Layout.preferredWidth: 1.5
+                    // Speed is the figure a driver checks most, so it gets the big numeral.
+                    numeralSize: 76
                     label: "Speed"
                     value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
                     unit: Units.speedUnit

@@ -57,9 +57,9 @@ def col(c):
 
 
 ref = build('import QtQuick\nimport "qml/components"\n'
-            'Item { property color t: Theme.text; property color d: Theme.textDim; '
+            'Item { property int fr: Theme.fontReadout; property color t: Theme.text; property color d: Theme.textDim; '
             'property color w: Theme.warn }')
-out = {"ref": {"text": col(ref.property("t")), "dim": col(ref.property("d")),
+out = {"ref": {"readout": ref.property("fr"), "text": col(ref.property("t")), "dim": col(ref.property("d")),
                "warn": col(ref.property("w"))}}
 
 
@@ -70,7 +70,7 @@ def snap(key, props):
     unit = obj.findChild(QObject, "readoutUnit")
     leg = obj.findChild(QObject, "readoutLegend")
     out[key] = {"text": num.property("text"), "color": col(num.property("color")),
-                "scale": num.property("scale"), "unit": unit.property("visible"),
+                "scale": num.property("scale"), "size": num.property("font").pixelSize(), "unit": unit.property("visible"),
                 "legend": col(leg.property("color"))}
 
 
@@ -79,6 +79,7 @@ snap("em", 'value: "—"')
 snap("en", 'value: "–"')
 snap("empty", 'value: ""')
 snap("warn", 'value: "12.3"; warning: true')
+snap("big", 'value: "123"; numeralSize: 76')
 snap("pwarn", 'value: "—"; warning: true')
 
 print(json.dumps(out))
@@ -113,6 +114,11 @@ class ReadoutTest(unittest.TestCase):
         r = self.out["warn"]
         self.assertEqual(r["color"], self.out["ref"]["warn"])
         self.assertEqual(r["legend"], self.out["ref"]["warn"])
+
+    def test_numeral_size(self):
+        self.assertEqual(self.out["real"]["size"], self.out["ref"]["readout"])
+        self.assertEqual(self.out["real"]["size"], 56)
+        self.assertEqual(self.out["big"]["size"], 76)
 
     def test_placeholder_never_warns(self):
         r = self.out["pwarn"]

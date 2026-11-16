@@ -11,6 +11,8 @@ Column {
     property string value
     property string unit
     property bool warning: false
+    // Callers can raise the numeral above the standard readout size.
+    property int numeralSize: Theme.fontReadout
     property real _lastPulse: 0
     readonly property bool placeholder: {
         var v = String(value).trim();
@@ -65,7 +67,7 @@ Column {
             numeric: true
             text: r.placeholder ? "—" : r.value
             color: r.placeholder ? Theme.textDim : (r._warn ? Theme.warn : Theme.text)
-            font.pixelSize: Theme.fontReadout
+            font.pixelSize: r.numeralSize
             font.weight: Theme.numWeight
             transformOrigin: Item.Left
             Behavior on color { ColorAnimation { duration: 180 } }

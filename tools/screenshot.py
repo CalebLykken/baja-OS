@@ -86,7 +86,9 @@ def main():
             style, look, page = todo[0]
             if style:
                 call(win, "setStyle", style)
-            call(win, "setAppearance", look)
+            # Units.appearance takes "light" / "dark"; "day" / "night" would
+            # fall back to automatic, which is dark in the demo.
+            call(win, "setAppearance", {"day": "light", "night": "dark"}.get(look, look))
             call(win, "showPage", page)
             QTimer.singleShot(args.wait, save)
 

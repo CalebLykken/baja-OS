@@ -46,7 +46,7 @@ Item {
         target: media
         function onAlbumsChanged() {
             if (page.openAlbum < 0 || !page.openKey) return
-            var list = media.albums, found = -1
+            var list = page.albums, found = -1
             for (var i = 0; i < list.length; i++)
                 if (list[i].artist.toLowerCase() === page.openKey[0].toLowerCase()
                         && list[i].title.toLowerCase() === page.openKey[1].toLowerCase()) { found = i; break }
@@ -55,7 +55,10 @@ Item {
     }
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
+    // Each read of media.songs / media.albums makes Python rebuild the list, so
+    // everything on the page shares one read per change.
     readonly property var albums: media.albums
+    readonly property var songs: media.songs
     // The songs that play after this one, in the true order (a shuffle's too);
     // read once per change so the bindings below share it.
     readonly property var upNext: media.upNext
@@ -414,7 +417,9 @@ Item {
                 heading: page.eqOpen ? "Equalizer"
                          : page.tab === "next" ? (media.source === "spotify" ? "Up next on Spotify"
                                                   : page.albums[media.album] ? "Playing the album " + page.albums[media.album].title
-                                                  : "All songs on this Pi")
+                                                  : media.source === "phone" ? "On your phone"
+                                                  : media.shuffle ? "All songs, shuffled"
+                                                  : "All songs, A to Z")
                          : ""
 
                 // ---- Up next ------------------------------------------------
@@ -445,7 +450,7 @@ Item {
                         width: queue.width
                         number: index + 1
                         title: modelData.title
-                        subtitle: modelData.artist
+                        subtitle: page.artistLine(modelData.artist, "")
                         tappable: !queue.spotifyQueue
                         onHit: media.playIndex(modelData.index)
                     }
@@ -472,7 +477,7 @@ Item {
                 // library in one tap.
                 Row {
                     id: playKeys
-                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albums.length > 0
                     anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12
                               rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
                     height: 72
@@ -531,10 +536,10 @@ Item {
                         height: albumGrid.height
                         icon: media.scanning ? "refresh" : "album"
                         title: media.scanning ? "Reading your music"
-                               : albumGrid.recent && media.albums.length > 0 ? "Nothing played yet"
+                               : albumGrid.recent && page.albums.length > 0 ? "Nothing played yet"
                                : "The shelf is empty"
                         hint: media.scanning ? "Songs show up as they're found"
-                              : albumGrid.recent && media.albums.length > 0 ? "Albums you play show up here"
+                              : albumGrid.recent && page.albums.length > 0 ? "Albums you play show up here"
                               : "Albums copied into ~/Music on the Pi show up here"
                     }
                 }
@@ -543,7 +548,7 @@ Item {
                 // rebuilds when the album list changes.
                 Column {
                     id: alphaRail
-                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && media.albums.length > 15
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && page.albumView === "all" && page.albums.length > 15
                     readonly property var buckets: AlphaIndex.buckets(page.albums.map(function (a) { return a.artist }))
                     width: 64
                     anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
@@ -577,7 +582,7 @@ Item {
                     anchors { fill: parent; margins: 10
                               rightMargin: songRail.visible ? songRail.width + 24 : 10 }
                     clip: true
-                    model: media.songs
+                    model: page.songs
                     boundsBehavior: Flickable.StopAtBounds
                     delegate: SongRow {
                         width: songList.width
@@ -585,7 +590,7 @@ Item {
                         current: media.source === "local" && media.title === modelData.title
                                  && media.artist === modelData.artist
                         title: modelData.title
-                        subtitle: modelData.artist
+                        subtitle: page.artistLine(modelData.artist, "")
                         onHit: media.playSong(modelData.index)
                     }
                     EmptyState {
@@ -601,8 +606,8 @@ Item {
                 // The same jump rail as Albums, on the song titles.
                 Column {
                     id: songRail
-                    visible: page.tab === "songs" && !page.eqOpen && media.songs.length > 15
-                    readonly property var buckets: AlphaIndex.buckets(media.songs.map(function (s) { return s.title }), true)
+                    visible: page.tab === "songs" && !page.eqOpen && page.songs.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(page.songs.map(function (s) { return s.title }), true)
                     width: 64
                     anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
                     Repeater {

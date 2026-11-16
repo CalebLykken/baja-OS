@@ -83,6 +83,29 @@ class MineTests(unittest.TestCase):
         e.applyPreset("Mine")
         self.assertEqual(e.gains, [12, -12, 0, 0, 0])
 
+class UpgradeTests(unittest.TestCase):
+    def test_old_hand_tuned_curve_becomes_mine(self):
+        s = FakeSettings()
+        s.d["eq"] = "3,0,0,0,1"
+        e = eq.Equalizer(s)
+        self.assertEqual(s.d["eqMine"], "3,0,0,0,1")
+        e.applyPreset("Flat")
+        e.applyPreset("Mine")
+        self.assertEqual(e.gains, [3, 0, 0, 0, 1])
+
+    def test_builtin_preset_is_not_saved_as_mine(self):
+        s = FakeSettings()
+        s.d["eq"] = "4,2,0,2,3"
+        eq.Equalizer(s)
+        self.assertNotIn("eqMine", s.d)
+
+    def test_existing_mine_is_kept(self):
+        s = FakeSettings()
+        s.d["eq"] = "3,0,0,0,1"
+        s.d["eqMine"] = "1,1,1,1,1"
+        eq.Equalizer(s)
+        self.assertEqual(s.d["eqMine"], "1,1,1,1,1")
+
 
 if __name__ == "__main__":
     unittest.main()

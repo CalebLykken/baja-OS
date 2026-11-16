@@ -131,48 +131,67 @@ Item {
 
         Card {
             Layout.fillWidth: true
-            Layout.preferredHeight: 152
+            // Grows by a line while the engine note shows, so nothing overlaps.
+            Layout.preferredHeight: engineNote.visible ? 184 : 152
             tappable: true
             onTapped: page.navigate(3)
 
-            RowLayout {
+            ColumnLayout {
                 anchors { fill: parent; margins: 20 }
-                Readout {
+                spacing: 6
+
+                // With no adapter answering (and no demo) the engine readouts
+                // are dashes; say why, and where the speed comes from.
+                Label {
+                    id: engineNote
+                    objectName: "homeEngineNote"
                     Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignBottom
-                    Layout.preferredWidth: 1
-                    label: "Boost"
-                    value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
-                    unit: Units.boostUnit
-                    warning: vehicle.warnings.indexOf("boost") >= 0
+                    visible: !vehicle.simulated && !vehicle.engineKnown
+                    text: "Engine not connected" + (vehicle.speedKnown && !vehicle.live ? " · speed from GPS" : "")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
                 }
-                Readout {
+
+                RowLayout {
                     Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignBottom
-                    Layout.preferredWidth: 1
-                    label: page.warmingUp ? "Warming up" : "Coolant"
-                    value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
-                    unit: Units.tempUnit
-                    warning: vehicle.warnings.indexOf("coolant") >= 0
-                }
-                Readout {
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignBottom
-                    Layout.preferredWidth: 1
-                    label: "Battery"
-                    value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
-                    unit: "V"
-                    warning: vehicle.warnings.indexOf("voltage") >= 0
-                }
-                Readout {
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignBottom
-                    Layout.preferredWidth: 1.5
-                    // Speed is the figure a driver checks most, so it gets the big numeral.
-                    numeralSize: 76
-                    label: "Speed"
-                    value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
-                    unit: Units.speedUnit
+                    Layout.fillHeight: true
+                    Readout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: "Boost"
+                        value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
+                        unit: Units.boostUnit
+                        warning: vehicle.warnings.indexOf("boost") >= 0
+                    }
+                    Readout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: page.warmingUp ? "Warming up" : "Coolant"
+                        value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
+                        unit: Units.tempUnit
+                        warning: vehicle.warnings.indexOf("coolant") >= 0
+                    }
+                    Readout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: "Battery"
+                        value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
+                        unit: "V"
+                        warning: vehicle.warnings.indexOf("voltage") >= 0
+                    }
+                    Readout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1.5
+                        // Speed is the figure a driver checks most, so it gets the big numeral.
+                        numeralSize: 76
+                        label: "Speed"
+                        value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
+                        unit: Units.speedUnit
+                    }
                 }
             }
         }

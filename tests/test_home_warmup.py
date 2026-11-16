@@ -46,6 +46,14 @@ class Vehicle(QObject):
     def engineKnown(self):
         return self._engineKnown
 
+    @pyqtProperty(bool, notify=changed)
+    def simulated(self):
+        return False
+
+    @pyqtProperty(bool, notify=changed)
+    def live(self):
+        return False
+
     @pyqtProperty(float, notify=changed)
     def coolant(self):
         return self._coolant

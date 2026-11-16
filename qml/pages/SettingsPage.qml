@@ -597,7 +597,7 @@ Item {
                             ConfirmButton {
                                 id: forgetBtn
                                 visible: model.saved && wifi.canControl
-                                implicitHeight: 48
+                                implicitHeight: 56
                                 text: "Forget"
                                 confirmText: "Tap again to forget"
                                 onConfirmed: wifi.forget(model.ssid)
@@ -1063,7 +1063,7 @@ Item {
                 heading: "Restart and power"
                 RowLayout {
                     spacing: 14
-                    TextButton { icon: "refresh"; text: "Restart dashboard"; enabled: !updater.busy; onClicked: system.restartDashboard() }
+                    ConfirmButton { icon: "refresh"; text: "Restart dashboard"; confirmText: "Tap again to restart"; enabled: !updater.busy; onConfirmed: system.restartDashboard() }
                     ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower && !updater.updating; onConfirmed: system.reboot() }
                     ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower && !updater.updating; onConfirmed: system.powerOff() }
                 }
@@ -1156,7 +1156,11 @@ Item {
         property string confirmText
         property string plainText
         signal confirmed()
-        property bool armed: false
+        // Wide enough for either text, so arming never resizes the key or
+        // shoves its neighbours along the row.
+        implicitWidth: Math.max(plainProbe.implicitWidth, confirmProbe.implicitWidth) + (icon !== "" ? 34 : 0) + 40
+        Label { id: plainProbe; visible: false; text: cb.plainText; font.pixelSize: Theme.fontBody - 2; font.weight: Font.DemiBold }
+        Label { id: confirmProbe; visible: false; text: cb.confirmText; font.pixelSize: Theme.fontBody - 2; font.weight: Font.DemiBold }
         Component.onCompleted: plainText = text
         onArmedChanged: text = armed ? confirmText : plainText
         onClicked: {

@@ -109,7 +109,9 @@ def _extract_art(path, audio):
     return QUrl.fromLocalFile(str(out)).toString()
 
 
-CACHE_VERSION = 1
+# 2: songs titled from their file names are tidied (tidy_title), so the first scan
+# after an update reads every cached song again, once, in the background.
+CACHE_VERSION = 2
 TRACK_STRINGS = ("path", "title", "artist", "art", "album", "albumArtist")
 TRACK_INTS = ("duration", "disc", "track")
 TRACK_KEYS = set(TRACK_STRINGS + TRACK_INTS)
@@ -225,6 +227,23 @@ def signature(folder):
     return _signature_of(_listing(folder))
 
 
+_LEADING_ID = re.compile(r"^\d{4,}[_\-. ]+")      # freesound-style "575780__author__name"
+_LEADING_NUMBER = re.compile(r"^\d{1,3}(?:\s*[-.]\s+|\s+)")     # "01 ", "01 - ", "1. "
+
+
+def tidy_title(stem):
+    """A readable title from a file name with no title tag: underscores become
+    spaces, runs of spaces and dashes collapse, and a leading track number or
+    download id goes. A name that's nothing but digits ("2112") or empties out
+    is kept as it was."""
+    name = _LEADING_ID.sub("", stem)
+    name = name.replace("_", " ")
+    name = re.sub(r"\s{2,}", " ", name)
+    name = re.sub(r"-{2,}", "-", name)
+    name = _LEADING_NUMBER.sub("", name.strip()).strip(" -")
+    return name or stem
+
+
 def _read_track(path, folder_art):
     """(track dict, whether its art came from the file itself) for one file,
     or (None, False) if it can't be read."""
@@ -239,7 +258,7 @@ def _read_track(path, folder_art):
         embedded = _extract_art(path, audio)
         return {
             "path": str(path),
-            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or path.stem,
+            "title": _first_tag(tags, "TIT2", "\xa9nam", "title") or tidy_title(path.stem),
             "artist": _first_tag(tags, "TPE1", "\xa9ART", "artist") or "Unknown artist",
             "duration": int(audio.info.length),
             "art": embedded or folder_art(path.parent),

@@ -258,6 +258,18 @@ Window {
         }
     }
 
+    // Settings or the Truck page left open: after 90 s with no touch, go back
+    // to Home if the truck is moving (gps.speed is m/s, 0 when stale). Parked,
+    // it just waits another round. Only runs on those two pages.
+    IdleReturn {
+        id: idleReturn
+        active: root.page === 4 || root.page === 5
+        onIdle: {
+            if (typeof gps !== "undefined" && gps.speed > 3) root.page = 0
+            else idleReturn.poke()
+        }
+    }
+
     // Transient message toast (trip milestones today): shown for a few seconds
     // by one short animation that ends by itself; invisible (not drawn) the
     // rest of the time. No MouseArea, so it never takes a tap. Above the

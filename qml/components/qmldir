@@ -32,3 +32,4 @@ StatusStrip 1.0 StatusStrip.qml
 KeyOffCountdown 1.0 KeyOffCountdown.qml
 Prompt 1.0 Prompt.qml
 Toast 1.0 Toast.qml
+IdleReturn 1.0 IdleReturn.qml

@@ -411,6 +411,10 @@ class ProbeRetryTests(unittest.TestCase):
         d._probing = True
         if before:
             before(d)
+        # Patching display_mod.time.sleep patches time.sleep for every thread,
+        # so this thread's own waits below use the real one: counted, they made
+        # the test depend on how fast the writer finished (it failed on the Pi).
+        real_sleep = time.sleep
         with mock.patch.object(display_mod, "find_ddc_bus", return_value=bus), \
                 mock.patch.object(display_mod, "DdcBrightness", ddc), \
                 mock.patch.object(display_mod.time, "sleep") as sleep:
@@ -423,7 +427,7 @@ class ProbeRetryTests(unittest.TestCase):
                     app.processEvents()
                     if d.hardware:
                         break
-                    time.sleep(0.01)
+                    real_sleep(0.01)
             app.processEvents()
         return d, sleep, t
 

@@ -233,6 +233,14 @@ class SimulationTest(unittest.TestCase):
 
 
 class LiveTest(unittest.TestCase):
+    # These are about carAnswered. The top speed and peak rpm are saved too,
+    # but only with a boot id: there is one on the Pi (Linux) and none on a
+    # Mac, so without this the saved list differed between the two.
+    def setUp(self):
+        import backend.vehicle as vehicle
+        self._boot, vehicle.boot_id = vehicle.boot_id, lambda: None
+        self.addCleanup(setattr, vehicle, "boot_id", self._boot)
+
     def test_the_first_reading_saves_that_the_car_answered_once(self):
         settings = FakeSettings()
         v = VehicleData(settings)

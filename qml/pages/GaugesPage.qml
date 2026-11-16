@@ -114,7 +114,8 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             label: "Boost"; unit: Units.boostUnit; decimals: Units.boostDecimals
             known: vehicle.engineKnown
-            value: Units.boost(vehicle.boost); minValue: Units.boost(-20); maxValue: Units.boost(20)
+            value: Units.boost(vehicle.boost); minValue: Units.boost(-15); maxValue: Units.boost(20)
+            markValue: Units.boost(0)   // where vacuum ends and boost begins
             warnAbove: Units.boost(vehicle.limits.boostHigh)
             peakHold: true
         }

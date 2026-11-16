@@ -40,6 +40,21 @@ class BackdropTextTest(unittest.TestCase):
     def test_atlantic_uses_waves(self):
         self.assertRegex(THEME, r'gauge: "arc", backdrop: "waves"')
 
+    def test_facets_and_scanlines_are_painted_and_deterministic(self):
+        self.assertIn("function paintFacets(ctx)", BACKDROP)
+        self.assertIn("function paintScanlines(ctx)", BACKDROP)
+        self.assertIn('kind === "facets"', BACKDROP)
+        self.assertIn('kind === "scanlines"', BACKDROP)
+        self.assertRegex(THEME, r'glacier: \{[^}]*backdrop: "facets"')
+        self.assertRegex(THEME, r'lcd: \{[^}]*backdrop: "scanlines"')
+
+    def test_sunset_paints_a_horizon_sun_once(self):
+        self.assertIn("function paintHorizon(ctx)", BACKDROP)
+        self.assertIn('kind === "horizon"', BACKDROP)
+        self.assertRegex(THEME, r'sunset: \{[^}]*backdrop: "horizon"')
+        # The clip is balanced by a restore so later kinds can't inherit it.
+        self.assertEqual(BACKDROP.count("ctx.save()"), BACKDROP.count("ctx.restore()"))
+
     def test_nothing_runs_while_idle(self):
         for word in ("Timer", "Animation", "Behavior", "running:"):
             self.assertNotIn(word, BACKDROP)

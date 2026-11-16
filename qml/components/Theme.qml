@@ -53,6 +53,55 @@ QtObject {
             accent: "#5b8fd0", warn: "#ff5a47", ok: "#6fd3a0",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
             radius: 14, border: 1, gauge: "arc", backdrop: "waves"
+        },
+        // Night driving: pure black so the window and rail go flat, with no
+        // backdrop to glow. Text is deliberately not full white, and the
+        // accent is a muted cool teal that doesn't bloom on an 8 inch panel.
+        midnight: {
+            bg: "#000000", panel: "#08090b", panelTop: "#0e1013", panelHi: "#16191d",
+            line: "#272b31", text: "#d6dae0", textDim: "#8a919b",
+            accent: "#4fb8cc", warn: "#ff5436", ok: "#7cc47a",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 12, border: 1, gauge: "arc", backdrop: "none"
+        },
+        // Desert: sand and terracotta-brown, with turquoise as the accent. The
+        // turquoise sits well away from the red-orange warning colour. Dune
+        // ridgelines behind, so it doesn't share Trail's topo backdrop.
+        desert: {
+            bg: "#18120c", panel: "#251c13", panelTop: "#2c2218", panelHi: "#37291c",
+            line: "#5a4631", text: "#f1e3c8", textDim: "#b19c7c",
+            accent: "#3fc1b0", warn: "#ff5a36", ok: "#b6c96a",
+            font: "", numFont: "Nimbus Sans", numItalic: false, numWeight: Font.Bold,
+            radius: 8, border: 2, gauge: "arc", backdrop: "dunes"
+        },
+        // Glacier: ice cyan on deep teal-black. The roundest look, with
+        // generous corners and a cool, crisp accent that reads well at night.
+        glacier: {
+            bg: "#071216", panel: "#0e2027", panelTop: "#132932", panelHi: "#1a3540",
+            line: "#2f5663", text: "#e8f6f9", textDim: "#8fb2bd",
+            accent: "#7fe0f0", warn: "#ff5f4d", ok: "#8fe0a8",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 20, border: 1, gauge: "arc", backdrop: "facets"
+        },
+        // LCD: retro green monochrome, like an 80s dashboard display. Phosphor
+        // green text on near-black, with segment gauges and a mono numeral
+        // face. Warnings stay orange-red so they still stand out.
+        lcd: {
+            bg: "#050b05", panel: "#0b160a", panelTop: "#0f1d0e", panelHi: "#16270f",
+            line: "#2c4a22", text: "#b9f27a", textDim: "#7fae5a",
+            accent: "#e4ff5a", warn: "#ff6a3d", ok: "#5fe08e",
+            font: "", numFont: "DejaVu Sans Mono", numItalic: false, numWeight: Font.Bold,
+            radius: 2, border: 2, gauge: "segments", backdrop: "scanlines"
+        },
+        // Sunset: deep purple at night with a gold accent. The gold sits far
+        // from the pink-red warning colour, so an alert is never read as a
+        // selected state.
+        sunset: {
+            bg: "#140a1f", panel: "#21122f", panelTop: "#2c1840", panelHi: "#3a2154",
+            line: "#5a3a7a", text: "#fbeef2", textDim: "#b79bc4",
+            accent: "#ffb347", warn: "#ff4d6d", ok: "#7fe0b0",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 18, border: 1, gauge: "arc", backdrop: "horizon"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -82,15 +131,55 @@ QtObject {
             bg: "#e4eaf3", panel: "#f5f8fc", panelTop: "#ffffff", panelHi: "#d9e2f0",
             line: "#b5c4dc", text: "#0c1a30", textDim: "#4a5d7c",
             accent: "#2a5fa8", warn: "#c92f2f", ok: "#1c8456"
+        },
+        // Midnight by day: white sheets, near-black text, the teal deepened
+        // so it holds on a light ground.
+        midnight: {
+            bg: "#f0f1f2", panel: "#ffffff", panelTop: "#ffffff", panelHi: "#e3e5e8",
+            line: "#c4c8ce", text: "#0a0b0d", textDim: "#555b64",
+            accent: "#0a7388", warn: "#c8321a", ok: "#2f7d2c"
+        },
+        // Desert by day: sand paper and dark brown text, with the turquoise
+        // deepened to hold on the light ground.
+        desert: {
+            bg: "#eadfc6", panel: "#f8f1e1", panelTop: "#fcf8ee", panelHi: "#e2d5b6",
+            line: "#cbb994", text: "#2a2014", textDim: "#6d5d44",
+            accent: "#0b766a", warn: "#c4321f", ok: "#5a7a1e"
+        },
+        // Glacier by day: a bright near-white ground with cool blue-grey
+        // panels, and the cyan deepened so it holds on the light ground.
+        glacier: {
+            bg: "#e3eef2", panel: "#f6fafb", panelTop: "#ffffff", panelHi: "#d7e6ec",
+            line: "#b4cbd4", text: "#0b1d24", textDim: "#476470",
+            accent: "#0a6f8c", warn: "#c8321f", ok: "#22804a"
+        },
+        // LCD by day: a grey-green calculator panel with dark green ink.
+        lcd: {
+            bg: "#c3cea4", panel: "#d3dcb8", panelTop: "#dde5c6", panelHi: "#b5c295",
+            line: "#8fa072", text: "#16210c", textDim: "#3f4f2a",
+            accent: "#2f5a0f", warn: "#a8260f", ok: "#1f6b2e"
+        },
+        // Sunset by day: soft pink-white sheets with plum text, and the gold
+        // deepened to a burnt amber so it holds on the light ground.
+        sunset: {
+            bg: "#f3e6ea", panel: "#fcf6f7", panelTop: "#ffffff", panelHi: "#ebdbe2",
+            line: "#d3b9c6", text: "#2a1230", textDim: "#6e4f76",
+            accent: "#b4540a", warn: "#c4203f", ok: "#1f7d57"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd", "sunset"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
-                                          rally: "Rally", atlantic: "Atlantic" })
-    readonly property var base: styles[style] || styles.amber
+                                          rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
+                                          desert: "Desert", glacier: "Glacier", lcd: "LCD",
+                                          sunset: "Sunset" })
+    // A saved or --style name that no longer exists (renamed, removed, or a
+    // typo in the settings file) shows Trail, the default, in both day and
+    // night. `style` itself stays as saved, so Settings can still write a new one.
+    readonly property string effectiveStyle: styles[style] ? style : "trail"
+    readonly property var base: styles[effectiveStyle]
     // Colours from the day or night set; fonts and shapes always from base.
-    readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})
+    readonly property var s: dark ? base : Object.assign({}, base, lightStyles[effectiveStyle])
 
     readonly property color bg: s.bg
     readonly property color panel: s.panel
@@ -112,7 +201,7 @@ QtObject {
     readonly property int radius: s.radius
     readonly property int border: s.border
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
-    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves" or "dunes"
+    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves", "dunes", "facets", "scanlines" or "horizon"
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

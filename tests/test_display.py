@@ -222,6 +222,93 @@ class ProbeTests(unittest.TestCase):
             ddc.close()
 
 
+class PanelBacklightTests(unittest.TestCase):
+    """Screen off writes 0 to the panel; wake writes the level back."""
+
+    def hw_display(self, current=30):
+        d = display_mod.Display()
+        run_probe(d, ddc=lambda path: FakeDdc(path, current=current))
+        d._pending = None
+        d.setBrightness(40)
+        self.flush(d)
+        return d
+
+    def flush(self, d):
+        """Do what the writer thread does with the newest pending value."""
+        value, d._pending = d._pending, None
+        if value is not None:
+            d._write(value)
+
+    def test_screen_off_writes_zero_and_keeps_brightness(self):
+        d = self.hw_display()
+        d._ddc.sets.clear()
+        d.setScreenOff(True)
+        self.flush(d)
+        self.assertEqual(d._ddc.sets, [0])
+        self.assertEqual(d.brightness, 40)
+
+    def test_check_sun_while_off_writes_nothing(self):
+        d = self.hw_display()
+        d.setScreenOff(True)
+        self.flush(d)
+        d._ddc.sets.clear()
+        d._check_sun()
+        self.assertIsNone(d._pending)
+        d.setBrightness(60)  # the slider still updates the level, not the panel
+        self.assertIsNone(d._pending)
+        self.assertEqual(d.brightness, 60)
+        self.assertEqual(d._ddc.sets, [])
+
+    def test_wake_writes_the_current_level(self):
+        d = self.hw_display()
+        d.setScreenOff(True)
+        self.flush(d)
+        d._ddc.sets.clear()
+        d.wake()
+        self.flush(d)
+        self.assertEqual(d._ddc.sets, [40])
+
+    def test_wake_after_night_change_writes_night_level(self):
+        d = self.hw_display()
+        d.setScreenOff(True)
+        self.flush(d)
+        d._night = True
+        d._levels[True] = 25
+        d.wake()
+        self.flush(d)
+        self.assertEqual(d._ddc.sets[-1], 25)
+
+    def test_software_dim_screen_off_writes_nothing(self):
+        d = display_mod.Display()
+        run_probe(d, bus=None)
+        d.setScreenOff(True)
+        self.assertTrue(d.screenOff)
+        self.assertIsNone(d._pending)
+        d.wake()
+        self.assertFalse(d.screenOff)
+        self.assertIsNone(d._pending)
+
+    def test_panel_failure_never_changes_screen_state(self):
+        d = self.hw_display()
+        with mock.patch.object(d, "_drive_panel", side_effect=OSError("x")):
+            d.setScreenOff(True)
+        self.assertTrue(d.screenOff)
+
+    def test_probe_reading_zero_keeps_day_level_and_writes_it(self):
+        d = display_mod.Display()
+        run_probe(d, ddc=lambda path: FakeDdc(path, current=0))
+        self.assertTrue(d.hardware)
+        self.assertEqual(d._levels[False], 100)
+        self.assertEqual(d._pending, 100)
+
+    def test_screen_off_before_probe_settles_dims_after(self):
+        d = display_mod.Display()
+        d._probing = True
+        d.setScreenOff(True)
+        run_probe(d)
+        self.assertEqual(d._pending, 0)
+
+
 class WriteFailureTests(unittest.TestCase):
     def hw_display(self):
         d = display_mod.Display()

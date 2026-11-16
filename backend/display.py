@@ -12,6 +12,11 @@ There are two saved levels, daylight and night, and with `autoNight` on
 the screen switches between them by the sun's position where the truck is
 (after sunset it uses the night level). The slider sets whichever level
 is in use.
+
+Screen off (Settings) draws a black layer and, on a DDC/CI panel, also writes
+brightness 0 so the backlight stops glowing in a dark cab. The saved levels and
+the slider are untouched; waking writes the current day or night level back. A
+panel that ignores 0 is still covered by the black layer.
 """
 
 import fcntl
@@ -210,11 +215,15 @@ class Display(QObject):
             self._hw = True
             self._brightness = round(current * 100 / maximum) if maximum else 100
             self._written = self._brightness
-            if self._day_default:
-                self._levels[False] = max(5, min(100, self._brightness))
+            # A panel left at 0 (a restart while the screen was off) must not
+            # become the day level: keep 100, and _apply below sends the level.
+            if self._day_default and self._brightness >= 5:
+                self._levels[False] = min(100, self._brightness)
             self.hardwareChanged.emit()
             self.brightnessChanged.emit()
         self._apply(self._levels[self._night])
+        if ok and self._screen_off:
+            self._drive_panel(True)  # the screen went off before the probe settled
 
     def _writer(self):
         retry = self._probe()
@@ -276,7 +285,7 @@ class Display(QObject):
             self.brightnessChanged.emit()
         elif not self._hw or value == self._written:
             return
-        if self._hw:
+        if self._hw and not self._screen_off:  # off: the panel stays at 0
             with self._wake:
                 self._pending = value
                 self._wake.notify()
@@ -304,13 +313,23 @@ class Display(QObject):
         self.setScreenOff(False)
 
     def _drive_panel(self, off):
-        """Turn the panel's real backlight off or on. Does nothing yet.
+        """Turn the panel's backlight down over DDC/CI, or back up on wake.
 
-        How to do that on the Waveshare panel is not known: the candidates are
-        DDC/CI (after loading i2c-dev), the panel's USB HID interface, or
-        DPMS/KMS. It has to be tried on the Pi. Until then the QML only draws
-        a black layer and the backlight stays lit.
+        Off writes brightness 0 through the writer thread, bypassing the 5%
+        floor of setBrightness and leaving _brightness alone so the slider does
+        not move. On wake the current day or night level is sent again. With no
+        DDC/CI panel (software dim) nothing is written: the QML black layer
+        alone covers the screen.
         """
+        if not self._hw:
+            return
+        if off:
+            with self._wake:
+                self._pending = 0
+                self._wake.notify()
+        else:
+            self._written = 0  # the panel is at 0, so the level really is sent
+            self._apply(self._levels[self._night])
 
     # ---- day and night ----------------------------------------------------------
     @pyqtProperty(bool, notify=nightChanged)

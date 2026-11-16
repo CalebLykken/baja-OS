@@ -20,6 +20,7 @@ singleton Units 1.0 Units.qml
 TextButton 1.0 TextButton.qml
 Section 1.0 Section.qml
 SignalBars 1.0 SignalBars.qml
+VolumeOverlay 1.0 VolumeOverlay.qml
 EqSlider 1.0 EqSlider.qml
 EqualizerPanel 1.0 EqualizerPanel.qml
 Keyboard 1.0 Keyboard.qml
@@ -27,3 +28,8 @@ EngineWarning 1.0 EngineWarning.qml
 EmptyState 1.0 EmptyState.qml
 TurnChip 1.0 TurnChip.qml
 Trip 1.0 Trip.qml
+StatusStrip 1.0 StatusStrip.qml
+KeyOffCountdown 1.0 KeyOffCountdown.qml
+Prompt 1.0 Prompt.qml
+Toast 1.0 Toast.qml
+IdleReturn 1.0 IdleReturn.qml

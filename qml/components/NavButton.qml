@@ -21,6 +21,8 @@ Item {
     readonly property alias markerHeight: marker.height
     readonly property alias cardHeight: card.height
     readonly property alias cardScale: card.scale
+    readonly property alias cardWidth: card.width
+    readonly property alias labelWidth: legend.contentWidth
 
     onActiveChanged: {
         if (active && ready && visible)
@@ -85,9 +87,18 @@ Item {
                 Behavior on color { ColorAnimation { duration: 150 } }
             }
             Legend {
+                id: legend
                 anchors.horizontalCenter: parent.horizontalCenter
+                // Keep the label inside the plate with a gap each side. The
+                // widest label, SETTINGS, is about 100 px at 20 px caps, so Fit
+                // shrinks it (to about 18 px) rather than letting it run past
+                // the highlight. Tracking 1 keeps it close to the other labels.
+                width: card.width - 12
+                horizontalAlignment: Text.AlignHCenter
+                fontSizeMode: Text.Fit
+                minimumPixelSize: 15
                 text: btn.label
-                font.letterSpacing: 1        // tighter so SETTINGS fits the rail
+                font.letterSpacing: 1
                 color: btn.active ? Theme.text : Theme.textDim
                 Behavior on color { ColorAnimation { duration: 150 } }
             }

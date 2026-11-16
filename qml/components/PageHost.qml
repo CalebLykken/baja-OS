@@ -22,6 +22,10 @@ Item {
     property Component lazy: null
     property bool preload: false
     property bool everShown: shown
+    // True once the page is there to use: always for a page given as a child,
+    // and for a lazy one when its Loader has finished building it. Main.qml
+    // chains the background preloads on this, one page after the previous.
+    readonly property bool built: lazy === null || lazyLoader.status === Loader.Ready
     onShownChanged: if (shown) everShown = true
 
     opacity: shown ? 1 : 0

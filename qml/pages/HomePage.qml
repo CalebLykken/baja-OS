@@ -86,53 +86,7 @@ Item {
 
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
-                Rectangle {
-                    id: nextTurnCard
-                    readonly property bool shown: typeof routing !== "undefined" && routing.active
-                    opacity: shown ? 1 : 0
-                    visible: opacity > 0
-                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    transform: Translate {
-                        y: nextTurnCard.shown ? 0 : -16
-                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    }
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                    height: miniTurn.implicitHeight + 28
-                    radius: Theme.radius
-                    color: Theme.base.panel
-                    RowLayout {
-                        id: miniTurn
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
-                        spacing: 12
-                        Icon {
-                            Layout.alignment: Qt.AlignTop
-                            name: typeof routing !== "undefined" ? routing.maneuverIcon || "straight" : "straight"
-                            size: 64
-                            color: Theme.base.text
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 0
-                            Label {
-                                visible: typeof routing !== "undefined" && !routing.arrived
-                                numeric: true
-                                text: typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
-                                color: Theme.base.text
-                                font.pixelSize: Theme.fontReadout
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                                text: typeof routing !== "undefined" ? routing.instruction : ""
-                                color: Theme.base.text
-                                font.pixelSize: Theme.fontSmall
-                                font.weight: Font.DemiBold
-                            }
-                        }
-                    }
-                }
+                HomeTurn { anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } }
                 Rectangle {
                     id: arrivePill
                     readonly property bool shown: typeof routing !== "undefined" && routing.active

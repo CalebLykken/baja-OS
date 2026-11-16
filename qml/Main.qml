@@ -33,6 +33,17 @@ Window {
     readonly property bool onMaps: page === 2
     readonly property bool fullPage: page === 1 || page === 2     // Music and Maps
 
+    // The badge dot on a nav key: stored trouble codes on Truck (not for the
+    // demo's made-up codes), a waiting update on Settings. Bound per key, so
+    // it follows those properties when they change.
+    function badgeFor(i) {
+        if (i === 4)
+            return typeof vehicle !== "undefined" && vehicle.codeCount > 0 && !vehicle.simulated
+        if (i === 5)
+            return typeof updater !== "undefined" && updater.canUpdate
+        return false
+    }
+
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
     function setStyle(name) { Theme.style = name }
@@ -60,9 +71,9 @@ Window {
     }
     Connections {
         target: Units
-        function onMetricChanged() { settings.set("metric", Units.metric ? "true" : "false") }
-        function onClock24Changed() { settings.set("clock24", Units.clock24 ? "true" : "false") }
-        function onAppearanceChanged() { settings.set("appearance", Units.appearance) }
+        function onMetricChanged() { if (typeof settings !== "undefined") settings.set("metric", Units.metric ? "true" : "false") }
+        function onClock24Changed() { if (typeof settings !== "undefined") settings.set("clock24", Units.clock24 ? "true" : "false") }
+        function onAppearanceChanged() { if (typeof settings !== "undefined") settings.set("appearance", Units.appearance) }
     }
 
     // Light by day, dark at night (by the sun where the truck is), unless
@@ -142,18 +153,19 @@ Window {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
 
+        // The rail clock's time, once a minute (see ClockTick.qml).
+        ClockTick { id: tick }
+
         Column {
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
             spacing: 4
             Label {
                 id: clock
                 anchors.horizontalCenter: parent.horizontalCenter
-                property date now: new Date()
-                text: Units.timeText(now)
+                text: Units.timeText(tick.now)
                 numeric: true
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
-                Timer { interval: 5000; running: true; repeat: true; onTriggered: clock.now = new Date() }
             }
             // Made-up engine data (a Mac, a bench Pi, --demo): never let it
             // pass for the truck's.
@@ -198,6 +210,7 @@ Window {
                     icon: modelData.icon
                     label: modelData.label
                     active: root.page === index
+                    badge: root.badgeFor(index)
                     onClicked: root.page = index
                 }
             }
@@ -313,6 +326,50 @@ Window {
         function onMilestone(text) { root.notify(text, "") }
     }
 
+    // The phone connecting (BlueZ gives it a device name): music and calls
+    // route there now. Only the connect, not each change of name, and no
+    // toast on disconnect (a phone flaps in and out of range).
+    // Starts at the phone already there, if it is, so its name isn't a "connect".
+    // Set once, not bound: a binding would follow deviceName before the
+    // handler below runs, so the first connect would never toast.
+    property string lastPhone: ""
+    Connections {
+        target: typeof bluetooth !== "undefined" ? bluetooth : null
+        Component.onCompleted: if (typeof bluetooth !== "undefined") root.lastPhone = bluetooth.deviceName
+        function onChanged() {
+            var name = bluetooth.deviceName
+            if (root.lastPhone === "" && name !== "") root.notify("Phone connected: " + name, "bluetooth")
+            root.lastPhone = name
+        }
+    }
+
+    // The GPS finding its first fix, once per run: Maps can start now. Only
+    // from the receiver, never the demo drive.
+    property bool gpsLockShown: false
+    Connections {
+        target: typeof gps !== "undefined" ? gps : null
+        function onChanged() {
+            if (!root.gpsLockShown && gps.realFix && gps.source === "gps") {
+                root.gpsLockShown = true
+                root.notify("GPS locked", "gps_fixed")
+            }
+        }
+    }
+
+    // The soft fade when the dashboard turns from day to night or back: over
+    // the pages, the map and the toast, under the volume panel, dimming,
+    // screen-off and prompts. Armed once the start-up screen is gone, so
+    // the first setting at start-up doesn't fade (see DayNightFade.qml).
+    DayNightFade {
+        id: dayNightFade
+        anchors.fill: parent
+    }
+    Timer {
+        interval: 600
+        running: !splash.visible && !dayNightFade.armed
+        onTriggered: dayNightFade.armed = true
+    }
+
     // Volume panel for the knob and long-press mute, on every page but Music
     // (which has its own bar). Above the pages and the toast, below the
     // dimming, screen-off and prompt layers. Held back until the splash is
@@ -323,16 +380,17 @@ Window {
     }
 
     // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
-    // Never fully black, and it lets touches through to the UI below.
+    // Never fully black, and it lets touches through to the UI below. No
+    // dimming at all without the display object.
     Rectangle {
         anchors.fill: parent
-        visible: !display.hardware
+        visible: typeof display !== "undefined" && !display.hardware
         color: "black"
-        opacity: (1 - display.brightness / 100) * 0.85
+        opacity: visible ? (1 - display.brightness / 100) * 0.85 : 0
     }
 
-    // "Screen off": a black layer over the pages and the dim overlay (the
-    // backlight itself is not driven yet, see Display._drive_panel). The tap
+    // "Screen off": a black layer over the pages and the dim overlay (Display
+    // also sets the panel's DDC brightness to 0, see backend/display.py). The tap
     // that wakes it is swallowed so it doesn't press anything underneath.
     // The shutdown prompt below stays above it.
     Rectangle {

@@ -70,6 +70,10 @@ wait(400)
 results["before_ready"] = state()
 
 overlay.setProperty("ready", True)
+media.setProperty("volume", 50.4)        # same rounded level as before: no pop
+wait(400)
+results["same_level"] = state()
+
 media.setProperty("volume", 63)
 wait(400)
 results["shown"] = state()
@@ -117,6 +121,12 @@ class VolumeOverlayTest(unittest.TestCase):
         opacity, visible, _ = self.results["before_ready"]
         self.assertEqual(opacity, 0)
         self.assertFalse(visible)
+
+    def test_same_rounded_level_does_not_pop(self):
+        opacity, visible, level = self.results["same_level"]
+        self.assertEqual(opacity, 0)
+        self.assertFalse(visible)
+        self.assertEqual(level, 50)
 
     def test_volume_change_shows_it_with_the_new_number(self):
         opacity, visible, level = self.results["shown"]

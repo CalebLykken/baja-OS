@@ -32,8 +32,19 @@ Card {
     opacity: 0
     visible: opacity > 0
 
+    // The level and mute state the pill last showed (or was ready with).
+    // MediaHub re-sends volumeChanged when a phone or Spotify takes over,
+    // even if the level hasn't moved; that must not flash the pill.
+    property int seenLevel: -1
+    property bool seenMuted: false
+
+    onReadyChanged: if (ready) { seenLevel = level; seenMuted = muted }
+
     function pop() {
-        if (!ready || quiet) return
+        var moved = level !== seenLevel || muted !== seenMuted
+        seenLevel = level
+        seenMuted = muted
+        if (!moved || !ready || quiet) return
         show.restart()
     }
 

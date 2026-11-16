@@ -1,5 +1,6 @@
 singleton Theme 1.0 Theme.qml
 Card 1.0 Card.qml
+ClockTick 1.0 ClockTick.qml
 NavButton 1.0 NavButton.qml
 IconButton 1.0 IconButton.qml
 Gauge 1.0 Gauge.qml
@@ -32,4 +33,8 @@ StatusStrip 1.0 StatusStrip.qml
 KeyOffCountdown 1.0 KeyOffCountdown.qml
 Prompt 1.0 Prompt.qml
 Toast 1.0 Toast.qml
+DayNightFade 1.0 DayNightFade.qml
 IdleReturn 1.0 IdleReturn.qml
+HomeTurn 1.0 HomeTurn.qml
+HomeGpsStatus 1.0 HomeGpsStatus.qml
+HomeArrive 1.0 HomeArrive.qml

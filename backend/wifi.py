@@ -142,6 +142,14 @@ def scan(rescan):
     return sorted(best.values(), key=lambda n: (not n["active"], -n["signal"]))
 
 
+def saved_elsewhere(saved, networks):
+    """Saved Wi-Fi connections the scan can't see right now, by name, so they can be forgotten."""
+    seen = {n["ssid"] for n in networks}
+    names = {c["ssid"] for c in saved
+             if c.get("type") == "802-11-wireless" and c.get("ssid") and c["ssid"] not in seen}
+    return [{"ssid": s} for s in sorted(names, key=str.lower)]
+
+
 class Wifi(QObject):
     changed = pyqtSignal()
     _scanned = pyqtSignal(object, object, bool)      # networks, saved, canControl
@@ -508,6 +516,10 @@ class Wifi(QObject):
     @pyqtProperty("QVariantList", notify=changed)
     def networks(self):
         return self._networks
+
+    @pyqtProperty("QVariantList", notify=changed)
+    def savedElsewhere(self):
+        return saved_elsewhere(self._saved, self._networks)
 
     @pyqtProperty(str, notify=changed)
     def busy(self):

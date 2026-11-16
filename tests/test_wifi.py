@@ -16,7 +16,7 @@ from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication
 
-from backend.wifi import (HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
+from backend.wifi import (saved_elsewhere, HOTSPOT_ADDRESS, IPHONE_GATEWAY, LOST_SCAN_S, SAFETY_WATCH_MS, TETHER_AFTER_S, UNTETHER_AFTER_S,
                           WATCH_EVERY_MS, Wifi, saved_connections, scan, split_terse, valid_ssid)
 from tests.test_dbus import FakeBus, on_bus
 
@@ -154,6 +154,21 @@ class SavedConnectionsTest(unittest.TestCase):
 
     def test_a_names_own_spaces_stay(self):
         self.assertEqual(self.saved(" Cafe "), " Cafe ")
+
+
+class SavedElsewhereTest(unittest.TestCase):
+    def test_only_wifi_networks_the_scan_cannot_see_sorted(self):
+        w = Wifi({})
+        w._networks = [{"ssid": "Here"}]
+        w._saved = [
+            {"uuid": "1", "ssid": "Zed", "type": "802-11-wireless"},
+            {"uuid": "2", "ssid": "Here", "type": "802-11-wireless"},
+            {"uuid": "3", "ssid": "apple", "type": "802-11-wireless"},
+            {"uuid": "4", "ssid": "Phone BT", "type": "bluetooth"},
+            {"uuid": "5", "ssid": "", "type": "802-11-wireless"},
+        ]
+        self.assertEqual(w.savedElsewhere, [{"ssid": "apple"}, {"ssid": "Zed"}])
+        self.assertEqual(saved_elsewhere([], []), [])
 
 
 class FakeNM:

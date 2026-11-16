@@ -644,6 +644,40 @@ Item {
                 }
             }
 
+            // Saved networks the scan can't see (an old hotspot, home): the Pi keeps
+            // retrying them, so give them a way out.
+            Section {
+                Layout.fillWidth: true
+                heading: "Saved, not in range"
+                visible: wifi.canControl && wifi.savedElsewhere.length > 0
+
+                Repeater {
+                    model: wifi.savedElsewhere
+                    delegate: RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 64
+                        spacing: 12
+                        Label {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            text: modelData.ssid
+                            font.pixelSize: Theme.fontBody
+                        }
+                        Label {
+                            color: Theme.textDim
+                            text: "Not in range"
+                            font.pixelSize: Theme.fontSmall
+                        }
+                        ConfirmButton {
+                            Layout.preferredHeight: 56
+                            text: "Forget"
+                            confirmText: "Sure?"
+                            onConfirmed: wifi.forget(modelData.ssid)
+                        }
+                    }
+                }
+            }
+
             Section {
                 Layout.fillWidth: true
                 heading: "Phone as backup"

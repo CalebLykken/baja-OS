@@ -2,8 +2,10 @@
 warnings, memory, storage, uptime and the installed version, plus
 restart, reboot and shut down.
 
-Readings refresh every few seconds on a background thread. On a Mac most
-of them are simply blank.
+Readings refresh every few seconds on a background thread, but only while
+the System section of Settings is on screen (setActive); start() does one
+check for the version, clock and power-off ability. On a Mac most of the
+readings are simply blank.
 """
 
 import os
@@ -157,8 +159,18 @@ class SystemInfo(QObject):
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
+        # One check only: version, clockSynced and canPower are wanted at
+        # start-up. The repeating check runs while Settings > System is open.
         self._check()
-        self._timer.start()
+
+    @pyqtSlot(bool)
+    def setActive(self, on):
+        """Refresh the readings every few seconds while on, starting with one now."""
+        if on:
+            self._check()
+            self._timer.start()
+        else:
+            self._timer.stop()
 
     def _check(self):
         if self._busy:

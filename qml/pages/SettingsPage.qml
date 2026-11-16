@@ -27,6 +27,10 @@ Item {
     readonly property bool wifiShown: visible && section === 2
     onWifiShownChanged: if (typeof wifi !== "undefined") wifi.setScanning(wifiShown)
 
+    // Check the Pi's health only while the System section is on screen.
+    readonly property bool systemShown: visible && section === 5
+    onSystemShownChanged: if (typeof system !== "undefined") system.setActive(systemShown)
+
     // ---- the section list ------------------------------------------------
     Item {
         id: list

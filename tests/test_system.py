@@ -203,6 +203,33 @@ class StatusCheckTest(unittest.TestCase):
         self.assertEqual(self.version.call_count, 1)
         self.assertEqual(seen[0], "v1 (abc)")
 
+    def test_start_checks_once_without_the_repeating_timer(self):
+        self.check = mock.Mock()
+        self.system._check = self.check
+        self.system.start()
+        self.check.assert_called_once()
+        self.assertFalse(self.system._timer.isActive())
+
+    def test_start_still_delivers_version_and_clock(self):
+        mock.patch("backend.system.clock_synced", return_value=True).start()
+        with mock.patch("backend.system.memory_mb", return_value=(1, 2)), \
+                mock.patch("backend.system.power_state", return_value=""), \
+                mock.patch("backend.system.can_power", return_value=True):
+            self.system.start()
+        self.assertEqual(self.system.version, "v1 (abc)")
+        self.assertTrue(self.system.clockSynced)
+        self.assertFalse(self.system._timer.isActive())
+
+    def test_set_active_checks_at_once_and_runs_the_timer_until_off(self):
+        checks = mock.Mock()
+        self.system._check = checks
+        self.system.setActive(True)
+        checks.assert_called_once()
+        self.assertTrue(self.system._timer.isActive())
+        self.system.setActive(False)
+        self.assertFalse(self.system._timer.isActive())
+        checks.assert_called_once()
+
     def test_a_crashing_version_read_leaves_it_blank_and_checks_go_on(self):
         self.version.side_effect = RuntimeError("git")
         self.check()

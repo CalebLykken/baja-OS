@@ -497,12 +497,27 @@ Item {
                 Label {
                     visible: dataUse.available
                     font.pixelSize: Theme.fontBody
-                    color: Theme.textDim
-                    text: "Data this month: " + dataUse.text
+                    color: dataUse.overLimit ? Theme.warn : Theme.textDim
+                    font.weight: dataUse.overLimit ? Font.DemiBold : Font.Normal
+                    text: "Data this month: " + dataUse.text + (dataUse.limitGb > 0 ? " of " + dataUse.limitGb + " GB" : "")
                 }
                 Note {
                     visible: dataUse.available
                     text: "Counts all Wi-Fi and Bluetooth tether use, not only the phone's hotspot."
+                }
+                SettingRow {
+                    visible: dataUse.available
+                    label: "Data warning"
+                    SegmentedControl {
+                        options: [{ label: "Off", value: 0 }, { label: "5 GB", value: 5 }, { label: "10 GB", value: 10 },
+                                  { label: "20 GB", value: 20 }, { label: "50 GB", value: 50 }]
+                        current: dataUse.limitGb
+                        onPicked: (v) => dataUse.setLimit(v)
+                    }
+                }
+                Note {
+                    visible: dataUse.available
+                    text: "The line turns amber after this much in a month. It only warns; nothing is switched off."
                 }
             }
 

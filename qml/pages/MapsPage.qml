@@ -819,6 +819,11 @@ Item {
             // only plays on the change to arrived, not when the page opens
             // already arrived, and everything stops by itself.
             readonly property bool arrivedNow: page.hasRouting && routing.arrived
+            // Guidance that can't be trusted: the truck left the line and the
+            // new route hasn't landed, or asking for one failed (the old line
+            // stays, so its arrow is stale).
+            readonly property bool offNow: page.hasRouting && routing.offRoute && !routing.computing && !routing.arrived
+            readonly property bool lostNow: page.hasRouting && routing.error !== "" && !routing.computing && !routing.arrived
             property real barFill: 0
             function resetArrival() {
                 arrivalMoment.stop()
@@ -854,15 +859,15 @@ Item {
                     id: turnIcon
                     Layout.alignment: Qt.AlignTop
                     transform: Translate { id: iconDrop }     // a RowLayout owns x/y, so drop with a transform
-                    name: page.hasRouting && routing.computing ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
+                    name: page.hasRouting && (routing.computing || turnCard.offNow) ? "refresh" : (page.hasRouting ? routing.maneuverIcon || "straight" : "straight")
                     size: 112
-                    color: page.cOnBanner
+                    color: turnCard.lostNow ? page.cDim : page.cOnBanner
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 2
                     MapLabel {
-                        visible: page.hasRouting && !routing.arrived && !routing.computing
+                        visible: page.hasRouting && !routing.arrived && !routing.computing && !turnCard.offNow
                         numeric: true
                         text: page.hasRouting ? Units.distanceText(routing.distanceToTurn) : ""
                         color: page.cOnBanner
@@ -875,7 +880,9 @@ Item {
                         wrapMode: Text.WordWrap
                         maximumLineCount: 3
                         elide: Text.ElideRight
-                        text: !page.hasRouting ? "" : routing.computing ? "Finding a new route" : routing.instruction
+                        text: !page.hasRouting ? "" : routing.computing ? "Finding a new route"
+                              : turnCard.offNow ? "Off route"
+                              : turnCard.lostNow ? "No new route found. Retrying" : routing.instruction
                         color: page.cOnBanner
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold

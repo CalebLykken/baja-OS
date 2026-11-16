@@ -112,6 +112,13 @@ class QmlTest(unittest.TestCase):
     def test_the_turn_card_shows_it(self):
         self.assertIn("routing.arrivalSummary", (ROOT / "qml/pages/MapsPage.qml").read_text())
 
+    def test_the_turn_card_shows_off_route_and_a_failed_reroute(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        card = text[text.index("id: turnCard"):]
+        card = card[:card.index("id: thenStrip")] if "id: thenStrip" in card else card
+        self.assertIn("routing.offRoute", card)
+        self.assertIn("routing.error", card)
+
 
 if __name__ == "__main__":
     unittest.main()

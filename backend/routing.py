@@ -771,6 +771,7 @@ class Router(QObject):
             self.changed.emit()
             return
         self._stops_failed = ""
+        self._error = ""            # a good route ends any "no new route" notice
         self._route = route
         self._arrived = False
         self._arrival_summary = ""

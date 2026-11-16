@@ -255,6 +255,32 @@ class FollowingTest(unittest.TestCase):
         self.fix(3, 492, 0, 3.0)
         self.assertTrue(self.router.arrived)
 
+    def test_off_route_then_a_failed_reroute_keeps_the_line_and_says_why(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        self.assertFalse(self.router.offRoute)
+        for n in (100, 110, 120, 130):
+            self.fix(80, n, 0)                       # 80 m east of the line
+        self.assertTrue(self.router.offRoute)
+        message = "Routing isn't running"
+        answer(self.router, None, message, "Shop", True)
+        self.assertTrue(self.router.active)
+        self.assertEqual(self.router.error, message)
+        self.assertTrue(self.router.offRoute)
+        answer(self.router, straight, "", "Shop", True)
+        self.assertEqual(self.router.error, "")
+        self.assertFalse(self.router.offRoute)
+
+    def test_stop_clears_a_failed_reroute(self):
+        straight = response([(0, 0), (0, 500)], [step(1, 0, "Drive north."), step(4, 1, "You have arrived.")])
+        self.start(straight)
+        for n in (100, 110, 120, 130):
+            self.fix(80, n, 0)
+        answer(self.router, None, "No route found", "Shop", True)
+        self.router.stop()
+        self.assertEqual(self.router.error, "")
+        self.assertFalse(self.router.offRoute)
+
 
 # North past two stops to the shop, a leg each, with a turn to take after
 # the first stop. Every maneuver is numbered from its own leg's start.

@@ -11,6 +11,10 @@ Column {
     property string value
     property string unit
     property bool warning: false
+    // Marks the legend in the accent colour (Blaze, "active or selected") for a
+    // state that is not a fault, such as a warm-up. Ember still wins over it,
+    // and a placeholder value is never marked.
+    property bool highlight: false
     // Callers can raise the numeral above the standard readout size.
     property int numeralSize: Theme.fontReadout
     // The widest text the numeral can show (e.g. "000"). When set, the numeral
@@ -60,7 +64,7 @@ Column {
     Legend {
         objectName: "readoutLegend"
         text: r.label
-        color: r._warn ? Theme.warn : Theme.textDim
+        color: r._warn ? Theme.warn : (r.highlight && !r.placeholder ? Theme.accent : Theme.textDim)
         Behavior on color { ColorAnimation { duration: 180 } }
     }
     TextMetrics {

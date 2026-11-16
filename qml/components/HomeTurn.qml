@@ -44,14 +44,15 @@ Rectangle {
                     objectName: "homeTurnDistance"
                     Layout.fillWidth: true
                     numeric: true
-                    // Shrinks rather than pushing the "Then" group off the card.
+                    // The biggest thing on the card: it is what the driver reads while moving.
+                    // Shrinks to fit rather than pushing the "Then" group off the card.
                     fontSizeMode: Text.Fit
-                    minimumPixelSize: Theme.fontSmall
+                    minimumPixelSize: Theme.fontReadout
                     elide: Text.ElideRight
                     text: card.rerouting ? "Rerouting"
                           : typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
                     color: Theme.base.text
-                    font.pixelSize: Theme.fontReadout
+                    font.pixelSize: Theme.fontHuge
                 }
                 // The turn after this one, for a quick lane change on a short block.
                 RowLayout {

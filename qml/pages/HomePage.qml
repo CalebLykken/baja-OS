@@ -137,11 +137,23 @@ Item {
         }
 
         Card {
+            id: readoutCard
+            objectName: "homeReadoutCard"
             Layout.fillWidth: true
             // Grows by a line while the engine note shows, so nothing overlaps.
             Layout.preferredHeight: engineNote.visible ? 184 : 152
             tappable: true
             onTapped: page.navigate(3)
+
+            // Any engine warning (the MIL lamp included, which has no numeral to
+            // turn Ember) gives the strip a steady Ember border, which stays
+            // after the one-shot pulse ends. The change eases over 180 ms.
+            // Set by a Binding at the bottom, like the readouts, so it reads
+            // nothing while Home is hidden (vehicle.changed fires 5 times a second).
+            property bool anyWarning: false
+            border.color: anyWarning ? Theme.warn : Theme.line
+            border.width: anyWarning ? Theme.border + 1 : Theme.border
+            Behavior on border.color { ColorAnimation { duration: 180 } }
 
             ColumnLayout {
                 anchors { fill: parent; margins: 20 }
@@ -178,6 +190,7 @@ Item {
                         Layout.preferredWidth: 1
                         label: page.warmingUp ? "Warming up" : "Coolant"
                         widest: "000"
+                        highlight: page.warmingUp
                         unit: Units.tempUnit
                     }
                     Readout {
@@ -209,19 +222,25 @@ Item {
     // fires 5 times a second and nobody sees these on another page. A Binding
     // still evaluates its value while "when" is false, so each expression is
     // guarded by page.visible too and reads nothing while hidden. RestoreNone
-    // keeps the last value when the binding pauses; they refresh on return.
+    // keeps the last value when the binding pauses; they refresh on return. The
+    // hidden branch is the target's own value, not undefined: Qt doesn't promise
+    // "when" goes false before value is re-evaluated, and a stray undefined would
+    // blank the readout and drop its warning flag.
     Binding { target: boostReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : undefined }
+        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : boostReadout.value }
     Binding { target: boostReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : boostReadout.warning }
     Binding { target: coolantReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : undefined }
+        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : coolantReadout.value }
     Binding { target: coolantReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : coolantReadout.warning }
     Binding { target: batteryReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : undefined }
+        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : batteryReadout.value }
     Binding { target: batteryReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : batteryReadout.warning }
     Binding { target: speedReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : undefined }
+        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : speedReadout.value }
+    // Written as a length check so a vehicle without warnings is fine.
+    Binding { target: readoutCard; property: "anyWarning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (typeof vehicle.warnings !== "undefined" && vehicle.warnings.length > 0) : readoutCard.anyWarning }
 }

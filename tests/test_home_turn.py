@@ -98,6 +98,10 @@ class Routing(QObject):
         self._icon = v
         self.progressChanged.emit()
 
+    def setDistance(self, v):
+        self._distance = v
+        self.progressChanged.emit()
+
 
 def wait(ms):
     loop = QEventLoop()
@@ -154,6 +158,22 @@ results["done"] = snap()
 routing.setArrived(True)
 wait(50)
 results["arrived"] = snap()
+
+# The big distance at a long reading, in metric: it must shrink to fit, never clip.
+routing.setArrived(False)
+routing.setDistance(1700.0)
+helper_component = QQmlComponent(engine)
+helper_component.setData(b'import QtQuick\nimport "qml/components"\nQtObject { function setMetric(v) { Units.metric = v } }',
+                         QUrl.fromLocalFile(str(ROOT / "y.qml")))
+helper = helper_component.create()
+engine.globalObject().setProperty("helper", engine.newQObject(helper))
+engine.evaluate("helper.setMetric(true)")
+wait(400)
+distance = child("homeTurnDistance")
+results["long_distance"] = {"text": distance.property("text"),
+                            "pixel_size": distance.property("font").pixelSize(),
+                            "content_width": distance.property("contentWidth"),
+                            "width": distance.property("width")}
 
 print(json.dumps(results))
 sys.stdout.flush()
@@ -220,6 +240,12 @@ class HomeTurnTest(unittest.TestCase):
 
     def test_arrived_hides_distance(self):
         self.assertIs(self.results["arrived"]["distance_visible"], False)
+
+    def test_distance_is_the_biggest_text_on_the_card(self):
+        long = self.results["long_distance"]
+        self.assertEqual(long["text"], "1.7 km")
+        self.assertGreaterEqual(long["pixel_size"], 56)
+        self.assertLessEqual(long["content_width"], long["width"])
 
 
 if __name__ == "__main__":

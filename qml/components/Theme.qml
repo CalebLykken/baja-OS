@@ -72,6 +72,15 @@ QtObject {
             accent: "#3fc1b0", warn: "#ff5a36", ok: "#b6c96a",
             font: "", numFont: "Nimbus Sans", numItalic: false, numWeight: Font.Bold,
             radius: 8, border: 2, gauge: "arc", backdrop: "topo"
+        },
+        // Glacier: ice cyan on deep teal-black. The roundest look, with
+        // generous corners and a cool, crisp accent that reads well at night.
+        glacier: {
+            bg: "#071216", panel: "#0e2027", panelTop: "#132932", panelHi: "#1a3540",
+            line: "#2f5663", text: "#e8f6f9", textDim: "#8fb2bd",
+            accent: "#7fe0f0", warn: "#ff5f4d", ok: "#8fe0a8",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 20, border: 1, gauge: "arc", backdrop: "dial"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -115,13 +124,20 @@ QtObject {
             bg: "#eadfc6", panel: "#f8f1e1", panelTop: "#fcf8ee", panelHi: "#e2d5b6",
             line: "#cbb994", text: "#2a2014", textDim: "#6d5d44",
             accent: "#0b766a", warn: "#c4321f", ok: "#5a7a1e"
+        },
+        // Glacier by day: a bright near-white ground with cool blue-grey
+        // panels, and the cyan deepened so it holds on the light ground.
+        glacier: {
+            bg: "#e3eef2", panel: "#f6fafb", panelTop: "#ffffff", panelHi: "#d7e6ec",
+            line: "#b4cbd4", text: "#0b1d24", textDim: "#476470",
+            accent: "#0a6f8c", warn: "#c8321f", ok: "#22804a"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
                                           rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
-                                          desert: "Desert" })
+                                          desert: "Desert", glacier: "Glacier" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

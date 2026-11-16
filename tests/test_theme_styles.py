@@ -126,6 +126,20 @@ class StyleTableTest(unittest.TestCase):
         self.assertIn("desert", main_choices())
         self.assertEqual(self.out["titles"]["desert"], "Desert")
 
+    def test_glacier_is_ice_cyan_and_round(self):
+        # Glacier: cyan accent on deep teal-black at night, cool near-white by
+        # day, and the roundest corners of any style.
+        night = self.out["night"]["glacier"]
+        day = self.out["day"]["glacier"]
+        self.assertEqual(night["bg"], "#071216")
+        self.assertEqual(night["accent"], "#7fe0f0")
+        self.assertEqual(day["bg"], "#e3eef2")
+        self.assertEqual(day["accent"], "#0a6f8c")
+        self.assertEqual(night["radius"], 20)
+        self.assertEqual(night["backdrop"], "dial")
+        self.assertIn("glacier", main_choices())
+        self.assertEqual(self.out["titles"]["glacier"], "Glacier")
+
 
 if __name__ == "__main__":
     unittest.main()

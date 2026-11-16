@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import "../components"
+import "../components/AlphaIndex.js" as AlphaIndex
 
 // The Music page, full screen like Maps (the clock moves into the rail).
 //
@@ -460,7 +461,8 @@ Item {
                 Row {
                     id: playKeys
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 0
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12
+                              rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
                     height: Theme.touch
                     spacing: Theme.gap
                     TextButton {
@@ -483,7 +485,8 @@ Item {
                 GridView {
                     id: albumGrid
                     visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen
-                    anchors { fill: parent; margins: 12; topMargin: playKeys.visible ? playKeys.height + 24 : 12 }
+                    anchors { fill: parent; margins: 12; topMargin: playKeys.visible ? playKeys.height + 24 : 12
+                              rightMargin: alphaRail.visible ? alphaRail.width + 24 : 12 }
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
@@ -506,6 +509,36 @@ Item {
                         icon: media.scanning ? "refresh" : "album"
                         title: media.scanning ? "Reading your music" : "The shelf is empty"
                         hint: media.scanning ? "Songs show up as they're found" : "Albums copied into ~/Music on the Pi show up here"
+                    }
+                }
+
+                // Jump rail: big letter buckets for a long library. It only
+                // rebuilds when the album list changes.
+                Column {
+                    id: alphaRail
+                    visible: page.tab === "albums" && page.openAlbum < 0 && !page.eqOpen && media.albums.length > 15
+                    readonly property var buckets: AlphaIndex.buckets(page.albums.map(function (a) { return a.artist }))
+                    width: 64
+                    anchors { right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12; bottom: parent.bottom; bottomMargin: 12 }
+                    Repeater {
+                        model: alphaRail.buckets
+                        delegate: Item {
+                            width: alphaRail.width
+                            height: Math.max(56, alphaRail.height / 9)
+                            Label {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                font.pixelSize: Theme.fontSmall
+                                font.bold: modelData.index >= 0
+                                color: Theme.text
+                                opacity: modelData.index >= 0 ? 1 : 0.3
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: modelData.index >= 0
+                                onClicked: albumGrid.positionViewAtIndex(Math.floor(modelData.index / 5) * 5, GridView.Beginning)
+                            }
+                        }
                     }
                 }
 

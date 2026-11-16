@@ -1028,14 +1028,27 @@ Item {
                         label: "Memory used"
                         value: system.memTotal > 0 ? (system.memUsed / 1024).toFixed(1) : "–"
                         unit: system.memTotal > 0 ? "of " + Math.round(system.memTotal / 1024) + " GB" : ""
+                        // Nearly out of memory: more than 90 % in use.
+                        warning: system.memTotal > 0 && system.memUsed > 0.9 * system.memTotal
                     }
                     Readout {
                         Layout.fillWidth: true; Layout.preferredWidth: 1
                         label: "Storage free"
                         value: system.diskTotal > 0 ? Math.round(system.diskFree) : "–"
                         unit: system.diskTotal > 0 ? "of " + Math.round(system.diskTotal) + " GB" : ""
+                        // Under 2 GB left: the map update and the logs need room.
+                        warning: system.diskTotal > 0 && system.diskFree < 2
                     }
-                    Item { Layout.fillWidth: true; Layout.preferredWidth: 1 }
+                    Readout {
+                        Layout.fillWidth: true; Layout.preferredWidth: 1
+                        label: "Pi supply"
+                        // The lowest reading since start stays in the unit, so the
+                        // dip is still visible after the voltage recovers.
+                        value: powerLog.supply < 0 ? "–" : powerLog.supply.toFixed(2)
+                        unit: powerLog.supply < 0 ? ""
+                              : (powerLog.lowest >= 0 ? "V, low " + powerLog.lowest.toFixed(2) : "V")
+                        warning: powerLog.supply >= 0 && powerLog.lowest < 4.8
+                    }
                 }
                 Label {
                     Layout.fillWidth: true
@@ -1044,13 +1057,6 @@ Item {
                     color: system.power !== "" || system.errors > 0 ? Theme.warn : Theme.textDim
                     text: (system.power !== "" ? system.power : "Power supply and temperature are fine")
                           + (system.errors > 0 ? " · " + system.errors + (system.errors === 1 ? " error" : " errors") + " since start" : "")
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: powerLog.supply >= 0
-                    font.pixelSize: Theme.fontBody
-                    color: powerLog.lowest < 4.8 ? Theme.warn : Theme.textDim
-                    text: "Pi supply " + powerLog.supply.toFixed(2) + " V, lowest " + powerLog.lowest.toFixed(2) + " V"
                 }
             }
 

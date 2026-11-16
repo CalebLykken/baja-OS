@@ -674,7 +674,8 @@ Item {
                     MapLabel {
                         width: parent.width
                         wrapMode: Text.WordWrap
-                        maximumLineCount: 2
+                        // One line while a route shows, so Go always has room.
+                        maximumLineCount: page.hasRouting && routing.previewing ? 1 : 2
                         elide: Text.ElideRight
                         text: page.place ? page.place.name : ""
                         font.pixelSize: Theme.fontTitle + 4
@@ -687,7 +688,6 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    Item { width: 1; height: 6 }
                     // Keep it: Home, Work or a favourite (each lit when it is, tap to undo).
                     RowLayout {
                         width: parent.width
@@ -711,7 +711,6 @@ Item {
                             onHit: page.toggleFavourite(page.place)
                         }
                     }
-                    Item { width: 1; height: 12 }
                     // The route, worked out as soon as the place was picked.
                     MapLabel {
                         visible: page.hasRouting && routing.previewing
@@ -728,40 +727,50 @@ Item {
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    // The main road, and a warning if there is a toll.
+                    // The main road, and a warning if there is a toll. This one line also
+                    // says when the route is being worked out again (a route option
+                    // changed) or that failed, so the card never grows past Go.
                     MapLabel {
-                        visible: page.hasRouting && routing.previewing && (routing.via !== "" || routing.hasToll)
+                        visible: page.hasRouting && routing.previewing && (routing.via !== "" || routing.hasToll || routing.computing || routing.error !== "")
                         width: parent.width
                         elide: Text.ElideRight
                         maximumLineCount: 1
-                        text: page.hasRouting ? (routing.via !== "" ? "via " + routing.via : "")
-                                                + (routing.hasToll ? (routing.via !== "" ? " \u00b7 " : "") + "Toll road" : "") : ""
+                        text: !page.hasRouting ? ""
+                              : routing.computing ? "Finding a route"
+                              : routing.error !== "" ? routing.error
+                              : (routing.via !== "" ? "via " + routing.via : "")
+                                + (routing.hasToll ? (routing.via !== "" ? " \u00b7 " : "") + "Toll road" : "")
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
                     MapLabel {
                         visible: page.hasRouting && routing.previewing && routing.stopCount > 0
                         width: parent.width
-                        wrapMode: Text.WordWrap
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
                         text: page.hasRouting ? "Stops: " + routing.stops.map(s => s.name).join(", ") : ""
                         color: page.cDim
                         font.pixelSize: Theme.fontBody
                     }
-                    // A ferry on the way, one row per crossing.
-                    Repeater {
-                        model: page.hasRouting && routing.previewing ? routing.ferries : []
-                        Row {
-                            width: parent.width
-                            spacing: 8
-                            Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
-                            MapLabel {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 40
-                                wrapMode: Text.WordWrap
-                                text: "Ferry" + (modelData.name !== "Ferry" ? ": " + modelData.name : "") + (modelData.minutes > 0 ? ", " + modelData.minutes + " min" : "")
-                                color: page.cDim
-                                font.pixelSize: Theme.fontBody
+                    // A ferry on the way: one line, the first crossing and how many more.
+                    Row {
+                        visible: page.hasRouting && routing.previewing && routing.ferries.length > 0
+                        width: parent.width
+                        spacing: 8
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "ferry"; size: 32; color: page.cDim }
+                        MapLabel {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 40
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                            text: {
+                                if (!page.hasRouting || routing.ferries.length === 0) return ""
+                                var f = routing.ferries[0]
+                                return "Ferry" + (f.name !== "Ferry" ? ": " + f.name : "") + (f.minutes > 0 ? ", " + f.minutes + " min" : "")
+                                       + (routing.ferries.length > 1 ? " + " + (routing.ferries.length - 1) + " more" : "")
                             }
+                            color: page.cDim
+                            font.pixelSize: Theme.fontBody
                         }
                     }
                     // Avoid options, one tap away: lit while that kind of road is
@@ -785,15 +794,6 @@ Item {
                             lit: page.hasRouting && routing.avoidFerries
                             onHit: routing.setAvoid("avoidFerries", !routing.avoidFerries)
                         }
-                    }
-                    // Being worked out again (a route option changed), or that failed.
-                    MapLabel {
-                        visible: page.hasRouting && routing.previewing && (routing.computing || routing.error !== "")
-                        width: parent.width
-                        wrapMode: Text.WordWrap
-                        text: !page.hasRouting ? "" : routing.computing ? "Finding a route" : routing.error
-                        color: page.cDim
-                        font.pixelSize: Theme.fontBody
                     }
                     MapLabel {
                         visible: !page.hasRouting || !routing.previewing
@@ -1727,7 +1727,8 @@ Item {
         signal hit()
         Layout.fillWidth: true
         Layout.preferredWidth: 100
-        Layout.preferredHeight: 100
+        // Shorter while a route preview shows, to leave room for the chips and Go.
+        Layout.preferredHeight: page.hasRouting && routing.previewing ? 76 : 100
         radius: Theme.radius
         color: skTap.pressed ? page.cLine : sk.lit ? Qt.rgba(page.cBlue.r, page.cBlue.g, page.cBlue.b, 0.16) : page.cPanelHi
         Column {

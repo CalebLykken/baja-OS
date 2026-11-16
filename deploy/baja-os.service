@@ -21,6 +21,11 @@ User=@USER@
 WorkingDirectory=@APP@
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus
+# On a restart (Plymouth was quit when the app stopped) bring the boot screen
+# back, so a recovery shows the truck and its loading bar rather than a
+# black or text console. At boot Plymouth is already up and this does nothing.
+# Bounded, and allowed to fail: it must never hold up the dashboard.
+ExecStartPre=+-/usr/bin/timeout 4 /bin/sh -c 'pidof plymouthd >/dev/null || { /usr/sbin/plymouthd --mode=boot && /usr/bin/plymouth show-splash && sleep 0.4; }'
 ExecStartPre=+-/usr/bin/plymouth deactivate
 ExecStart=@APP@/run.sh
 # Don't quit Plymouth while the app runs: quitting hands the screen back to
@@ -28,19 +33,21 @@ ExecStart=@APP@/run.sh
 # Deactivated, Plymouth just idles. It's quit only once the app has stopped.
 ExecStopPost=+-/usr/bin/plymouth quit
 
-# Come back from anything: crashes (any exit code), and hangs. The app sends
-# READY once its window is up and then pings the watchdog from the UI
-# thread (backend/systemd.py); if the UI freezes for 20 s it's restarted.
+# Come back from anything, quickly: crashes (any exit code), and hangs. The app
+# sends READY once its window is up and then pings the watchdog from the UI
+# thread (backend/systemd.py); if the UI freezes for 15 s it's restarted. A
+# start that hangs ends itself after 30 s (main.py); the start timeout is only
+# the backstop, above run.sh's 30 s wait for a screen plus that.
 # The app is a child of run.sh, hence NotifyAccess=all.
 Type=notify
 NotifyAccess=all
-TimeoutStartSec=90
-WatchdogSec=20
+TimeoutStartSec=70
+WatchdogSec=15
 Restart=always
-RestartSec=3
-# A frozen app can't act on SIGTERM; force-kill after 5 s instead of the
+RestartSec=1
+# A frozen app can't act on SIGTERM; force-kill after 3 s instead of the
 # default 90 so a hang costs seconds, not a minute and a half.
-TimeoutStopSec=5
+TimeoutStopSec=3
 
 [Install]
 WantedBy=multi-user.target

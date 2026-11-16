@@ -1,13 +1,99 @@
-# Baja OS boot screen. Draws the truck exactly where qml/components/Splash.qml
-# does (78% of the screen width, max 1000 px, centered, 30 px above center,
-# on #050506), so the app's splash takes over without a visible jump.
+# Baja OS boot screen. Matches qml/components/Splash.qml exactly, so the
+# app's splash takes over mid-animation without a visible jump:
+#   - #050506 background
+#   - the truck at 70% of the screen width (max 900 px), centered,
+#     40 px above the screen center
+#   - a 4 px loading bar 56 px below the truck: a #16202E track with a
+#     #5B8FD0 segment ping-ponging inside it, one round trip every 1.6 s
+#     with smoothstep easing on each leg.
+# Everything is computed from the window size, so any panel works.
 
 Window.SetBackgroundTopColor(0.0196, 0.0196, 0.0235);
 Window.SetBackgroundBottomColor(0.0196, 0.0196, 0.0235);
 
-truck = Image("baja.png");
-w = Math.Min(Window.GetWidth() * 0.78, 1000);
-h = w * truck.GetHeight() / truck.GetWidth();
-sprite = Sprite(truck.Scale(w, h));
-sprite.SetX(Window.GetX() + (Window.GetWidth() - w) / 2);
-sprite.SetY(Window.GetY() + (Window.GetHeight() - h) / 2 - 30);
+screen_x = Window.GetX();
+screen_y = Window.GetY();
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+
+# Truck
+truck_image = Image("baja.png");
+truck_w = Math.Min(screen_w * 0.70, 900);
+truck_h = truck_w * truck_image.GetHeight() / truck_image.GetWidth();
+truck_top = screen_y + (screen_h - truck_h) / 2 - 40;
+truck_sprite = Sprite(truck_image.Scale(truck_w, truck_h));
+truck_sprite.SetX(Math.Int(screen_x + (screen_w - truck_w) / 2));
+truck_sprite.SetY(Math.Int(truck_top));
+truck_sprite.SetZ(1);
+
+# Loading bar (scaled once here, never per frame)
+track_w = Math.Int(Math.Min(screen_w * 0.22, 280));
+seg_w = Math.Int(track_w * 0.3);
+bar_h = 4;
+track_x = Math.Int(screen_x + (screen_w - track_w) / 2);
+bar_y = Math.Int(truck_top + truck_h + 56);
+seg_travel = track_w - seg_w;
+
+track_sprite = Sprite(Image("bar-track.png").Scale(track_w, bar_h));
+track_sprite.SetX(track_x);
+track_sprite.SetY(bar_y);
+track_sprite.SetZ(2);
+
+seg_sprite = Sprite(Image("bar-seg.png").Scale(seg_w, bar_h));
+seg_sprite.SetX(track_x);
+seg_sprite.SetY(bar_y);
+seg_sprite.SetZ(3);
+
+# Plymouth calls this about 50 times a second: 80 frames = 1.6 s per cycle,
+# 40 frames out and 40 back.
+frame = 0;
+
+fun refresh_callback ()
+  {
+    global.frame = global.frame + 1;
+    if (global.frame >= 80)
+      {
+        global.frame = 0;
+      }
+
+    if (global.frame < 40)
+      {
+        t = global.frame / 40;
+      }
+    else
+      {
+        t = (80 - global.frame) / 40;
+      }
+
+    p = t * t * (3 - 2 * t);
+    seg_sprite.SetX(Math.Int(track_x + seg_travel * p));
+  }
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# Messages and password prompts (an fsck notice, for example) draw nothing;
+# the sweep keeps running underneath.
+fun message_callback (text)
+  {
+    ignored = 0;
+  }
+
+fun password_callback (prompt, bullets)
+  {
+    ignored = 0;
+  }
+
+fun question_callback (prompt, entry)
+  {
+    ignored = 0;
+  }
+
+fun normal_callback ()
+  {
+    ignored = 0;
+  }
+
+Plymouth.SetMessageFunction(message_callback);
+Plymouth.SetDisplayPasswordFunction(password_callback);
+Plymouth.SetDisplayQuestionFunction(question_callback);
+Plymouth.SetDisplayNormalFunction(normal_callback);

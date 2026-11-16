@@ -177,11 +177,13 @@ for f in cmdline.txt config.txt; do
 done
 # Kernel messages go to hidden tty3; no logo, no blinking cursor, and no
 # systemd "[  OK  ]" / "[FAILED]" lines or udev chatter on screen, even when a
-# service fails. Single line.
+# service fails. plymouth.ignore-serial-consoles: with the serial console on
+# the cmdline (Pi OS Lite adds it) Plymouth otherwise falls back to its text
+# splash. Single line.
 CMD=$(sed 's/console=tty1/console=tty3/' "$FW/cmdline.txt" | tr -d '\n')
 for opt in quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0 \
     systemd.show_status=false rd.systemd.show_status=false \
-    udev.log_level=3 rd.udev.log_level=3; do
+    udev.log_level=3 rd.udev.log_level=3 plymouth.ignore-serial-consoles; do
     case " $CMD " in *" $opt "*) ;; *) CMD="$CMD $opt" ;; esac
 done
 printf '%s\n' "$CMD" > "$FW/cmdline.txt"
@@ -209,8 +211,14 @@ fi
 echo "== Boot screen"
 [ -f /etc/baja-plymouth-theme.backup ] || plymouth-set-default-theme > /etc/baja-plymouth-theme.backup
 mkdir -p /usr/share/plymouth/themes/baja
+# The boot image (initramfs) carries its own copy of the theme, so a changed
+# truck or script only shows after a rebuild: do one whenever a file differs.
+theme_changed=""
+for f in "$HERE"/plymouth/*; do
+    cmp -s "$f" "/usr/share/plymouth/themes/baja/$(basename "$f")" || theme_changed=1
+done
 cp "$HERE"/plymouth/* /usr/share/plymouth/themes/baja/
-if [ "$(plymouth-set-default-theme)" != baja ] || [ "$1" = --rebuild ]; then
+if [ "$(plymouth-set-default-theme)" != baja ] || [ -n "$theme_changed" ] || [ "$1" = --rebuild ]; then
     echo "   rebuilding the boot image (a few minutes on a Pi 2)"
     plymouth-set-default-theme -R baja
 fi

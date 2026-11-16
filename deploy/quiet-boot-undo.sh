@@ -10,7 +10,7 @@ set -e
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 FW=/boot/firmware
 # The options setup adds to cmdline.txt (it also moves console=tty1 to tty3).
-QUIET="quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0 systemd.show_status=false rd.systemd.show_status=false udev.log_level=3 rd.udev.log_level=3"
+QUIET="quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0 systemd.show_status=false rd.systemd.show_status=false udev.log_level=3 rd.udev.log_level=3 plymouth.ignore-serial-consoles"
 trap 'rm -f "$FW/cmdline.txt.baja-new" "$FW/config.txt.baja-new"' EXIT
 
 # Setup's first run kept a copy of each file (*.baja-backup). The copies only

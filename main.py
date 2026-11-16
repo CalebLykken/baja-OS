@@ -24,11 +24,15 @@ from pathlib import Path
 from backend.startup import StartupClock
 clock = StartupClock()
 
-# If start-up hangs before systemd hears READY (it kills the app at 90 s),
-# write where every thread is stuck to the journal first. Cancelled once
-# READY is sent. faulthandler works from C, so a stuck main thread can't stop it.
-STARTUP_STACKS_AFTER = 45
-faulthandler.dump_traceback_later(STARTUP_STACKS_AFTER, exit=False)
+# A start that hangs before READY ends itself quickly: faulthandler writes where
+# every thread is stuck to the journal, then exits, and systemd (Restart=always)
+# starts the dashboard again a second later, instead of waiting out its own
+# start timeout. A normal start reaches READY in about 5 s at boot, under 1 s
+# after; this is cancelled then. faulthandler runs from C, so a stuck main
+# thread can't stop it. Only when run as the dashboard: tests import this file.
+STARTUP_LIMIT_S = 30
+if __name__ == "__main__":
+    faulthandler.dump_traceback_later(STARTUP_LIMIT_S, exit=True)
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
 # set before Qt loads, so it lives above the PyQt imports.

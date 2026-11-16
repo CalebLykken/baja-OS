@@ -1,6 +1,6 @@
 [Plymouth Theme]
 Name=Baja OS
-Description=The Baja's side profile in the dark, handing off to the Baja OS splash
+Description=The Baja's side profile in the dark, with a sweeping blue loading bar beneath it, handing off to the Baja OS splash
 ModuleName=script
 
 [script]

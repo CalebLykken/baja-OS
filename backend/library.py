@@ -38,7 +38,7 @@ from backend.gapless import GaplessEngine
 EQ_SINK = "baja_eq"           # the equalizer's input (deploy/audio/baja-eq.conf)
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav"}
 REPEATS = ("all", "one", "off")      # the order the key cycles; "all" is how it always played
-NO_SONG = {"title": "", "artist": "", "art": "", "duration": 0}
+NO_SONG = {"title": "", "artist": "", "album": "", "art": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
@@ -702,6 +702,10 @@ class LibraryPlayer(QObject):
     @pyqtProperty(str, notify=trackChanged)
     def artist(self):
         return self._song()["artist"]
+
+    @pyqtProperty(str, notify=trackChanged)
+    def albumTitle(self):
+        return self._song().get("album", "")
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):

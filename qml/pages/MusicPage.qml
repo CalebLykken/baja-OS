@@ -27,6 +27,15 @@ Item {
     property bool searchOpen: false            // the Spotify tab shows search rather than recents
     property string spotifyView: "recent"      // "recent", "playlists", "albums" or "liked"
     readonly property bool hasAccount: typeof spotifyAccount !== "undefined"
+
+    // The artist, then the album: "Boxer Rebellion · Bed Liner Sessions".
+    // "Unknown artist" (untagged files) is left out.
+    function artistLine(artist, album) {
+        var parts = []
+        if (artist && artist !== "Unknown artist") parts.push(artist)
+        if (album) parts.push(album)
+        return parts.join(" \u00b7 ")
+    }
     readonly property bool libraryView: spotifyView !== "recent"
     readonly property bool needsLink: libraryView && hasAccount && !spotifyAccount.linked
     property bool typing: false                // the keyboard is up
@@ -231,9 +240,10 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            text: page.spotifyError !== "" ? page.spotifyError : media.artist
+                            text: page.spotifyError !== "" ? page.spotifyError : page.artistLine(media.artist, media.albumTitle)
                             color: page.spotifyError !== "" ? Theme.warn : Theme.textDim
                             font.pixelSize: Theme.fontBody
+                            maximumLineCount: 1
                             elide: Text.ElideRight
                         }
 
@@ -415,7 +425,7 @@ Item {
                     anchors { top: parent.top; left: parent.left; right: parent.right; margins: 10; topMargin: 52 }
                     current: true
                     title: media.title
-                    subtitle: "Now playing" + (media.artist !== "" ? "  \u00b7  " + media.artist : "")
+                    subtitle: "Now playing" + (page.artistLine(media.artist, "") !== "" ? "  \u00b7  " + page.artistLine(media.artist, "") : "")
                     tappable: false
                 }
                 ListView {

@@ -574,6 +574,12 @@ class MediaHub(QObject):
         return self._active.artist
 
     @pyqtProperty(str, notify=trackChanged)
+    def albumTitle(self):
+        """The album of the Pi's song playing; '' for the phone and Spotify,
+        which don't send it here."""
+        return self._sources["local"].albumTitle if self._source == "local" else ""
+
+    @pyqtProperty(str, notify=trackChanged)
     def art(self):
         return self._art_field(0)
 

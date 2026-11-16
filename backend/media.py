@@ -32,7 +32,7 @@ DEMO_ALBUMS = [
     ]},
 ]
 DEMO_QUEUE = [dict(t) for a in DEMO_ALBUMS for t in a["tracks"]]   # every song, in album order
-NO_SONG = {"title": "", "artist": "", "duration": 0}
+NO_SONG = {"title": "", "artist": "", "album": "", "duration": 0}
 NO_STATE = {"album": None, "path": "", "index": 0, "position": 0}   # state() with nothing to resume
 
 
@@ -119,6 +119,21 @@ class MediaPlayer(QObject):
     @pyqtProperty(str, notify=trackChanged)
     def artist(self):
         return self._song()["artist"]
+
+    @pyqtProperty(str, notify=trackChanged)
+    def albumTitle(self):
+        """The demo album the song is on: the one playing, or for a song from
+        all songs, the album it sits in. '' for a queue passed in."""
+        if not self._albums or not self._queue or self._index < 0:
+            return ""
+        if self._album != -1:
+            return self._albums[self._album]["title"]
+        left = self._index
+        for a in self._albums:
+            if left < len(a["tracks"]):
+                return a["title"]
+            left -= len(a["tracks"])
+        return ""
 
     @pyqtProperty(str, notify=trackChanged)
     def art(self):

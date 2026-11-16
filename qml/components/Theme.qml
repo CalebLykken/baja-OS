@@ -192,9 +192,14 @@ QtObject {
     readonly property color warn: s.warn
     readonly property color ok: s.ok
 
-    // Empty family means the platform default (DejaVu Sans on the Pi).
-    readonly property string font: s.font
-    readonly property string numFont: s.numFont
+    // A style's font "" means the plain sans. Qt on the Pi's screen (eglfs)
+    // doesn't take fontconfig's default for an empty family: it lands on the
+    // first family installed, C059, a book serif. So "" is Nimbus Sans, the
+    // Pi's Helvetica; a Mac without it falls back to its own sans as before.
+    readonly property string sans: "Nimbus Sans"
+    function family(f) { return f ? f : sans }
+    readonly property string font: family(s.font)
+    readonly property string numFont: family(s.numFont)
     readonly property bool numItalic: s.numItalic
     readonly property int numWeight: s.numWeight
 

@@ -50,7 +50,7 @@ Rectangle {
             anchors.centerIn: parent
             text: "88"
             color: tile.t.text
-            font.family: tile.t.numFont
+            font.family: Theme.family(tile.t.numFont)
             font.italic: tile.t.numItalic
             font.weight: tile.t.numWeight
             font.pixelSize: 36
@@ -68,7 +68,7 @@ Rectangle {
         elide: Text.ElideRight
         text: tile.title
         color: tile.t.text
-        font.family: tile.t.font
+        font.family: Theme.family(tile.t.font)
         font.pixelSize: 20
         font.weight: Font.DemiBold
     }

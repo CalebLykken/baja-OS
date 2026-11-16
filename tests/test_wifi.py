@@ -571,6 +571,29 @@ class WrongPasswordTest(unittest.TestCase):
         self.assertEqual(self.asked, [])
 
 
+class MessageOkTest(unittest.TestCase):
+    """The page colours the join result by whether it worked."""
+
+    def setUp(self):
+        self.wifi = Wifi({})
+        self.wifi._available = False
+        self.fired = []
+        self.wifi.changed.connect(lambda: self.fired.append(1))
+
+    def test_success_is_ok(self):
+        self.wifi._on_finished("Connected to X", True)
+        self.assertTrue(self.wifi.messageOk)
+        self.assertEqual(self.wifi.message, "Connected to X")
+        self.assertTrue(self.fired)
+
+    def test_failure_is_not_ok(self):
+        self.wifi._on_finished("Connected to X", True)
+        del self.fired[:]
+        self.wifi._on_finished("Wrong password for X", False)
+        self.assertFalse(self.wifi.messageOk)
+        self.assertTrue(self.fired)
+
+
 class HiddenNetworkTest(unittest.TestCase):
     """A network typed in by hand joins with `hidden yes`, the password on stdin."""
 

@@ -158,6 +158,7 @@ class Wifi(QObject):
         self._control = False
         self._busy = ""            # SSID being joined
         self._message = ""
+        self._message_ok = False     # whether that message reports a success
         self._ask_password = ""      # set by a join worker that hit a wrong saved password
         self._scanning = False
         self._polling = False
@@ -268,7 +269,7 @@ class Wifi(QObject):
     def _run(self, ssid, fn, failed):
         if self._busy:
             return
-        self._busy, self._message = ssid, ""
+        self._busy, self._message, self._message_ok = ssid, "", False
         self.changed.emit()
 
         def work():
@@ -283,7 +284,7 @@ class Wifi(QObject):
         threading.Thread(target=work, daemon=True).start()
 
     def _on_finished(self, message, ok):
-        self._busy, self._message = "", message
+        self._busy, self._message, self._message_ok = "", message, bool(ok)
         ask, self._ask_password = self._ask_password, ""
         self.changed.emit()
         if ask and not ok:
@@ -317,6 +318,7 @@ class Wifi(QObject):
         An empty password means an open network."""
         if not valid_ssid(ssid):
             self._message = "That isn't a valid network name. It needs 1 to 32 letters"
+            self._message_ok = False
             self.changed.emit()
             return
         saved = [c for c in self._saved if c["ssid"] == ssid]
@@ -515,6 +517,11 @@ class Wifi(QObject):
     @pyqtProperty(str, notify=changed)
     def message(self):
         return self._message
+
+    @pyqtProperty(bool, notify=changed)
+    def messageOk(self):
+        """True when `message` says the join worked, so the page can colour it."""
+        return self._message_ok
 
     @pyqtProperty(bool, notify=changed)
     def tethering(self):

@@ -478,6 +478,16 @@ Item {
                     }
                 }
                 Label {
+                    objectName: "wifiMessage"
+                    visible: wifi.message !== ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontBody
+                    font.weight: Font.DemiBold
+                    color: wifi.messageOk ? Theme.ok : Theme.warn
+                    text: wifi.message
+                }
+                Label {
                     font.pixelSize: Theme.fontBody
                     color: Theme.textDim
                     text: wifi.tetherActive ? "Using " + wifi.tetherPhone + " over Bluetooth"
@@ -507,13 +517,6 @@ Item {
                     color: Theme.accent
                     font.pixelSize: Theme.fontBody
                     text: "To join networks from here, run deploy/setup-pi.sh once on the Pi."
-                }
-                Label {
-                    visible: wifi.message !== ""
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    font.pixelSize: Theme.fontBody
-                    text: wifi.message
                 }
 
                 // The scan lands every 15 s (and `changed` also fires for other reasons).
@@ -1206,7 +1209,10 @@ Item {
     // A saved network that now wants a different password: ask for it.
     Connections {
         target: wifi
-        function onPasswordNeeded(ssid) { joinSheet.open(ssid) }
+        function onPasswordNeeded(ssid) {
+            joinSheet.open(ssid)
+            joinSheet.note = "That password didn't work. Check it and try again."
+        }
     }
 
     // ---- joining a Wi-Fi network: password and keyboard --------------------
@@ -1218,9 +1224,10 @@ Item {
         property bool reveal: false
         property bool hidden: false      // a network typed in by hand
         property bool naming: false      // ...and its name is still being typed
-        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false }
-        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true }
-        function close() { ssid = ""; password = ""; hidden = false; naming = false }
+        property string note: ""         // why the sheet is open again, e.g. a wrong password
+        function open(name) { ssid = name; password = ""; reveal = false; hidden = false; naming = false; note = "" }
+        function openHidden() { ssid = ""; password = ""; reveal = false; hidden = true; naming = true; note = "" }
+        function close() { ssid = ""; password = ""; hidden = false; naming = false; note = "" }
 
         anchors.fill: parent
         visible: ssid !== "" || naming
@@ -1245,6 +1252,17 @@ Item {
                 TextButton { text: "Cancel"; onClicked: joinSheet.close() }
             }
 
+            Label {
+                objectName: "joinNote"
+                visible: joinSheet.note !== ""
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.warn
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+                text: joinSheet.note
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 14
@@ -1267,9 +1285,15 @@ Item {
                         font.pixelSize: Theme.fontTitle
                     }
                     Label {
-                        visible: joinSheet.naming ? joinSheet.ssid === "" : joinSheet.password === ""
-                        anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter }
-                        text: joinSheet.naming ? "Network name" : joinSheet.hidden ? "Password (empty if open)" : "Password"
+                        objectName: "joinHint"
+                        visible: joinSheet.naming ? joinSheet.ssid === ""
+                                 : joinSheet.password === "" || joinSheet.password.length < 8   // 1-7: say why Join is off
+                        anchors.verticalCenter: parent.verticalCenter
+                        // Beside the typed dots, not over them.
+                        x: !joinSheet.naming && joinSheet.password.length > 0 ? parent.width - width - 18 : 22
+                        text: joinSheet.naming ? "Network name"
+                              : joinSheet.password.length > 0 ? "8 or more characters"
+                              : joinSheet.hidden ? "Password (empty if open)" : "Password"
                         color: Theme.textDim
                         font.pixelSize: Theme.fontBody
                     }

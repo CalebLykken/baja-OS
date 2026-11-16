@@ -153,6 +153,10 @@ out["quarter"] = state("quarter")
 media.set(position=90)
 app.processEvents()
 out["threeQuarter"] = state("threeQuarter")
+# A position reported past the end (a stale tick) keeps the thumb on the bar.
+media.set(position=150)
+app.processEvents()
+out["pastEnd"] = state("pastEnd")
 media.set(position=30)
 app.processEvents()
 
@@ -223,6 +227,10 @@ class SeekThumbTest(unittest.TestCase):
         self.assertAlmostEqual(self.r["quarter"]["thumbCentre"], w * 0.25, delta=1.0)
         self.assertAlmostEqual(self.r["threeQuarter"]["thumbCentre"], w * 0.75, delta=1.0)
         self.assertLess(self.r["quarter"]["thumbX"], self.r["threeQuarter"]["thumbX"])
+
+    def test_thumb_stays_on_the_bar_past_the_end(self):
+        w = self.r["pastEnd"]["seekW"]
+        self.assertAlmostEqual(self.r["pastEnd"]["thumbCentre"], w, delta=1.0)
 
     def test_press_grows_thumb_and_marks_drag(self):
         self.assertTrue(self.r["pressed"]["dragging"])

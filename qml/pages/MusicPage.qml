@@ -354,7 +354,9 @@ Item {
                                 id: seekThumb
                                 objectName: "seekThumb"
                                 anchors.verticalCenter: parent.verticalCenter
-                                x: seekBar.width * seekBar.value - width / 2
+                                // shown, not value: it is clamped to the bar and follows the
+                                // fill's new-track sweep, so the thumb never leaves the fill end.
+                                x: seekBar.width * seekBar.shown - width / 2
                                 width: seekArea.dragging ? 36 : 28
                                 height: width
                                 radius: width / 2

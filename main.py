@@ -11,6 +11,7 @@ falls back to a simulated drive and a demo queue; --demo / --no-demo force it.
 """
 
 import argparse
+import faulthandler
 import json
 import os
 import signal
@@ -22,6 +23,16 @@ from pathlib import Path
 # the PyQt imports so the first phase covers them.
 from backend.startup import StartupClock
 clock = StartupClock()
+
+# A start that hangs before READY ends itself quickly: faulthandler writes where
+# every thread is stuck to the journal, then exits, and systemd (Restart=always)
+# starts the dashboard again a second later, instead of waiting out its own
+# start timeout. A normal start reaches READY in about 5 s at boot, under 1 s
+# after; this is cancelled then. faulthandler runs from C, so a stuck main
+# thread can't stop it. Only when run as the dashboard: tests import this file.
+STARTUP_LIMIT_S = 30
+if __name__ == "__main__":
+    faulthandler.dump_traceback_later(STARTUP_LIMIT_S, exit=True)
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
 # set before Qt loads, so it lives above the PyQt imports.
@@ -342,6 +353,7 @@ def main():
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
+    faulthandler.cancel_dump_traceback_later()
     updater.start()
     clock.mark("started")
     code = app.exec()

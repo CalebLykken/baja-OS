@@ -37,7 +37,7 @@ from array import array
 from collections import deque
 
 from PyQt6 import sip
-from PyQt6.QtCore import (QCoreApplication, QIODevice, QObject, QThread, QTimer, QUrl,
+from PyQt6.QtCore import (QCoreApplication, QObject, QThread, QTimer, QUrl,
                           pyqtSignal, pyqtSlot)
 from PyQt6.QtMultimedia import QAudio, QAudioDecoder, QAudioFormat, QAudioSink
 
@@ -45,6 +45,7 @@ RATE, CHANNELS, SAMPLE_BYTES = 48000, 2, 2
 FRAME = CHANNELS * SAMPLE_BYTES
 BYTES_PER_S = RATE * FRAME
 BUFFER_S = 0.3              # what the audio system holds ahead
+PUSH_MS = 20                # how often the stream is topped up (it holds 300 ms)
 RAMP_FRAMES = RATE * 30 // 1000
 AHEAD_S = 60                # decoded ahead of what's playing, at most
 REFILL_S = 45               # decode more once this little is left
@@ -78,26 +79,6 @@ class _Song:
         self.strays = 0             # buffers that came while held
 
 
-class _Feed(QIODevice):
-    """What the audio stream reads from: always as much as it asks for."""
-
-    def __init__(self, output):
-        super().__init__(output)
-        self._output = output
-
-    def readData(self, maxlen):
-        return self._output.pull(maxlen)
-
-    def writeData(self, data):
-        return 0
-
-    def isSequential(self):
-        return True
-
-    def bytesAvailable(self):
-        return BYTES_PER_S + super().bytesAvailable()
-
-
 class _Output(QObject):
     """The stream and its feed. Lives on the audio thread; reads the songs
     and fade state the engine shares under its lock."""
@@ -109,16 +90,26 @@ class _Output(QObject):
         super().__init__()
         self.e = engine
         self.sink = None
-        self.feed = None
+        self.io = None              # the stream's own device, written to (push mode)
+        self.spill = b""            # samples the stream didn't take last time
         self.volume = 1.0
         self.last_pull = None
         self._on_state = None
+        self._tick = None
 
     @pyqtSlot(object)
     def make_sink(self, device):
-        if self.feed is None:
-            self.feed = _Feed(self)
-            self.feed.open(QIODevice.OpenModeFlag.ReadOnly)
+        # Push mode: Qt gives us its own C++ device and we write into it from a
+        # timer here. Never hand the sink a Python QIODevice to read from: the
+        # PulseAudio thread calls its atEnd() holding Pulse's lock, a Python
+        # override needs the GIL, and the GIL is held by this thread waiting on
+        # that same lock in bytesFree(). That deadlock froze start-up on about
+        # one boot in five (systemd killed the dashboard 90 s later).
+        if self._tick is None:
+            self._tick = QTimer(self)
+            self._tick.setInterval(PUSH_MS)
+            self._tick.timeout.connect(self._push)
+            self._tick.start()
         if self.sink is not None:
             # Its stop must not reach _state and start a retry.
             try:
@@ -133,7 +124,25 @@ class _Output(QObject):
         sink = self.sink
         self._on_state = lambda state, s=sink: self._state(s, state)
         sink.stateChanged.connect(self._on_state)
-        self.sink.start(self.feed)
+        self.spill = b""            # what was left for the old stream
+        self.io = sink.start()
+        self._push()
+
+    def _push(self):
+        """Top the stream up to full. A write of less than bytesFree is all
+        taken; anything it still leaves goes first next time, so no sample is lost."""
+        sink, io = self.sink, self.io
+        if sink is None or io is None or sip.isdeleted(sink) or sip.isdeleted(io):
+            return
+        free = sink.bytesFree()
+        free -= free % FRAME
+        if free <= 0:
+            return
+        data = self.spill
+        if len(data) < free:
+            data += self.pull(free - len(data))
+        n = io.write(data)
+        self.spill = data[n:] if 0 <= n < len(data) else b""
 
     def _state(self, sink, state):
         # Shutdown deletes the sink, and its destructor reports the stop here.
@@ -158,7 +167,8 @@ class _Output(QObject):
             self.sink.setVolume(v)
 
     def latency(self):
-        return max(0, self.sink.bufferSize() - self.sink.bytesFree()) if self.sink else 0
+        queued = max(0, self.sink.bufferSize() - self.sink.bytesFree()) if self.sink else 0
+        return queued + len(self.spill)
 
     def pull(self, maxlen):
         e = self.e

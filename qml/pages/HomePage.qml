@@ -86,7 +86,12 @@ Item {
 
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
-                HomeTurn { anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } }
+                HomeTurn { id: nextTurn; anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } }
+                // No fix, or the sky lost: say so, below the turn card while routing.
+                HomeGpsStatus {
+                    x: 12
+                    y: 12 + (nextTurn.shown ? nextTurn.height + 12 : 0)
+                }
                 // Navigating: when you get there, how long and how far.
                 HomeArrive { anchors { left: parent.left; bottom: parent.bottom; margins: 12 } }
 

@@ -87,32 +87,8 @@ Item {
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
                 HomeTurn { anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } }
-                Rectangle {
-                    id: arrivePill
-                    readonly property bool shown: typeof routing !== "undefined" && routing.active
-                    opacity: shown ? 1 : 0
-                    visible: opacity > 0
-                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    transform: Translate {
-                        y: arrivePill.shown ? 0 : 16
-                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    }
-                    anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
-                    width: arriveText.implicitWidth + 32
-                    height: 64
-                    radius: Theme.radius
-                    color: Theme.panel
-                    border.width: Theme.border
-                    border.color: Theme.line
-                    Label {
-                        id: arriveText
-                        anchors.centerIn: parent
-                        text: typeof routing !== "undefined"
-                              ? "Arrive " + Units.arrivalText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
-                        font.pixelSize: Theme.fontSmall
-                        font.weight: Font.DemiBold
-                    }
-                }
+                // Navigating: when you get there, how long and how far.
+                HomeArrive { anchors { left: parent.left; bottom: parent.bottom; margins: 12 } }
 
                 // Round off the map's square corners, then the frame.
                 Repeater {

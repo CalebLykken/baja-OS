@@ -53,7 +53,7 @@ from backend.routing import Router
 from backend.voice import Voice, arrival_line
 from backend.hub import MediaHub
 from backend.maps import DEFAULT_DATA_DIR, MapService
-from backend.knob import Gestures, Knob, double_press
+from backend.knob import Acceleration, Gestures, Knob, double_press, turn_volume
 from backend.obd import ObdReader
 from backend.media import MediaPlayer
 from backend.network import Network
@@ -251,7 +251,8 @@ def main():
     # the last direction again; hold to mute.
     knob = Knob()
     gestures = Gestures()
-    knob.turned.connect(lambda step: media.volumeUp() if step > 0 else media.volumeDown())
+    accel = Acceleration()
+    knob.turned.connect(lambda step: turn_volume(media, accel, step))
     knob.pressed.connect(gestures.down)
     knob.released.connect(gestures.up)
     gestures.single.connect(media.togglePlay)

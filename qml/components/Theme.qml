@@ -53,6 +53,16 @@ QtObject {
             accent: "#5b8fd0", warn: "#ff5a47", ok: "#6fd3a0",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
             radius: 14, border: 1, gauge: "arc", backdrop: "waves"
+        },
+        // Night driving: pure black so the window and rail go flat, with no
+        // backdrop to glow. Text is deliberately not full white, and the
+        // accent is a muted cool teal that doesn't bloom on an 8 inch panel.
+        midnight: {
+            bg: "#000000", panel: "#08090b", panelTop: "#0e1013", panelHi: "#16191d",
+            line: "#272b31", text: "#d6dae0", textDim: "#8a919b",
+            accent: "#4fb8cc", warn: "#ff5436", ok: "#7cc47a",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 12, border: 1, gauge: "arc", backdrop: "none"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -82,12 +92,19 @@ QtObject {
             bg: "#e4eaf3", panel: "#f5f8fc", panelTop: "#ffffff", panelHi: "#d9e2f0",
             line: "#b5c4dc", text: "#0c1a30", textDim: "#4a5d7c",
             accent: "#2a5fa8", warn: "#c92f2f", ok: "#1c8456"
+        },
+        // Midnight by day: white sheets, near-black text, the teal deepened
+        // so it holds on a light ground.
+        midnight: {
+            bg: "#f0f1f2", panel: "#ffffff", panelTop: "#ffffff", panelHi: "#e3e5e8",
+            line: "#c4c8ce", text: "#0a0b0d", textDim: "#555b64",
+            accent: "#0a7388", warn: "#c8321a", ok: "#2f7d2c"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
-                                          rally: "Rally", atlantic: "Atlantic" })
+                                          rally: "Rally", atlantic: "Atlantic", midnight: "Midnight" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

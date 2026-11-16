@@ -105,6 +105,14 @@ class StyleTableTest(unittest.TestCase):
     def test_main_choices_match(self):
         self.assertEqual(main_choices(), self.out["names"])
 
+    def test_midnight_is_flat_black_at_night(self):
+        # Midnight is the OLED night look: pure black ground, no backdrop.
+        night = self.out["night"]["midnight"]
+        self.assertEqual(night["bg"], "#000000")
+        self.assertEqual(night["backdrop"], "none")
+        self.assertIn("midnight", main_choices())
+        self.assertEqual(self.out["titles"]["midnight"], "Midnight")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -302,7 +302,7 @@ Item {
         readonly property real minutes: page.trip ? Math.floor(page.trip.movingSeconds / 60) : 0
 
         RowLayout {
-            anchors { fill: parent; margins: 20 }
+            anchors { fill: parent; leftMargin: 14; rightMargin: 14; topMargin: 20; bottomMargin: 20 }
             Readout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: page.trip ? "Trip since " + Units.timeText(page.trip.started) : "Trip"
@@ -320,6 +320,12 @@ Item {
                 Layout.fillWidth: true; Layout.preferredWidth: 1
                 label: "Average"
                 value: page.trip && page.trip.movingSeconds > 0 ? Math.round(Units.speed(page.trip.averageMph)) : "—"
+                unit: Units.speedUnit
+            }
+            Readout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1
+                label: "Top speed"
+                value: vehicle.topSpeed > 0 ? Math.round(Units.speed(vehicle.topSpeed)) : "—"
                 unit: Units.speedUnit
             }
             Readout {

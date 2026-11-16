@@ -30,11 +30,14 @@ from backend.demo import allowed
 from backend.gps import MPH_TO_MS
 from backend.obd import describe
 from backend.prefs import as_bool
+from backend.routing import boot_id
+from backend.trip import PEAKS_SETTING, peaks_record, saved_peaks, uptime
 
 UPDATE_MS = 200  # 5 updates per second is plenty for gauges and cheap on a Pi 2
 LAUNCH_MAX_S = 30  # a run from a standstill to 60 mph taking longer than this isn't a launch
 STALE_MS = 4000  # no engine data for this long: the car has gone quiet
 VOLTS_MS = 180000  # a battery reading is current this long after the latest one
+PEAKS_SAVE_S = 30  # the top speed and peak rpm are saved at most this often
 ENGINE = ("rpm", "speed", "boost", "coolant", "intake")  # what only the car can answer
 
 # Rough 5-speed gearing for the 2005 Baja Turbo: mph per 1000 rpm in each gear.
@@ -117,6 +120,7 @@ class VehicleData(QObject):
     voltageKnownChanged = pyqtSignal()
     codesChanged = pyqtSignal()
     launchChanged = pyqtSignal()
+    topSpeedChanged = pyqtSignal()
 
     def __init__(self, settings=None, demo=None, parent=None):
         """`demo` is main.py's --demo (True), --no-demo (False) or neither
@@ -147,6 +151,16 @@ class VehicleData(QObject):
         self._launch_six = False  # ... and has already passed 60 mph
         self._zero_sixty = 0.0    # seconds, the last 0-60 mph (0 = none yet); memory only
         self._zero_hundred = 0.0  # likewise 0-100 km/h
+        # the top speed and peak rpm since key-on, from real readings only; they
+        # carry across a dashboard restart in the same boot (see backend/trip.py)
+        self._top_mph = 0.0
+        self._peak_rpm = 0.0
+        self._peaks_dirty = False
+        self._peaks_saved_at = None
+        if settings is not None:
+            kept = saved_peaks(str(settings.get(PEAKS_SETTING, "")), boot_id(), uptime())
+            if kept:
+                self._top_mph, self._peak_rpm = kept
         self._stale = QTimer(self, singleShot=True, interval=STALE_MS, timeout=self.lost_obd)
         self._volts_stale = QTimer(self, singleShot=True, interval=VOLTS_MS, timeout=self._volts_aged)
         self._timer = QTimer(self)
@@ -170,12 +184,33 @@ class VehicleData(QObject):
         gps = self._gps
         self._gps_mph = gps.speed / MPH_TO_MS if gps.realFix else None
         self._gps_real = gps.source == "gps"
+        if self._gps_mph is not None and not self._live:
+            self._note_peaks(self._gps_mph, None)
         if self.speed != was or self._flags() != before:
             self._settle(before)
         else:
             # a stopped receiver reports the same 0.0 on every fix: still
             # re-arm the launch, or its start time goes stale while it waits
             self._watch_launch()
+
+    def _note_peaks(self, mph, rpm):
+        """Keep the top speed and peak rpm from a real reading (never the
+        simulation's), and save them, at most once every PEAKS_SAVE_S."""
+        top = False
+        if mph is not None and math.isfinite(mph) and mph > self._top_mph:
+            self._top_mph, top = mph, True
+        if rpm is not None and math.isfinite(rpm) and rpm > self._peak_rpm:
+            self._peak_rpm, top = rpm, True
+        if top:
+            self._peaks_dirty = True
+            self.topSpeedChanged.emit()
+        boot = boot_id()
+        if self._peaks_dirty and self._settings is not None and boot:   # no boot id: it couldn't be restored
+            now = self._clock()
+            if self._peaks_saved_at is None or now - self._peaks_saved_at >= PEAKS_SAVE_S:
+                self._peaks_saved_at, self._peaks_dirty = now, False
+                self._settings.set(PEAKS_SETTING, peaks_record(
+                    self._top_mph, self._peak_rpm, boot, uptime()))
 
     def _flags(self):
         return self._live, self.simulated, self.engineKnown, self.speedKnown, self.voltageKnown
@@ -231,6 +266,7 @@ class VehicleData(QObject):
         if "voltage" in values:
             self._take_voltage(float(values["voltage"]))
         if answering:
+            self._note_peaks(values.get("speed"), values.get("rpm"))
             estimate = estimate_gear(self._speed, self._rpm)
             if self._live:
                 self._gear, self._gear_seen, self._gear_count = settled_gear(
@@ -398,6 +434,16 @@ class VehicleData(QObject):
     def _engine(self, value):
         """What the UI reads: 0 for an engine value that isn't known."""
         return value if self.engineKnown else 0.0
+
+    @pyqtProperty(float, notify=topSpeedChanged)
+    def topSpeed(self):
+        """The fastest real speed since key-on, in mph (0 = none yet)."""
+        return self._top_mph
+
+    @pyqtProperty(float, notify=topSpeedChanged)
+    def peakRpm(self):
+        """The highest real rpm since key-on (0 = none yet)."""
+        return self._peak_rpm
 
     @pyqtProperty(float, notify=launchChanged)
     def zeroToSixty(self):

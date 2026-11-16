@@ -16,6 +16,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from backend.routing import boot_id
 
 SETTING = "trip"
+PEAKS_SETTING = "peaks"
 
 
 def uptime():
@@ -52,6 +53,28 @@ def saved_trip(text, boot, up):
             peak = None
         return {"metres": metres, "movingSeconds": moving,
                 "runningSeconds": running + gap, "peakBoost": peak}
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        return None
+
+
+def peaks_record(top_mph, peak_rpm, boot, up):
+    """What's saved of the top speed and peak rpm since key-on: JSON, with
+    the boot and how long it had run, like trip_record."""
+    return json.dumps({"topMph": float(top_mph), "peakRpm": float(peak_rpm),
+                       "boot": boot, "up": float(up)})
+
+
+def saved_peaks(text, boot, up):
+    """(top_mph, peak_rpm) from what was saved, or None when there's none, it
+    can't be read, or it is from another boot (or this one can't be told)."""
+    try:
+        r = json.loads(text) if text else None
+        if not isinstance(r, dict) or not boot or r.get("boot") != boot:
+            return None
+        top, rpm, then = float(r["topMph"]), float(r["peakRpm"]), float(r["up"])
+        if not all(math.isfinite(v) and v >= 0 for v in (top, rpm, then)) or then > up:
+            return None
+        return top, rpm
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         return None
 

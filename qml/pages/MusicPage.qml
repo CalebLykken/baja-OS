@@ -471,6 +471,7 @@ Item {
                 }
                 ListView {
                     id: queue
+                    reuseItems: true
                     visible: page.tab === "next" && !page.eqOpen
                     readonly property bool spotifyQueue: media.source === "spotify"
                     readonly property bool phoneQueue: media.source === "phone"
@@ -551,6 +552,9 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
+                    // Reused delegates, and about two rows kept ready past the edges.
+                    reuseItems: true
+                    cacheBuffer: cellHeight * 2
                     readonly property bool recent: page.albumView === "recent"
                     model: recent ? media.recentAlbums : page.albums
                     delegate: CoverTile {
@@ -613,6 +617,7 @@ Item {
                 // Tap one to play it; the rest of the library follows.
                 ListView {
                     id: songList
+                    reuseItems: true
                     visible: page.tab === "songs" && !page.eqOpen
                     anchors { fill: parent; margins: 10
                               rightMargin: songRail.visible ? songRail.width + 24 : 10 }
@@ -727,6 +732,7 @@ Item {
                     }
                     ListView {
                         id: albumSongs
+                        reuseItems: true
                         anchors { left: parent.left; right: parent.right; top: albumHead.bottom; bottom: parent.bottom; topMargin: 14 }
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -764,6 +770,8 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     cellWidth: Math.floor(width / 5)
                     cellHeight: cellWidth + 80
+                    reuseItems: true
+                    cacheBuffer: cellHeight * 2
                     model: page.spotifyView === "recent" || !page.hasAccount ? media.spotifyRecents
                            : page.spotifyView === "playlists" ? spotifyAccount.playlists : spotifyAccount.albums
                     delegate: CoverTile {
@@ -794,6 +802,7 @@ Item {
                 // ---- Spotify: Liked Songs -----------------------------------
                 ListView {
                     id: likedList
+                    reuseItems: true
                     visible: page.tab === "spotify" && !page.eqOpen && !page.searchOpen
                              && !page.needsLink && page.spotifyView === "liked"
                     anchors { fill: parent; margins: 12; topMargin: 96 }
@@ -906,6 +915,7 @@ Item {
                     }
                     ListView {
                         id: resultList
+                        reuseItems: true
                         anchors { left: parent.left; right: parent.right; top: searchHead.bottom; bottom: parent.bottom; topMargin: 10 }
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -1105,7 +1115,7 @@ Item {
             id: coverImage
             anchors { fill: parent; margins: Theme.border }
             source: parent.art
-            sourceSize: Qt.size(360, 360)          // decode small: there are many
+            sourceSize: Qt.size(256, 256)          // decode small: there are many (tiles are about 210 px)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
         }

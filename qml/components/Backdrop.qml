@@ -3,11 +3,10 @@ import QtQuick
 // Full-window decoration behind the UI, one kind per style: topo contours
 // (Trail), livery stripes (Rally), a perforated dot grid (Amber), a
 // tachometer face peeking in from a corner (Cluster), rolling sine waves
-// (Atlantic), layered sand ridgelines (Desert), low-poly ice facets (Glacier)
-// CRT scanlines (LCD) and a striped half-sun on the horizon (Sunset).
-// Painted once per size,
-// style or colour change (day/night flips the theme colours), never per
-// frame, so it costs nothing while driving.
+// (Atlantic), layered sand ridgelines (Desert), low-poly ice facets
+// (Glacier), CRT scanlines (LCD) and a striped half-sun on the horizon
+// (Sunset). Painted once per size, style or colour change (day/night flips
+// the theme colours), never per frame, so it costs nothing while driving.
 Canvas {
     id: bd
     visible: Theme.backdrop !== "none"

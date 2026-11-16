@@ -65,13 +65,14 @@ QtObject {
             radius: 12, border: 1, gauge: "arc", backdrop: "none"
         },
         // Desert: sand and terracotta-brown, with turquoise as the accent. The
-        // turquoise sits well away from the red-orange warning colour.
+        // turquoise sits well away from the red-orange warning colour. Dune
+        // ridgelines behind, so it doesn't share Trail's topo backdrop.
         desert: {
             bg: "#18120c", panel: "#251c13", panelTop: "#2c2218", panelHi: "#37291c",
             line: "#5a4631", text: "#f1e3c8", textDim: "#b19c7c",
             accent: "#3fc1b0", warn: "#ff5a36", ok: "#b6c96a",
             font: "", numFont: "Nimbus Sans", numItalic: false, numWeight: Font.Bold,
-            radius: 8, border: 2, gauge: "arc", backdrop: "topo"
+            radius: 8, border: 2, gauge: "arc", backdrop: "dunes"
         },
         // Glacier: ice cyan on deep teal-black. The roundest look, with
         // generous corners and a cool, crisp accent that reads well at night.

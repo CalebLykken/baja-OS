@@ -450,6 +450,7 @@ Window {
     // shutdown fails, it says so instead, until OK.
     Prompt {
         id: keyOffPrompt
+        readonly property int warnSeconds: 10     // the countdown's length: WARN_S in backend/ignition.py
         readonly property int secondsLeft: typeof keyOff === "undefined" ? -1 : keyOff.countdown
         readonly property bool failed: typeof keyOff !== "undefined" && keyOff.error !== ""
         property bool showError: false            // kept while it fades out
@@ -459,14 +460,19 @@ Window {
         shown: secondsLeft >= 0 || failed
         title: showError ? "Couldn't shut down" : "The truck is off"
 
+        KeyOffCountdown {
+            visible: !keyOffPrompt.showError
+            Layout.fillWidth: true
+            seconds: keyOffPrompt.secondsLeft
+            total: keyOffPrompt.warnSeconds
+        }
         Label {
+            visible: keyOffPrompt.showError
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             color: Theme.textDim
             font.pixelSize: Theme.fontBody
-            text: keyOffPrompt.showError
-                  ? "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
-                  : "Shutting down in " + Math.max(0, keyOffPrompt.secondsLeft) + " s"
+            text: "Run deploy/setup-pi.sh once on the Pi so the dashboard can shut it down. Until then the power relay cuts the power without a clean shutdown."
         }
         Label {
             visible: keyOffPrompt.showError

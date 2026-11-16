@@ -153,18 +153,19 @@ Window {
         anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
         color: Theme.backdrop === "none" || root.onMaps ? Theme.bg : "transparent"
 
+        // The rail clock's time, once a minute (see ClockTick.qml).
+        ClockTick { id: tick }
+
         Column {
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 22 }
             spacing: 4
             Label {
                 id: clock
                 anchors.horizontalCenter: parent.horizontalCenter
-                property date now: new Date()
-                text: Units.timeText(now)
+                text: Units.timeText(tick.now)
                 numeric: true
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
-                Timer { interval: 5000; running: true; repeat: true; onTriggered: clock.now = new Date() }
             }
             // Made-up engine data (a Mac, a bench Pi, --demo): never let it
             // pass for the truck's.

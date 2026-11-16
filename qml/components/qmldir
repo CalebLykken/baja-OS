@@ -1,5 +1,6 @@
 singleton Theme 1.0 Theme.qml
 Card 1.0 Card.qml
+ClockTick 1.0 ClockTick.qml
 NavButton 1.0 NavButton.qml
 IconButton 1.0 IconButton.qml
 Gauge 1.0 Gauge.qml

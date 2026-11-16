@@ -37,6 +37,9 @@ RECEIVERS = ("/dev/serial/by-id/*u-blox*", "/dev/serial/by-id/*[Gg][Nn][Ss][Ss]*
 KNOTS_TO_MS = 0.514444
 CHECK_GPSD_S = 60       # reading the receiver directly: look for gpsd this often
 LOG_EVERY_S = 60        # while looking for satellites: a line in the journal this often
+RETRY_FIRST_S = 5     # between looks for a receiver, to begin with
+RETRY_MAX_S = 30       # no longer than this, however long nothing is plugged in
+RETRY_OK_S = 30        # a look that ran longer than this found a receiver that worked
 ROUTE = Path(__file__).with_name("demo_route.json")
 EARTH_M = 6371000.0
 MPH_TO_MS = 0.44704
@@ -66,6 +69,14 @@ def _bearing(a, b):
     dx = math.radians(b[0] - a[0]) * math.cos(lat)
     dy = math.radians(b[1] - a[1])
     return math.degrees(math.atan2(dx, dy)) % 360
+
+
+def next_wait(current, ran_for):
+    """Seconds to wait before the next look for a receiver, given the wait just used and
+    how long the last look ran: doubles up to a cap, back to the start after a long run."""
+    if ran_for > RETRY_OK_S:
+        return RETRY_FIRST_S
+    return min(max(current * 2, RETRY_FIRST_S), RETRY_MAX_S)
 
 
 def find_receiver():
@@ -430,7 +441,9 @@ class Gps(QObject):
 
     # ---- the receiver -----------------------------------------------------
     def _receiver_loop(self):
+        wait = RETRY_FIRST_S
         while True:
+            started = time.monotonic()
             used = False
             try:
                 used = self._read_gpsd()
@@ -448,7 +461,10 @@ class Gps(QObject):
                     except Exception as e:
                         errorlog.log.report(type(e), e, e.__traceback__, label="GPS: reader error, retrying:")
             safe_emit(self, "_report", {"gpsd": False})
-            time.sleep(5)
+            ran_for = time.monotonic() - started
+            wait = RETRY_FIRST_S if ran_for > RETRY_OK_S else wait
+            time.sleep(wait)
+            wait = next_wait(wait, ran_for)
 
     def _read_gpsd(self):
         """Read gpsd's reports until it goes away. False if it isn't running."""

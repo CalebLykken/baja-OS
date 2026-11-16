@@ -13,7 +13,7 @@ from unittest import mock
 from backend.powerlog import (MAX_NOTES, KERNEL_BACKOFF_FIRST, KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S,
                               KERNEL_WORTH_KEEPING, flag_names, kernel_cmd,
                               logged_kernel_events, new_kernel_events, next_backoff,
-                              parse_pmic, prune, PowerLog)
+                              parse_pmic, prune, read_clock_mhz, PowerLog)
 
 PMIC = """\
      3V7_WL_SW_A current(0)=0.10000000A
@@ -44,6 +44,43 @@ class FlagsTest(unittest.TestCase):
 
     def test_none(self):
         self.assertEqual(flag_names(0), "none")
+
+
+class ClockTest(unittest.TestCase):
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.node = Path(self._dir.name) / "scaling_cur_freq"
+
+    def point_node_at(self, text=None):
+        if text is not None:
+            self.node.write_text(text)
+        patcher = mock.patch("backend.powerlog.CPUFREQ_NODE", str(self.node))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_sysfs_kHz_becomes_MHz_without_vcgencmd(self):
+        self.point_node_at("2400000\n")
+        with mock.patch("backend.powerlog._run") as run:
+            self.assertEqual(read_clock_mhz(), 2400)
+            run.assert_not_called()
+
+    def test_a_missing_node_falls_back_to_vcgencmd(self):
+        self.point_node_at()     # the file is never written
+        with mock.patch("backend.powerlog._run", return_value="frequency(48)=1500000000\n") as run:
+            self.assertEqual(read_clock_mhz(), 1500)
+            run.assert_called_once_with("vcgencmd", "measure_clock", "arm")
+
+    def test_garbage_in_the_node_falls_back_to_vcgencmd(self):
+        self.point_node_at("not a number\n")
+        with mock.patch("backend.powerlog._run", return_value="frequency(48)=800000000\n") as run:
+            self.assertEqual(read_clock_mhz(), 800)
+            run.assert_called_once_with("vcgencmd", "measure_clock", "arm")
+
+    def test_nothing_at_all_gives_none(self):
+        self.point_node_at()
+        with mock.patch("backend.powerlog._run", return_value=""):
+            self.assertIsNone(read_clock_mhz())
 
 
 class KernelTest(unittest.TestCase):

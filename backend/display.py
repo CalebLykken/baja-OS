@@ -28,7 +28,7 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtProperty, pyqtSignal, pyqtSlot
 
-from backend import safe_emit, sun
+from backend import FailureLog, safe_emit, sun
 from backend.prefs import as_bool
 
 I2C_SLAVE = 0x0703
@@ -127,6 +127,10 @@ class Display(QObject):
         self._max = 100
         self._pending = None
         self._written = None      # the level the panel last accepted (None: unknown)
+        # A panel that stops answering logs once, not on every retry or every
+        # sun check (each minute) that resends the level.
+        self._write_logged = FailureLog("Brightness: DDC/CI writes failing",
+                                        "Brightness: DDC/CI writes working again")
         self._wake = threading.Condition()
 
         self._hw = False          # True once the probe found a DDC/CI panel
@@ -279,15 +283,19 @@ class Display(QObject):
     def _write(self, value):
         """Send a level to the panel, retrying a NAK. If it never goes through
         _written keeps the old level, so the next _apply sends it again."""
+        error = None
         for attempt in range(DDC_TRIES):
             try:
                 self._ddc.set(round(value * self._max / 100))
-                self._written = value
-                return
             except Exception as e:
-                print(f"Brightness: DDC/CI write failed ({e})")
+                error = e
                 if attempt + 1 < DDC_TRIES:
                     time.sleep(DDC_RETRY_S)
+                continue
+            self._written = value
+            self._write_logged()  # clears a logged failure once writes work again
+            return
+        self._write_logged(error)  # every try failed: one line, not one per try
 
     @pyqtProperty(bool, notify=hardwareChanged)
     def hardware(self):

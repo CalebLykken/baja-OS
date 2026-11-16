@@ -219,8 +219,10 @@ def main():
 
     qInstallMessageHandler(errorlog.qt_messages.handle)   # repeated Qt/QML warnings are counted, not flooded
     web_engine = init_web_engine()
+    clock.mark("webengine")
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Baja Carputer")
+    clock.mark("app")
 
     # Backends live in Python; QML only displays them. Swap the mock classes
     # for real ones (OBD-II reader, audio player) without touching the UI.
@@ -234,6 +236,7 @@ def main():
     # lose what it counted since its last save), then settings go to disk.
     trip_store = TripStore(settings)    # Trip.qml keeps its numbers across a restart
     connect_quit(app.aboutToQuit, trip_store, settings.flush_and_wait)
+    clock.mark("settings")
 
     def on_sigterm(*_):
         settings.flush_and_wait()
@@ -272,6 +275,7 @@ def main():
                      max_volume=settings.get_int("maxVolume", 100), settings=settings)
     media.volumeChanged.connect(lambda: settings.set("volume", media.local_volume))
     media.maxVolumeChanged.connect(lambda: settings.set("maxVolume", media.maxVolume))
+    clock.mark("media")
     # The dash knob: turn for volume; press to play or pause (a beat late, in
     # case it's a double); double press for the next song, or while navigating
     # the last direction again; hold to mute.
@@ -291,6 +295,7 @@ def main():
     network.changed.connect(lambda: spotify.set_network(network.online, network.ip))
     network.changed.connect(lambda: spotify_account.set_online(network.online))
     maps = MapService(args.maps_dir, web_engine)
+    clock.mark("screen")
     eq = Equalizer(settings)
     phone = PhoneSend(args.maps_dir)
     phone.spotify = spotify_account
@@ -377,7 +382,6 @@ def main():
     spotify_account.start()
     knob.start()
     obd.start()
-    key_off.start()
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
@@ -397,6 +401,9 @@ def main():
         obj.blockSignals(True)
     # Tear down the QML before the backends so bindings don't read null on exit.
     del engine
+    # Qt can still log while QGuiApplication and WebEngine are torn down; don't
+    # let those messages call back into Python while it shuts down.
+    qInstallMessageHandler(None)
     return code
 
 

@@ -13,7 +13,10 @@ import time
 import unittest
 from pathlib import Path
 
-from backend.places import _fts_query, category_for, search_with_categories, along_route, distance_m, looks_like_address, nearby, read_region, search, search_addresses, street_part
+from unittest import mock
+
+import backend.places as places
+from backend.places import _fts_query, _loose_fts_query, category_for, search_with_categories, along_route, distance_m, looks_like_address, nearby, read_region, search, search_addresses, street_part
 
 SEATTLE = (-122.3321, 47.6062)
 
@@ -132,6 +135,35 @@ class SearchTest(unittest.TestCase):
         db = index([("Gas Works Park", "park", "Seattle", 1, -122.33, 47.64)])
         self.assertEqual(search(db, "gas"), [{"name": "Gas Works Park", "kind": "park", "area": "Seattle",
                                               "lon": -122.33, "lat": 47.64, "distance": -1}])
+
+
+class LooseSearchTest(unittest.TestCase):
+    def test_a_long_word_ending_in_s_loses_the_s(self):
+        self.assertEqual(_loose_fts_query("mcdonalds"), '"mcdonald"*')
+        self.assertEqual(_loose_fts_query("traders joes"), '"trader"* AND "joe"*')
+
+    def test_short_words_and_others_stay(self):
+        self.assertEqual(_loose_fts_query("gas bus is"), '"gas"* AND "bus"* AND "is"*')
+        self.assertEqual(_loose_fts_query("Gas Park"), '"gas"* AND "park"*')
+
+    def test_a_possessive_is_found_without_the_apostrophe(self):
+        db = index([("McDonald's", "fast_food", "Seattle", 1, -122.33, 47.61),
+                    ("Trader Joe's", "supermarket", "Seattle", 1, -122.34, 47.62)])
+        self.assertEqual(names(search(db, "mcdonalds")), ["McDonald's"])
+        self.assertEqual(names(search(db, "traders joes")), ["Trader Joe's"])
+
+    def test_a_normal_match_does_not_use_the_loose_query(self):
+        db = index([("Trader Joe's", "supermarket", "Seattle", 1, -122.34, 47.62)])
+        with mock.patch.object(places, "_loose_fts_query", wraps=places._loose_fts_query) as loose:
+            self.assertEqual(names(search(db, "trader")), ["Trader Joe's"])
+            loose.assert_not_called()
+            self.assertEqual(names(search(db, "trader joe's")), ["Trader Joe's"])
+            loose.assert_not_called()
+
+    def test_nothing_close_is_still_empty(self):
+        db = index([("McDonald's", "fast_food", "Seattle", 1, -122.33, 47.61)])
+        self.assertEqual(search(db, "pizzas hut"), [])
+        self.assertEqual(search(db, "zebras"), [])
 
 
 class NearbyTest(unittest.TestCase):

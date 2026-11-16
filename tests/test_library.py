@@ -32,7 +32,7 @@ app = QCoreApplication.instance() or QCoreApplication([])
 
 class FakeSink(QObject):
     """Stands in for QAudioSink, so nothing here depends on the Mac's (or CI's)
-    audio device: it never asks the feed for anything."""
+    audio device: it never takes any samples."""
     stateChanged = pyqtSignal(object)
 
     def __init__(self, device, fmt, parent=None):
@@ -51,8 +51,8 @@ class FakeSink(QObject):
     def setVolume(self, v):
         pass
 
-    def start(self, feed):
-        pass
+    def start(self):
+        return None             # no device to write to: nothing plays by itself
 
     def stop(self):
         pass

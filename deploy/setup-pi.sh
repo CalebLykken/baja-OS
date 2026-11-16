@@ -175,14 +175,36 @@ echo "== Quiet boot"
 for f in cmdline.txt config.txt; do
     [ -f "$FW/$f.baja-backup" ] || cp "$FW/$f" "$FW/$f.baja-backup"
 done
-# Kernel messages go to hidden tty3; no logo, no blinking cursor. Single line.
+# Kernel messages go to hidden tty3; no logo, no blinking cursor, and no
+# systemd "[  OK  ]" / "[FAILED]" lines or udev chatter on screen, even when a
+# service fails. Single line.
 CMD=$(sed 's/console=tty1/console=tty3/' "$FW/cmdline.txt" | tr -d '\n')
-for opt in quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0; do
+for opt in quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0 \
+    systemd.show_status=false rd.systemd.show_status=false \
+    udev.log_level=3 rd.udev.log_level=3; do
     case " $CMD " in *" $opt "*) ;; *) CMD="$CMD $opt" ;; esac
 done
 printf '%s\n' "$CMD" > "$FW/cmdline.txt"
 grep -q '^disable_splash=1' "$FW/config.txt" || printf '\n[all]\ndisable_splash=1\n' >> "$FW/config.txt"
 systemctl disable getty@tty1.service 2>/dev/null || true
+# The Pi 4/5 bootloader draws its own diagnostics screen on HDMI before Linux
+# starts (the raspberry, board, serial, MAC and boot-mode lines). DISABLE_HDMI
+# turns it off; the kernel and the boot screen still use HDMI as normal.
+# Written to the EEPROM on the next reboot. Older Pis have no EEPROM.
+if command -v rpi-eeprom-config >/dev/null 2>&1 && eeprom=$(rpi-eeprom-config 2>/dev/null); then
+    if ! printf '%s\n' "$eeprom" | grep -q '^DISABLE_HDMI=1'; then
+        tmp=$(mktemp)
+        printf '%s\n' "$eeprom" | grep -v '^DISABLE_HDMI=' > "$tmp"
+        echo DISABLE_HDMI=1 >> "$tmp"
+        if rpi-eeprom-config --apply "$tmp" >/dev/null; then
+            touch /etc/baja-eeprom-hdmi.added
+            echo "   bootloader screen off from the next reboot"
+        else
+            echo "   couldn't update the bootloader config; its screen stays"
+        fi
+        rm -f "$tmp"
+    fi
+fi
 
 echo "== Boot screen"
 [ -f /etc/baja-plymouth-theme.backup ] || plymouth-set-default-theme > /etc/baja-plymouth-theme.backup

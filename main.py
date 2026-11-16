@@ -11,6 +11,7 @@ falls back to a simulated drive and a demo queue; --demo / --no-demo force it.
 """
 
 import argparse
+import faulthandler
 import json
 import os
 import signal
@@ -22,6 +23,12 @@ from pathlib import Path
 # the PyQt imports so the first phase covers them.
 from backend.startup import StartupClock
 clock = StartupClock()
+
+# If start-up hangs before systemd hears READY (it kills the app at 90 s),
+# write where every thread is stuck to the journal first. Cancelled once
+# READY is sent. faulthandler works from C, so a stuck main thread can't stop it.
+STARTUP_STACKS_AFTER = 45
+faulthandler.dump_traceback_later(STARTUP_STACKS_AFTER, exit=False)
 
 # Qt's FFmpeg backend dumps every file's full tag block to the console. Must be
 # set before Qt loads, so it lives above the PyQt imports.
@@ -342,6 +349,7 @@ def main():
     # Tell systemd we're up, then keep its watchdog fed from the UI thread.
     watchdog = Watchdog()
     watchdog.start()
+    faulthandler.cancel_dump_traceback_later()
     updater.start()
     clock.mark("started")
     code = app.exec()

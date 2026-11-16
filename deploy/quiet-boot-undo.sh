@@ -10,7 +10,7 @@ set -e
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 FW=/boot/firmware
 # The options setup adds to cmdline.txt (it also moves console=tty1 to tty3).
-QUIET="quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0"
+QUIET="quiet splash loglevel=3 logo.nologo vt.global_cursor_default=0 systemd.show_status=false rd.systemd.show_status=false udev.log_level=3 rd.udev.log_level=3"
 trap 'rm -f "$FW/cmdline.txt.baja-new" "$FW/config.txt.baja-new"' EXIT
 
 # Setup's first run kept a copy of each file (*.baja-backup). The copies only
@@ -81,6 +81,15 @@ else
     echo "   no config.txt.baja-backup, config.txt left alone"
 fi
 rm -f "$FW/cmdline.txt.baja-backup" "$FW/config.txt.baja-backup"
+
+# The bootloader's own HDMI screen, back on if setup turned it off.
+if [ -f /etc/baja-eeprom-hdmi.added ] && eeprom=$(rpi-eeprom-config 2>/dev/null); then
+    tmp=$(mktemp)
+    printf '%s\n' "$eeprom" | grep -v '^DISABLE_HDMI=1' > "$tmp"
+    rpi-eeprom-config --apply "$tmp" >/dev/null && rm -f /etc/baja-eeprom-hdmi.added &&
+        echo "   bootloader screen back from the next reboot"
+    rm -f "$tmp"
+fi
 
 theme=$(cat /etc/baja-plymouth-theme.backup 2>/dev/null || echo pix)
 plymouth-set-default-theme -R "$theme"

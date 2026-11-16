@@ -672,7 +672,10 @@ Item {
                 clip: true
                 spacing: 6
                 boundsBehavior: Flickable.StopAtBounds
-                model: maps.results
+                // Waiting for a search (the 180 ms debounce or the search itself):
+                // the last search's rows don't stay on screen meanwhile.
+                readonly property bool waiting: searchDelay.running || (page.hasMaps && maps.searching)
+                model: searchDelay.running ? [] : maps.results
                 header: Heading {
                     width: resultList.width
                     visible: page.saveAs !== ""
@@ -690,10 +693,10 @@ Item {
                     onHit: page.choose(modelData)
                 }
                 MapLabel {
-                    visible: resultList.count === 0
+                    visible: resultList.count === 0 && (resultList.waiting || page.panel === "results" || page.query.trim() !== "")
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Nothing by that name in the offline map"
+                    text: resultList.waiting ? "Searching..." : "Nothing by that name in the offline map"
                     color: page.cDim
                     font.pixelSize: Theme.fontBody
                 }

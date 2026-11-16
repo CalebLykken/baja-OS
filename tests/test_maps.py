@@ -200,6 +200,65 @@ class RobustnessTest(unittest.TestCase):
         self.assertEqual(maps.results, [])
 
 
+class SearchingTest(unittest.TestCase):
+    """`searching` is True from the start of a search until its own answer
+    comes, so the list can say Searching instead of Nothing by that name. The
+    worker never runs here: the answer is delivered by calling _on_found."""
+
+    class NoThread:
+        """A worker that never runs, so a search stays in flight."""
+        def __init__(self, target=None, name=None, daemon=None):
+            pass
+
+        def start(self):
+            pass
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)          # no place index: the search is never answered anyway
+        mock.patch.object(maps_module, "threading", SimpleNamespace(Thread=self.NoThread, Lock=threading.Lock)).start()
+        self.addCleanup(mock.patch.stopall)
+        self.maps = MapService(self.dir)
+
+    def test_a_text_search_is_searching_until_its_answer(self):
+        self.maps.search("x", 0, 0)
+        self.assertTrue(self.maps.searching)
+        self.maps._on_found("x", [{"name": "X", "kind": "street", "area": "", "lon": 0, "lat": 0, "distance": -1}])
+        self.assertFalse(self.maps.searching)
+        self.assertEqual(len(self.maps.results), 1)
+
+    def test_a_late_answer_for_an_older_query_changes_nothing(self):
+        self.maps.search("a", 0, 0)
+        self.maps.search("b", 0, 0)
+        self.maps._on_found("a", [{"name": "A", "kind": "street", "area": "", "lon": 0, "lat": 0, "distance": -1}])
+        self.assertTrue(self.maps.searching)
+        self.assertEqual(self.maps.results, [])
+
+    def test_a_new_search_clears_the_last_rows(self):
+        self.maps._results = [{"name": "old"}]
+        self.maps.searchNearby("gas", 0.0, 0.0)
+        self.assertTrue(self.maps.searching)
+        self.assertEqual(self.maps.results, [])
+
+    def test_an_empty_text_search_is_not_searching(self):
+        self.maps.search("   ", 0, 0)
+        self.assertFalse(self.maps.searching)
+
+    def test_a_route_search_clears_quietly(self):
+        # The along card shows rows only once they are its own, so no rows signal here.
+        self.maps._results = [{"name": "old"}]
+        signals = []
+        self.maps.resultsChanged.connect(lambda: signals.append(1))
+        self.maps.searchAlong("gas", [], 0, 0.0)
+        self.assertTrue(self.maps.searching)
+        self.assertEqual(signals, [])
+
+    def test_the_page_says_searching(self):
+        page = (Path(__file__).resolve().parent.parent / "qml" / "pages" / "MapsPage.qml").read_text()
+        self.assertIn("maps.searching", page)
+
+
 class UpdateTest(unittest.TestCase):
     """The map update's busy flag must always clear, however the script's
     output goes. The worker runs inline and install-map.sh is faked."""

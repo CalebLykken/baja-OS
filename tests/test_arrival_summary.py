@@ -119,6 +119,17 @@ class QmlTest(unittest.TestCase):
         self.assertIn("routing.offRoute", card)
         self.assertIn("routing.error", card)
 
+    def test_a_failed_reroute_wins_over_off_route_and_goes_when_back_on_the_line(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        card = text[text.index("id: turnCard"):]
+        # The failed-reroute text is chosen before "Off route" (both are true at once).
+        self.assertLess(card.index('"No new route found'), card.index('"Off route"'))
+        # It only counts while still off the line, so a stale error is not shown.
+        lost = card[card.index("property bool lostNow"):].split("\n")[0]
+        self.assertIn("routing.offRoute", lost)
+        off = card[card.index("property bool offNow"):].split("\n")[0]
+        self.assertIn('routing.error === ""', off)
+
 
 if __name__ == "__main__":
     unittest.main()

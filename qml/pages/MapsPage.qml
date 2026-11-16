@@ -822,8 +822,10 @@ Item {
             // Guidance that can't be trusted: the truck left the line and the
             // new route hasn't landed, or asking for one failed (the old line
             // stays, so its arrow is stale).
-            readonly property bool offNow: page.hasRouting && routing.offRoute && !routing.computing && !routing.arrived
-            readonly property bool lostNow: page.hasRouting && routing.error !== "" && !routing.computing && !routing.arrived
+            readonly property bool offNow: page.hasRouting && routing.offRoute && routing.error === "" && !routing.computing && !routing.arrived
+            // A failed reroute leaves error set while still off the line; once back on it the
+            // old line is good again, so the notice only counts while off route.
+            readonly property bool lostNow: page.hasRouting && routing.offRoute && routing.error !== "" && !routing.computing && !routing.arrived
             property real barFill: 0
             function resetArrival() {
                 arrivalMoment.stop()
@@ -867,7 +869,7 @@ Item {
                     Layout.fillWidth: true
                     spacing: 2
                     MapLabel {
-                        visible: page.hasRouting && !routing.arrived && !routing.computing && !turnCard.offNow
+                        visible: page.hasRouting && !routing.arrived && !routing.computing && !turnCard.offNow && !turnCard.lostNow
                         numeric: true
                         text: page.hasRouting ? Units.distanceText(routing.distanceToTurn) : ""
                         color: page.cOnBanner
@@ -881,8 +883,8 @@ Item {
                         maximumLineCount: 3
                         elide: Text.ElideRight
                         text: !page.hasRouting ? "" : routing.computing ? "Finding a new route"
-                              : turnCard.offNow ? "Off route"
-                              : turnCard.lostNow ? "No new route found. Retrying" : routing.instruction
+                              : turnCard.lostNow ? "No new route found. Retrying"
+                              : turnCard.offNow ? "Off route" : routing.instruction
                         color: page.cOnBanner
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.DemiBold

@@ -1173,6 +1173,7 @@ Item {
         // turn card or search panel otherwise (top centre is taken by the
         // Home/Work keys when browsing).
         Rectangle {
+            id: outsideChip
             readonly property bool shown: page.map !== null && page.map.outside && page.mapReady
             visible: shown
             x: whereTo.visible ? 16 : page.panelWidth + 32
@@ -1185,6 +1186,33 @@ Item {
                 id: outsideText
                 anchors.centerIn: parent
                 text: "Outside the offline map"
+                color: page.cOnBanner
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+        }
+
+        // ================================================================================
+        // The GPS signal is lost (a tunnel, a garage): the map and the route hold the
+        // last position, so guidance has stopped following the truck. Same place as the
+        // outside chip, one row below it when both show. Not shown for the demo drive.
+        Rectangle {
+            id: gpsLostChip
+            readonly property bool shown: page.mapReady && typeof gps !== "undefined" && gps !== null
+                                          && gps.stale && gps.source !== "demo"
+            visible: shown
+            x: outsideChip.x
+            y: outsideChip.y + (outsideChip.visible ? 64 : 0)
+            width: gpsLostText.implicitWidth + 44
+            height: 56
+            radius: page.cRadius
+            color: page.cBanner
+            border.width: 3
+            border.color: page.cRed
+            MapLabel {
+                id: gpsLostText
+                anchors.centerIn: parent
+                text: "GPS signal lost"
                 color: page.cOnBanner
                 font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold

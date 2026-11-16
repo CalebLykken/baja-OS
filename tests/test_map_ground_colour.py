@@ -66,5 +66,27 @@ class MapGroundColour(unittest.TestCase):
         self.assertIn('classList.toggle("day", m === "day")', js)
 
 
+class GpsLostChip(unittest.TestCase):
+    """The 'GPS signal lost' chip on the Maps page: shown with gps.stale, not for the demo."""
+
+    def test_chip_is_bound_to_gps_stale_and_not_the_demo(self):
+        qml = read("qml", "pages", "MapsPage.qml")
+        self.assertIn('text: "GPS signal lost"', qml)
+        chip = qml[qml.index("id: gpsLostChip"):]
+        chip = chip[:chip.index("MapLabel")]
+        self.assertIn("gps.stale", chip)
+        self.assertIn('gps.source !== "demo"', chip)
+        self.assertIn("page.mapReady", chip)
+        self.assertIn("border.color: page.cRed", chip)
+
+    def test_chip_stacks_below_the_outside_chip_at_the_same_x(self):
+        qml = read("qml", "pages", "MapsPage.qml")
+        chip = qml[qml.index("id: gpsLostChip"):]
+        chip = chip[:chip.index("MapLabel")]
+        self.assertIn("x: outsideChip.x", chip)
+        self.assertIn("y: outsideChip.y + (outsideChip.visible ? 64 : 0)", chip)
+        self.assertIn("id: outsideChip", qml)
+
+
 if __name__ == "__main__":
     unittest.main()

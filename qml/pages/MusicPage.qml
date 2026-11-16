@@ -317,6 +317,7 @@ Item {
                         // the song only jumps on release, so a drag doesn't re-decode.
                         Item {
                             id: seekArea
+                            objectName: "seekArea"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 44
                             readonly property bool canSeek: media.canSeek && media.duration > 0 && !page.idle
@@ -331,6 +332,24 @@ Item {
                                 radius: 5
                                 value: seekArea.dragging ? seekArea.dragValue
                                                          : (media.duration > 0 ? media.position / media.duration : 0)
+                            }
+                            // The handle: it shows the bar can be dragged, and it grows while a
+                            // finger is on it. It sits on the end of the fill and is only drawn
+                            // where seeking works (not on a phone or with nothing playing).
+                            Rectangle {
+                                id: seekThumb
+                                objectName: "seekThumb"
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: seekBar.width * seekBar.value - width / 2
+                                width: seekArea.dragging ? 36 : 28
+                                height: width
+                                radius: width / 2
+                                color: Theme.accent
+                                border.width: 2
+                                border.color: Theme.bg
+                                visible: seekArea.canSeek
+                                // Size changes only on press and release, so nothing runs at rest.
+                                Behavior on width { NumberAnimation { duration: 80 } }
                             }
                             MouseArea {
                                 anchors { fill: parent; bottomMargin: -28 }
@@ -347,9 +366,25 @@ Item {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                            // While dragging, the elapsed time turns accent and bold, and the right
+                            // side counts down the time left at the drag point.
+                            Label {
+                                objectName: "seekElapsed"
+                                text: page.idle ? "" : page.mmss(seekArea.dragging ? Math.round(seekArea.dragValue * media.duration) : media.position)
+                                color: seekArea.dragging ? Theme.accent : Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: seekArea.dragging ? Font.Bold : Font.Normal
+                            }
                             Item { Layout.fillWidth: true }
-                            Label { text: page.idle ? "" : page.mmss(media.duration); color: Theme.textDim; font.pixelSize: Theme.fontSmall }
+                            Label {
+                                objectName: "seekRemaining"
+                                text: page.idle ? ""
+                                      : seekArea.dragging
+                                        ? "−" + page.mmss(Math.max(0, media.duration - Math.round(seekArea.dragValue * media.duration)))
+                                        : page.mmss(media.duration)
+                                color: Theme.textDim
+                                font.pixelSize: Theme.fontSmall
+                            }
                         }
                     }
 

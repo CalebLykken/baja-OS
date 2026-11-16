@@ -76,6 +76,47 @@ print(json.dumps(r))
 sys.stdout.flush()
 '''
 
+# One NavButton per label in a 112 px rail, so each label's laid-out width can
+# be checked against its 96 px plate (card width = 112 - 2 * 8).
+LABEL_SCRIPT = r'''
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import QEventLoop, QTimer, QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+app = QGuiApplication(sys.argv)
+ROOT = Path.cwd()
+LABELS = ["Home", "Music", "Maps", "Gauges", "Truck", "Settings"]
+
+
+def wait(ms):
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+engine = QQmlEngine()
+r = {}
+for i, label in enumerate(LABELS):
+    component = QQmlComponent(engine)
+    component.setData(('import QtQuick\nimport "qml/components"\n'
+                       'Item { width: 112; height: 400; '
+                       'NavButton { objectName: "nb"; icon: "home"; label: "%s"; active: true } }'
+                       % label).encode(),
+                      QUrl.fromLocalFile(str(ROOT / ("x%d.qml" % i))))
+    obj = component.create()
+    if obj is None:
+        for error in component.errors():
+            print(error.toString(), file=sys.stderr)
+        sys.exit(1)
+    nb = obj.findChild(object, "nb")
+    wait(60)
+    r[label] = {"label": nb.property("labelWidth"), "card": nb.property("cardWidth")}
+print(json.dumps(r))
+sys.stdout.flush()
+'''
+
 PRESS_SCRIPT = r'''
 import json, sys, time
 from pathlib import Path
@@ -171,6 +212,19 @@ class NavButtonMotionTest(unittest.TestCase):
         self.assertIn("id: pressSpring", source)
         self.assertIn("pressSpring.targetValue < 1 ? 70 : 180", source)
         self.assertIn("easing.overshoot: 2.5", source)
+
+    def test_every_nav_label_fits_inside_its_plate(self):
+        # The label may not run past the highlighted plate: it keeps a gap of at
+        # least 4 px each side (contentWidth <= card width - 8).
+        result = subprocess.run([sys.executable, "-c", LABEL_SCRIPT], cwd=ROOT,
+                                capture_output=True, text=True, timeout=120,
+                                env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(data["Settings"]["card"], 96)
+        for label, sizes in data.items():
+            self.assertGreater(sizes["label"], 0, label)
+            self.assertLessEqual(sizes["label"], sizes["card"] - 8, label)
 
     def test_no_idle_cost_constructs(self):
         source = (ROOT / "qml" / "components" / "NavButton.qml").read_text()

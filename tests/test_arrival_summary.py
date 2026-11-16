@@ -109,6 +109,15 @@ class ResumedTest(unittest.TestCase):
 
 
 class QmlTest(unittest.TestCase):
+    def test_the_trip_card_has_an_arrived_state_with_parking_and_done(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("function findParkingHere", text)
+        card = text[text.index("id: tripCard"):]
+        card = card[:card.index("The truck is off the offline map")]
+        self.assertIn("routing.arrived", card)
+        self.assertIn("page.findParkingHere()", card)
+        self.assertIn('"Done"', card)
+
     def test_the_turn_card_shows_it(self):
         self.assertIn("routing.arrivalSummary", (ROOT / "qml/pages/MapsPage.qml").read_text())
 

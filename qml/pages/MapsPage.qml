@@ -332,6 +332,13 @@ Item {
         if (map) map.call("clearPlace()")
     }
 
+    function findParkingHere() {
+        // At the destination: end the route, then list the nearest parking
+        // around where the truck stopped (the search starts from the gps fix).
+        endRoute()
+        searchCategory("parking", "Parking")
+    }
+
     // Zoom keys appear for a while after the map is touched.
     property bool showZoom: false
     Timer { id: zoomHide; interval: 10000; onTriggered: page.showZoom = false }
@@ -969,6 +976,7 @@ Item {
             width: page.panelWidth
             height: 132 + (nextStop.visible ? nextStop.height + 8 : 0)
             Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            readonly property bool arrived: page.hasRouting && routing.arrived
             readonly property real timeLeft: page.hasRouting ? routing.remainingTime : 0
             readonly property string distance: page.hasRouting ? Units.distanceText(routing.remainingDistance) : ""
             Item {
@@ -1007,18 +1015,50 @@ Item {
                           leftMargin: 14; rightMargin: 16 }
                 height: 132
                 spacing: 0
+                MapLabel {                                // arrived: one clear word, then parking
+                    visible: tripCard.arrived
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 14
+                    text: "Arrived"
+                    color: page.cText
+                    font.pixelSize: Theme.fontTitle
+                    font.weight: Font.Bold
+                }
+                Rectangle {                               // Parking: nearest parking from here
+                    visible: tripCard.arrived
+                    Layout.preferredWidth: 150
+                    Layout.preferredHeight: 100
+                    Layout.rightMargin: 8
+                    radius: Theme.radius
+                    color: parkTap.pressed ? page.cLine : page.cPanelHi
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 10
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: "parking"; size: 40; color: page.cBlue }
+                        MapLabel {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Parking"
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                    }
+                    TapHandler { id: parkTap; onTapped: page.findParkingHere() }
+                }
                 TripStat {
+                    visible: !tripCard.arrived
                     Layout.preferredWidth: 130
                     value: page.hasRouting ? Units.arrivalText(tripCard.timeLeft) : ""
                     label: "arrival"
                 }
                 TripStat {
+                    visible: !tripCard.arrived
                     readonly property int minutes: Math.max(1, Math.round(tripCard.timeLeft / 60))
                     value: minutes < 60 ? String(minutes)
                                         : Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0")
                     label: minutes < 60 ? "min" : "hr"
                 }
                 TripStat {
+                    visible: !tripCard.arrived
                     value: tripCard.distance.split(" ")[0]
                     label: tripCard.distance.split(" ")[1] || ""
                 }
@@ -1029,7 +1069,7 @@ Item {
                     color: endTap.pressed ? Qt.darker(page.cRed, 1.2) : page.cRed
                     MapLabel {
                         anchors.centerIn: parent
-                        text: "End"
+                        text: tripCard.arrived ? "Done" : "End"
                         color: page.cOnKey
                         font.pixelSize: Theme.fontTitle
                         font.weight: Font.Bold

@@ -9,7 +9,8 @@ import io
 import json
 import unittest
 
-from backend.errorlog import ErrorLog
+from backend.errorlog import ErrorLog, QtMessages
+from PyQt6.QtCore import QtMsgType
 
 
 class FakeTimer:
@@ -175,6 +176,44 @@ class ErrorLogTest(unittest.TestCase):
             json.loads("{")
         except ValueError as e:
             return type(e), e, e.__traceback__
+
+
+class QtMessagesTest(unittest.TestCase):
+    def setUp(self):
+        FakeTimer.started = []
+        self.out = io.StringIO()
+        self.qt = QtMessages(out=self.out, full=3, every=60, timer=FakeTimer)
+        self.ctx = None
+
+    def test_repeats_print_three_then_one_summary(self):
+        msg = "qrc:/Gauge.qml:12: TypeError: Cannot read property 'x' of null"
+        for _ in range(500):
+            self.qt.handle(QtMsgType.QtWarningMsg, self.ctx, msg)
+        self.assertEqual(self.out.getvalue().count(msg), 3)
+        self.assertEqual(len(FakeTimer.started), 1)
+        self.qt.flush()
+        self.assertIn("Same message 497 more times", self.out.getvalue())
+
+    def test_distinct_messages_each_print(self):
+        for i in range(5):
+            self.qt.handle(QtMsgType.QtWarningMsg, self.ctx, f"warning {i}")
+        for i in range(5):
+            self.assertIn(f"warning {i}", self.out.getvalue())
+
+    def test_a_fatal_message_always_prints(self):
+        for _ in range(6):
+            self.qt.handle(QtMsgType.QtFatalMsg, self.ctx, "fatal thing")
+        self.assertEqual(self.out.getvalue().count("fatal thing"), 6)
+
+    def test_a_broken_stderr_does_not_raise(self):
+        class Broken:
+            def write(self, *_):
+                raise OSError("closed")
+            flush = write
+        qt = QtMessages(out=Broken(), timer=FakeTimer)
+        for _ in range(10):
+            qt.handle(QtMsgType.QtWarningMsg, self.ctx, "x")
+        qt.flush()
 
 
 if __name__ == "__main__":

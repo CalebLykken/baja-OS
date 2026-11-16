@@ -44,6 +44,13 @@ STALE_S = 10            # a real fix older than this no longer counts
 RATE_HZ = 5             # position reports per second the receiver is asked for
 DYNMODEL = 4            # u-blox "automotive": a truck on a road, not a walker
 SETUP_WAIT_S = 1.0      # how long to listen for the receiver's ACK/NAK replies
+# Parked or at a light the receiver's position only wobbles by a metre or two,
+# yet it reports 5 times a second. A report at rest (both fixes slower than
+# REST_SPEED, within REST_METRES of the last one) is held without telling the
+# UI, except once every REST_PUBLISH_S so it still sees a live fix.
+REST_SPEED = 0.5        # m/s: slower than this counts as at rest
+REST_METRES = 3.0       # a move of more than this is real, not jitter
+REST_PUBLISH_S = 1.0    # at rest, tell the UI at least this often
 
 
 def _metres(a, b):
@@ -404,6 +411,7 @@ class Gps(QObject):
         self._sats = 0                   # satellites used for the fix
         self._in_view = 0                # satellites the receiver can see
         self._report.connect(self._apply)
+        self._last_published = None      # when a real fix was last announced
         self._route = None
         self._travelled = 0.0
         self._path = None                # a one-way route to drive instead (navigation demo)
@@ -644,9 +652,26 @@ class Gps(QObject):
             if self._pos.fix is not had:
                 self.changed.emit()              # the demo drive gave way
             return
-        self._pos.real(report, time.monotonic())
+        now = time.monotonic()
+        quiet = self._at_rest(report, now)
+        self._pos.real(report, now)      # always: freshness and the held position stay current
+        if quiet:
+            return
+        self._last_published = now
         self.changed.emit()
         self.fixChanged.emit()
+
+    def _at_rest(self, report, now):
+        """Whether this report is only a parked truck's jitter, not worth announcing."""
+        prev = self._pos.fix
+        if (prev is None or prev["source"] != "gps" or not self._pos.fresh(now)
+                or self._last_published is None or now - self._last_published >= REST_PUBLISH_S):
+            return False
+        speed = _number(report.get("speed"))
+        if speed is None or speed >= REST_SPEED or prev["speed"] >= REST_SPEED:
+            return False
+        a, b = (prev["lon"], prev["lat"]), (report["lon"], report["lat"])
+        return _metres(a, b) <= REST_METRES
 
     def followPath(self, points):
         """In demo mode, drive this route (from its start) instead of the loop."""

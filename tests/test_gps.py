@@ -159,8 +159,42 @@ class FixSignalTest(unittest.TestCase):
     def test_the_same_position_again_is_still_a_new_fix(self):
         g = self.gps()
         g._apply(real())
+        self.now += 1.0
         g._apply(real())                                      # stopped at a light
         self.assertEqual(self.events.count("fix"), 2)
+
+    def test_a_parked_truck_is_announced_about_once_a_second(self):
+        g = self.gps()
+        for i in range(50):
+            g._apply(real(lat=47.0 + (i % 3) * 0.000005, speed=0.0))    # under 1 m of wobble
+            self.now += 0.2
+        self.assertLessEqual(self.events.count("fix"), 11)
+        self.assertLessEqual(self.events.count("changed"), 11)
+        self.assertTrue(g.realFix)
+        self.assertFalse(g.stale)
+
+    def test_moving_reports_all_announce(self):
+        g = self.gps()
+        for i in range(20):
+            g._apply(real(lat=47.0 + i * 0.00001, speed=5.0))
+            self.now += 0.2
+        self.assertEqual(self.events.count("fix"), 20)
+
+    def test_a_jump_at_rest_announces_at_once(self):
+        g = self.gps()
+        g._apply(real(speed=0.0))
+        self.now += 0.2
+        g._apply(real(lat=47.0001, speed=0.0))                # about 11 m
+        self.assertEqual(self.events.count("fix"), 2)
+
+    def test_stale_then_fresh_announces(self):
+        g = self.gps()
+        g._apply(real(speed=0.0))
+        self.now += STALE_S + 1
+        g._tick()
+        self.events.clear()
+        g._apply(real(speed=0.0))
+        self.assertEqual(self.events.count("fix"), 1)
 
     def test_satellite_updates_are_not_fixes(self):
         g = self.gps()

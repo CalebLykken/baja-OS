@@ -41,6 +41,9 @@ REST = 3
 PRESS_GAP_S = 0.05                       # ignore switch bounce shorter than this
 LONG_PRESS_MS = 700                      # held this long: a long press (fires while still held)
 DOUBLE_PRESS_MS = 300                    # a second press within this of the first release: a double
+FAST_CLICK_S = 0.05                      # clicks this close together move the volume 3 steps each
+QUICK_CLICK_S = 0.12                     # this close, 2 steps; slower than this, 1 for precision
+SPIN_RESET_S = 0.4                       # a pause this long starts the count again
 
 
 class Gestures(QObject):
@@ -98,6 +101,32 @@ def double_press(routing, media):
         routing.repeatLast()
     else:
         media.next()
+
+
+class Acceleration:
+    """How many volume steps a click is worth: 1 normally, 2 or 3 when clicks
+    in the same direction follow each other quickly. A change of direction or
+    a pause starts again at 1. Pure: the caller supplies the time."""
+
+    def __init__(self):
+        self._direction = 0
+        self._at = float("-inf")
+
+    def steps(self, direction, now):
+        gap = now - self._at
+        same = direction == self._direction and gap <= SPIN_RESET_S
+        self._direction, self._at = direction, now
+        if not same or gap >= QUICK_CLICK_S:
+            return 1
+        return 3 if gap < FAST_CLICK_S else 2
+
+
+def turn_volume(media, accel, step, now=time.monotonic):
+    """What a click of the knob does: volume up or down, more steps the
+    faster the knob is spun."""
+    change = media.volumeUp if step > 0 else media.volumeDown
+    for _ in range(accel.steps(1 if step > 0 else -1, now())):
+        change()
 
 
 class Knob(QObject):

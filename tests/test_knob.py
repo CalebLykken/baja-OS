@@ -12,7 +12,7 @@ try:
     from PyQt6.QtCore import QCoreApplication, QEventLoop, QTimer
     from backend import hub as hub_module, knob
     from backend.hub import MediaHub
-    from backend.knob import Gestures, double_press
+    from backend.knob import Acceleration, Gestures, double_press, turn_volume
     from backend.media import MediaPlayer
 except ImportError as e:
     raise unittest.SkipTest(f"PyQt6 isn't installed ({e})")
@@ -24,6 +24,50 @@ def spin(ms):
     loop = QEventLoop()
     QTimer.singleShot(ms, loop.quit)
     loop.exec()
+
+
+class VolumeAccelerationTest(unittest.TestCase):
+    def setUp(self):
+        self.t = 0.0
+        self.up = self.down = 0
+        media = mock.Mock()
+        media.volumeUp.side_effect = lambda: setattr(self, "up", self.up + 1)
+        media.volumeDown.side_effect = lambda: setattr(self, "down", self.down + 1)
+        self.media, self.accel = media, Acceleration()
+
+    def click(self, step, gap):
+        """One click `gap` seconds after the last; the calls it made."""
+        self.t += gap
+        before = self.up + self.down
+        turn_volume(self.media, self.accel, step, lambda: self.t)
+        return self.up + self.down - before
+
+    def test_slow_clicks_are_one_step_each(self):
+        self.assertEqual([self.click(1, 0.2) for _ in range(4)], [1, 1, 1, 1])
+        self.assertEqual(self.down, 0)
+
+    def test_fast_clicks_reach_three(self):
+        self.assertEqual([self.click(1, g) for g in (1, 0.03, 0.03, 0.03)], [1, 3, 3, 3])
+
+    def test_quick_clicks_are_two(self):
+        self.assertEqual([self.click(-1, g) for g in (1, 0.08, 0.08)], [1, 2, 2])
+        self.assertEqual(self.down, 5)
+
+    def test_reversing_resets(self):
+        self.click(1, 1)
+        self.assertEqual(self.click(1, 0.03), 3)
+        self.assertEqual(self.click(-1, 0.03), 1)
+        self.assertEqual(self.click(-1, 0.03), 3)
+
+    def test_a_pause_resets(self):
+        self.click(1, 1)
+        self.click(1, 0.03)
+        self.assertEqual(self.click(1, 1.0), 1)
+
+    def test_never_more_than_three(self):
+        for gap in (0.001, 0.01, 0.049, 0.05, 0.1, 0.119, 0.12, 0.3, 0.4, 0.5, 5):
+            self.assertLessEqual(self.click(1, gap), 3)
+        self.assertEqual(Acceleration().steps(1, 0.0), 1)
 
 
 class GesturesTest(unittest.TestCase):

@@ -10,10 +10,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend.powerlog import (KERNEL_BACKOFF_FIRST, KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S,
+from backend.powerlog import (MAX_NOTES, KERNEL_BACKOFF_FIRST, KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S,
                               KERNEL_WORTH_KEEPING, flag_names, kernel_cmd,
                               logged_kernel_events, new_kernel_events, next_backoff,
-                              parse_pmic, prune)
+                              parse_pmic, prune, PowerLog)
 
 PMIC = """\
      3V7_WL_SW_A current(0)=0.10000000A
@@ -148,6 +148,53 @@ class KernelFollowerTest(unittest.TestCase):
 
     def test_backoff_resets_after_a_long_run(self):
         self.assertEqual(next_backoff(KERNEL_BACKOFF_MAX, KERNEL_RUN_OK_S + 1), KERNEL_BACKOFF_FIRST)
+
+
+class NoteTest(unittest.TestCase):
+    """note() is for other threads: it queues, the sampling thread writes."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = Path(self._dir.name) / "x.log"
+        self.p = PowerLog(folder=self._dir.name)
+        self.p._file = open(self.path, "a", buffering=1)
+        self.addCleanup(self.p._file.close)
+        patches = [mock.patch("builtins.print"), mock.patch("backend.powerlog.os.fsync")]
+        self.fsync = patches[1].start()
+        patches[0].start()
+        for patcher in patches:
+            self.addCleanup(patcher.stop)
+
+    def events(self):
+        return [line.split("|", 3) for line in self.path.read_text().splitlines()
+                if line.startswith("EVENT|")]
+
+    def test_a_note_from_a_thread_is_written_on_the_drain_with_its_own_time(self):
+        import threading
+        with mock.patch.object(PowerLog, "_stamp", side_effect=["10:00:00|1.0", "10:00:05|6.0"]):
+            t = threading.Thread(target=lambda: (self.p.note("car quiet"), self.p.note("countdown")))
+            t.start()
+            t.join()
+        self.assertEqual(self.events(), [])
+        self.p._drain_notes()
+        self.assertEqual([(e[1], e[2], e[3]) for e in self.events()],
+                         [("10:00:00", "1.0", "car quiet"), ("10:00:05", "6.0", "countdown")])
+        self.p._drain_notes()
+        self.assertEqual(len(self.events()), 2)
+
+    def test_note_never_forces_to_the_card(self):
+        self.p.note("car quiet")
+        self.fsync.assert_not_called()
+
+    def test_a_full_queue_drops_the_oldest(self):
+        for i in range(MAX_NOTES + 5):
+            self.p.note(f"n{i}")
+        self.p._drain_notes()
+        texts = [e[3] for e in self.events()]
+        self.assertEqual(len(texts), MAX_NOTES)
+        self.assertEqual(texts[0], "n5")
+        self.assertEqual(texts[-1], f"n{MAX_NOTES + 4}")
 
 
 if __name__ == "__main__":

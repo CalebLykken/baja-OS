@@ -150,6 +150,36 @@ Item {
         }
     }
 
+    // A minus, a bar, the percentage and a plus: one level the driver can nudge or drag.
+    // The caller does the maths in its handlers; this only lays the row out.
+    component LevelRow: RowLayout {
+        property real value: 0
+        property string percentText: ""
+        property int segments: 20
+        signal stepDown()
+        signal stepUp()
+        signal moved(real v)
+        Layout.fillWidth: true
+        spacing: 16
+        IconButton { icon: "remove"; size: 60; onClicked: stepDown() }
+        LevelBar {
+            Layout.fillWidth: true
+            segments: parent.segments
+            value: parent.value
+            onMoved: (v) => parent.moved(v)
+        }
+        Label {
+            Layout.preferredWidth: 72
+            Layout.leftMargin: 8
+            horizontalAlignment: Text.AlignRight
+            text: percentText
+            font.family: Theme.numFont
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.DemiBold
+        }
+        IconButton { icon: "add"; size: 60; onClicked: stepUp() }
+    }
+
     // A static preview of one Style in its own colours, shape and numerals.
     // Plain rectangles and text only: nothing moves, nothing polls.
     component StyleSwatch: Rectangle {
@@ -229,24 +259,12 @@ Item {
                 Layout.fillWidth: true
                 heading: (display.night ? "Brightness at night" : "Brightness in daylight")
                          + (display.hardware ? "" : " (software dim)")
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 16
-                    IconButton { icon: "remove"; size: 60; onClicked: display.setBrightness(display.brightness - 10) }
-                    LevelBar {
-                        Layout.fillWidth: true
-                        value: display.brightness / 100
-                        onMoved: (v) => display.setBrightness(Math.round(v * 100))
-                    }
-                    Label {
-                        Layout.preferredWidth: 64
-                        horizontalAlignment: Text.AlignRight
-                        text: display.brightness + "%"
-                        font.family: Theme.numFont
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    IconButton { icon: "add"; size: 60; onClicked: display.setBrightness(display.brightness + 10) }
+                LevelRow {
+                    value: display.brightness / 100
+                    percentText: display.brightness + "%"
+                    onStepDown: display.setBrightness(display.brightness - 10)
+                    onStepUp: display.setBrightness(display.brightness + 10)
+                    onMoved: (v) => display.setBrightness(Math.round(v * 100))
                 }
                 SettingRow {
                     label: "Screen"
@@ -356,32 +374,20 @@ Item {
                 Layout.fillWidth: true
                 heading: "Loudest volume"
                 Note { text: "The most the Pi will play, whatever the source. Handy with headphones: the volume slider still goes to 100, and 100 means this." }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 16
-                    IconButton { icon: "remove"; size: 60; onClicked: media.setMaxVolume(media.maxVolume - 5) }
-                    LevelBar {
-                        Layout.fillWidth: true
-                        segments: 14
-                        value: (media.maxVolume - 30) / 70
-                        onMoved: (v) => media.setMaxVolume(Math.round((30 + v * 70) / 5) * 5)
-                    }
-                    Label {
-                        Layout.preferredWidth: 64
-                        horizontalAlignment: Text.AlignRight
-                        text: media.maxVolume + "%"
-                        font.family: Theme.numFont
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    IconButton { icon: "add"; size: 60; onClicked: media.setMaxVolume(media.maxVolume + 5) }
+                LevelRow {
+                    segments: 14
+                    value: (media.maxVolume - 30) / 70
+                    percentText: media.maxVolume + "%"
+                    onStepDown: media.setMaxVolume(media.maxVolume - 5)
+                    onStepUp: media.setMaxVolume(media.maxVolume + 5)
+                    onMoved: (v) => media.setMaxVolume(Math.round((30 + v * 70) / 5) * 5)
                 }
             }
             Section {
                 Layout.fillWidth: true
-                heading: "Spoken directions"
-                RowLayout {
-                    spacing: 16
+                heading: "Voice"
+                SettingRow {
+                    label: "Spoken directions"
                     SegmentedControl {
                         enabled: typeof voice !== "undefined" && voice.available
                         opacity: enabled ? 1 : 0.5
@@ -396,26 +402,14 @@ Item {
                         onClicked: voice.test()
                     }
                 }
-                RowLayout {
+                LevelRow {
                     visible: typeof voice !== "undefined" && voice.available
-                    Layout.fillWidth: true
-                    spacing: 16
-                    IconButton { icon: "remove"; size: 60; onClicked: voice.setLevel(voice.level - 5) }
-                    LevelBar {
-                        Layout.fillWidth: true
-                        segments: 14
-                        value: typeof voice !== "undefined" ? (voice.level - 30) / 70 : 0
-                        onMoved: (v) => voice.setLevel(Math.round((30 + v * 70) / 5) * 5)
-                    }
-                    Label {
-                        Layout.preferredWidth: 64
-                        horizontalAlignment: Text.AlignRight
-                        text: (typeof voice !== "undefined" ? voice.level : 0) + "%"
-                        font.family: Theme.numFont
-                        font.pixelSize: Theme.fontBody
-                        font.weight: Font.DemiBold
-                    }
-                    IconButton { icon: "add"; size: 60; onClicked: voice.setLevel(voice.level + 5) }
+                    segments: 14
+                    value: typeof voice !== "undefined" ? (voice.level - 30) / 70 : 0
+                    percentText: (typeof voice !== "undefined" ? voice.level : 0) + "%"
+                    onStepDown: voice.setLevel(voice.level - 5)
+                    onStepUp: voice.setLevel(voice.level + 5)
+                    onMoved: (v) => voice.setLevel(Math.round((30 + v * 70) / 5) * 5)
                 }
                 Note {
                     text: typeof voice !== "undefined" && voice.available
@@ -444,12 +438,15 @@ Item {
                     confirmText: "Tap to unlink"
                     onConfirmed: spotifyAccount.signOut()
                 }
-                Note { text: "Carry on playing Spotify after a restart or a lost connection" }
-                SegmentedControl {
-                    options: [{ label: "On", value: true }, { label: "Off", value: false }]
-                    current: media.spotifyResume
-                    onPicked: (v) => media.setSpotifyResume(v)
+                SettingRow {
+                    label: "Resume Spotify"
+                    SegmentedControl {
+                        options: [{ label: "On", value: true }, { label: "Off", value: false }]
+                        current: media.spotifyResume
+                        onPicked: (v) => media.setSpotifyResume(v)
+                    }
                 }
+                Note { text: "Carry on playing Spotify after a restart or a lost connection" }
             }
         }
     }

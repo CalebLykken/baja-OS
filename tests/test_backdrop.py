@@ -48,6 +48,13 @@ class BackdropTextTest(unittest.TestCase):
         self.assertRegex(THEME, r'glacier: \{[^}]*backdrop: "facets"')
         self.assertRegex(THEME, r'lcd: \{[^}]*backdrop: "scanlines"')
 
+    def test_sunset_paints_a_horizon_sun_once(self):
+        self.assertIn("function paintHorizon(ctx)", BACKDROP)
+        self.assertIn('kind === "horizon"', BACKDROP)
+        self.assertRegex(THEME, r'sunset: \{[^}]*backdrop: "horizon"')
+        # The clip is balanced by a restore so later kinds can't inherit it.
+        self.assertEqual(BACKDROP.count("ctx.save()"), BACKDROP.count("ctx.restore()"))
+
     def test_nothing_runs_while_idle(self):
         for word in ("Timer", "Animation", "Behavior", "running:"):
             self.assertNotIn(word, BACKDROP)

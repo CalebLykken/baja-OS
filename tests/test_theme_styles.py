@@ -165,7 +165,7 @@ class StyleTableTest(unittest.TestCase):
         self.assertEqual(night["accent"], "#ffb347")
         self.assertEqual(night["warn"], "#ff4d6d")
         self.assertEqual(night["radius"], 18)
-        self.assertEqual(night["backdrop"], "grid")
+        self.assertEqual(night["backdrop"], "horizon")
         self.assertEqual(day["bg"], "#f3e6ea")
         self.assertEqual(day["accent"], "#b4540a")
         self.assertIn("sunset", main_choices())

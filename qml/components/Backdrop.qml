@@ -4,7 +4,8 @@ import QtQuick
 // (Trail), livery stripes (Rally), a perforated dot grid (Amber), a
 // tachometer face peeking in from a corner (Cluster), rolling sine waves
 // (Atlantic), layered sand ridgelines (Desert), low-poly ice facets (Glacier)
-// and CRT scanlines (LCD). Painted once per size,
+// CRT scanlines (LCD) and a striped half-sun on the horizon (Sunset).
+// Painted once per size,
 // style or colour change (day/night flips the theme colours), never per
 // frame, so it costs nothing while driving.
 Canvas {
@@ -234,6 +235,37 @@ Canvas {
         ctx.stroke()
     }
 
+    // A retro half-sun sitting on a horizon line in the bottom-right gutter.
+    // Canvas can't punch holes, so the sun is built from fills: a solid disc
+    // above the stripes, and below it bands that get thinner going up, with
+    // 8 px gaps between them, all clipped to the upper half disc.
+    function paintHorizon(ctx) {
+        var cx = width * 0.66, y = height * 0.97, r = height * 0.42
+        ctx.save()
+        ctx.beginPath()
+        ctx.arc(cx, y, r, Math.PI, Math.PI * 2)
+        ctx.closePath()
+        ctx.clip()
+        ctx.fillStyle = "" + accentColor
+        ctx.globalAlpha = 0.16
+        var bands = [14, 12, 10, 8, 6, 4]
+        var top = y
+        for (var i = 0; i < bands.length; i++) {
+            ctx.fillRect(cx - r, top - bands[i], r * 2, bands[i])
+            top -= bands[i] + 8
+        }
+        // Solid sun above the top stripe.
+        ctx.fillRect(cx - r, y - r, r * 2, top + 8 - (y - r))
+        ctx.restore()
+        ctx.globalAlpha = 0.6
+        ctx.strokeStyle = "" + lineColor
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(width, y)
+        ctx.stroke()
+    }
+
     onPaint: {
         var ctx = getContext("2d")
         ctx.reset()
@@ -245,5 +277,6 @@ Canvas {
         else if (kind === "dunes") paintDunes(ctx)
         else if (kind === "facets") paintFacets(ctx)
         else if (kind === "scanlines") paintScanlines(ctx)
+        else if (kind === "horizon") paintHorizon(ctx)
     }
 }

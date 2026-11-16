@@ -209,19 +209,22 @@ Item {
     // fires 5 times a second and nobody sees these on another page. A Binding
     // still evaluates its value while "when" is false, so each expression is
     // guarded by page.visible too and reads nothing while hidden. RestoreNone
-    // keeps the last value when the binding pauses; they refresh on return.
+    // keeps the last value when the binding pauses; they refresh on return. The
+    // hidden branch is the target's own value, not undefined: Qt doesn't promise
+    // "when" goes false before value is re-evaluated, and a stray undefined would
+    // blank the readout and drop its warning flag.
     Binding { target: boostReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : undefined }
+        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : boostReadout.value }
     Binding { target: boostReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : boostReadout.warning }
     Binding { target: coolantReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : undefined }
+        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : coolantReadout.value }
     Binding { target: coolantReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : coolantReadout.warning }
     Binding { target: batteryReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : undefined }
+        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : batteryReadout.value }
     Binding { target: batteryReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : undefined }
+        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : batteryReadout.warning }
     Binding { target: speedReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
-        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : undefined }
+        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : speedReadout.value }
 }

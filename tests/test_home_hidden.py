@@ -39,6 +39,7 @@ class Vehicle(QObject):
         super().__init__()
         self.reads = {"boost": 0, "coolant": 0, "speed": 0}
         self.vals = {"boost": 0.0, "coolant": 120.0, "speed": 0.0}
+        self.warn = []
 
     def _get(self, name):
         self.reads[name] += 1
@@ -82,7 +83,7 @@ class Vehicle(QObject):
 
     @pyqtProperty(list, notify=changed)
     def warnings(self):
-        return []
+        return self.warn
 
     def set(self, **vals):
         self.vals.update(vals)
@@ -110,7 +111,8 @@ def shown(page):
     return {"boost": readout(page, "Boost").property("value"),
             "coolant": coolant(page).property("value"),
             "speed": readout(page, "Speed").property("value"),
-            "label": coolant(page).property("label")}
+            "label": coolant(page).property("label"),
+            "boost_warning": readout(page, "Boost").property("warning")}
 
 
 vehicle = Vehicle()
@@ -128,6 +130,7 @@ if page is None:
 # A page with no window is never visible; put it in one so visible means something.
 page.setParentItem(window.contentItem())
 results = {}
+vehicle.warn = ["boost"]
 vehicle.set(boost=5.0, coolant=120.0, speed=30.0)
 results["visible"] = shown(page)
 
@@ -174,6 +177,14 @@ class HomeHiddenTest(unittest.TestCase):
     def test_hidden_page_keeps_its_last_values(self):
         self.assertEqual(self.results["hidden"]["speed"], "30")
         self.assertEqual(self.results["hidden"]["label"], "Warming up")
+
+    def test_hidden_page_keeps_its_warning_flag(self):
+        self.assertTrue(self.results["visible"]["boost_warning"])
+        self.assertTrue(self.results["hidden"]["boost_warning"])
+        self.assertEqual(self.results["hidden"]["boost"], self.results["visible"]["boost"])
+
+    def test_no_binding_loop_warnings(self):
+        self.assertNotIn("loop", self.stderr.lower())
 
     def test_returning_shows_the_latest_values_and_label(self):
         self.assertEqual(self.results["returned"]["speed"], "62")

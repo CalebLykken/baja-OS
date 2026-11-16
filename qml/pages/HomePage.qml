@@ -137,11 +137,22 @@ Item {
         }
 
         Card {
+            id: readoutCard
+            objectName: "homeReadoutCard"
             Layout.fillWidth: true
             // Grows by a line while the engine note shows, so nothing overlaps.
             Layout.preferredHeight: engineNote.visible ? 184 : 152
             tappable: true
             onTapped: page.navigate(3)
+
+            // Any engine warning (the MIL lamp included, which has no numeral to
+            // turn Ember) gives the strip a steady Ember border, which stays
+            // after the one-shot pulse ends. The change eases over 180 ms.
+            // Written as a length check so a vehicle without warnings is fine.
+            readonly property bool anyWarning: typeof vehicle.warnings !== "undefined" && vehicle.warnings.length > 0
+            border.color: anyWarning ? Theme.warn : Theme.line
+            border.width: anyWarning ? Theme.border + 1 : Theme.border
+            Behavior on border.color { ColorAnimation { duration: 180 } }
 
             ColumnLayout {
                 anchors { fill: parent; margins: 20 }

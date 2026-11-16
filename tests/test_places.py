@@ -367,5 +367,30 @@ class DecompressTest(unittest.TestCase):
             _decompress(b"x", 9)
 
 
+class SetHomeWorkSourceTest(unittest.TestCase):
+    """The 'Set Home' / 'Set Work' rows (QML text checks)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+
+    def body(self, name):
+        start = self.qml.index("function %s(" % name)
+        return self.qml[start:start + 400]
+
+    def test_save_as_is_cleared_when_the_panel_changes(self):
+        for name in ("closePanel", "openSearch", "cancelPlace"):
+            self.assertIn('saveAs = ""', self.body(name), name)
+
+    def test_choose_saves_only_a_different_place(self):
+        body = self.body("choose")
+        self.assertIn('!samePlace(home, p)) toggleHome(p)', body)
+        self.assertIn('!samePlace(work, p)) toggleWork(p)', body)
+
+    def test_the_rows_show_only_while_unset(self):
+        self.assertIn('visible: page.home === null\n                        icon: "home"', self.qml)
+        self.assertIn('title: "Set Work"', self.qml)
+
+
 if __name__ == "__main__":
     unittest.main()

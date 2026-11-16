@@ -152,8 +152,12 @@ Item {
     }
 
     // ---- what the controls do ------------------------------------------------------------
-    function openSearch() { query = ""; panel = "search"; typing = false }
+    // "Set Home" / "Set Work" in the empty search list: the next place picked is
+    // saved as that ('home', 'work', or '' for an ordinary pick).
+    property string saveAs: ""
+    function openSearch() { saveAs = ""; query = ""; panel = "search"; typing = false }
     function closePanel() {
+        saveAs = ""
         if (panel === "place") cancelPlace()
         panel = ""
         typing = false
@@ -180,6 +184,11 @@ Item {
         panel = "results"
     }
     function choose(p) {
+        // Saved only when it is not already that place, so picking the current
+        // Home through "Set Home" does not undo it.
+        if (saveAs === "home" && !samePlace(home, p)) toggleHome(p)
+        else if (saveAs === "work" && !samePlace(work, p)) toggleWork(p)
+        saveAs = ""
         goName = ""                     // an ordinary pick only previews
         place = p
         typing = false
@@ -316,6 +325,7 @@ Item {
         }
     }
     function cancelPlace() {
+        saveAs = ""
         goName = ""
         if (hasRouting && !routing.active) routing.stop()
         place = null
@@ -557,6 +567,25 @@ Item {
                     id: quick
                     width: parent.width
                     spacing: 6
+                    Heading {
+                        visible: page.saveAs !== ""
+                        text: page.saveAs === "work" ? "Pick your Work" : "Pick your Home"
+                        color: page.cDim
+                    }
+                    ResultRow {
+                        visible: page.home === null
+                        icon: "home"
+                        title: "Set Home"
+                        subtitle: "Search for it, then it is saved"
+                        onHit: { page.saveAs = "home"; page.startTyping() }
+                    }
+                    ResultRow {
+                        visible: page.work === null
+                        icon: "work"
+                        title: "Set Work"
+                        subtitle: "Search for it, then it is saved"
+                        onHit: { page.saveAs = "work"; page.startTyping() }
+                    }
                     ResultRow {
                         visible: page.home !== null
                         icon: "home"
@@ -644,6 +673,13 @@ Item {
                 spacing: 6
                 boundsBehavior: Flickable.StopAtBounds
                 model: maps.results
+                header: Heading {
+                    width: resultList.width
+                    visible: page.saveAs !== ""
+                    height: visible ? implicitHeight : 0
+                    text: page.saveAs === "work" ? "Pick your Work" : "Pick your Home"
+                    color: page.cDim
+                }
                 delegate: ResultRow {
                     required property var modelData
                     width: resultList.width
@@ -1645,6 +1681,7 @@ Item {
     // A heading in the search panel's list.
     component Heading: Item {
         property alias text: headingText.text
+        property alias color: headingText.color
         Layout.fillWidth: true
         implicitHeight: headingText.implicitHeight + 20
         MapLabel {

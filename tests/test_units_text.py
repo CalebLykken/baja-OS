@@ -31,7 +31,7 @@ app = QGuiApplication(sys.argv)
 engine = QQmlEngine()
 component = QQmlComponent(engine)
 component.setData(
-    b'import QtQuick\nimport "qml/components"\nQtObject { function d(m, metric) { Units.metric = metric; return Units.distanceText(m) } function t(s) { return Units.durationText(s) } }',
+    b'import QtQuick\nimport "qml/components"\nQtObject { function d(m, metric) { Units.metric = metric; return Units.distanceText(m) } function t(s) { return Units.durationText(s) } function a(s, y, mo, d, h, mi, c24) { Units.clock24 = c24; return Units.arrivalText(s, new Date(y, mo, d, h, mi)) } }',
     QUrl.fromLocalFile(str(ROOT / "x.qml")))
 obj = component.create()
 if obj is None:
@@ -91,7 +91,20 @@ DURATION = [
     ("obj.t(7200)", "2 h"),
 ]
 
-CASES = IMPERIAL + METRIC + DURATION
+# (seconds to arrival, year, month (0-based), day, hour, minute, 24-hour clock)
+# Each case starts from a local time and adds the seconds.
+ARRIVAL = [
+    ("obj.a(1500, 2026, 10, 16, 9, 0, false)", "9:25"),              # same day: no suffix
+    ("obj.a(1500, 2026, 10, 16, 9, 0, true)", "9:25"),
+    ("obj.a(1800, 2026, 10, 16, 23, 50, false)", "12:20 tomorrow"),  # crosses midnight
+    ("obj.a(1800, 2026, 10, 16, 23, 50, true)", "0:20 tomorrow"),    # 24-hour clock
+    ("obj.a(900, 2026, 10, 16, 23, 50, false)", "12:05 tomorrow"),
+    ("obj.a(50 * 3600, 2026, 10, 16, 9, 0, false)", "11:00 in 2 days"),
+    ("obj.a(72 * 3600, 2026, 10, 16, 9, 0, true)", "9:00 in 3 days"),
+    ("obj.a(0, 2026, 10, 16, 0, 0, false)", "12:00"),
+]
+
+CASES = IMPERIAL + METRIC + DURATION + ARRIVAL
 
 
 class UnitsTextTest(unittest.TestCase):

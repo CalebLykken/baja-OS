@@ -50,5 +50,16 @@ QtObject {
         var rest = min % 60
         return Math.floor(min / 60) + " h" + (rest ? " " + rest + " min" : "")
     }
-    function arrivalText(s) { return timeText(new Date(Date.now() + s * 1000)) }
+    // The clock time you get there, with " tomorrow" or " in N days" when the
+    // trip ends on a later calendar day, so an overnight leg is not ambiguous.
+    // Days are counted from local midnight to midnight, so a daylight-saving
+    // change (a 23 or 25 hour day) still counts as one day. "from" is for tests.
+    function arrivalText(s, from) {
+        var now = from === undefined ? new Date() : from
+        var t = new Date(now.getTime() + s * 1000)
+        var days = Math.round((new Date(t.getFullYear(), t.getMonth(), t.getDate())
+                               - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000)
+        var day = days === 0 ? "" : days === 1 ? " tomorrow" : " in " + days + " days"
+        return timeText(t) + day
+    }
 }

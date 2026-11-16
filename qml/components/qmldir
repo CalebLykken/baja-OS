@@ -28,3 +28,4 @@ EngineWarning 1.0 EngineWarning.qml
 EmptyState 1.0 EmptyState.qml
 TurnChip 1.0 TurnChip.qml
 Trip 1.0 Trip.qml
+StatusStrip 1.0 StatusStrip.qml

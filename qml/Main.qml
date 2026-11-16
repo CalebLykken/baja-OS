@@ -171,9 +171,18 @@ Window {
         // Truck and Settings (Home, Music and Maps show it themselves); a
         // warning comes first. Tap for Maps.
         TurnChip {
+            id: turnChip
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
             opacity: active && !engineWarning.visible && root.page >= 3 ? 1 : 0
             onTapped: root.page = 2
+        }
+
+        // GPS, phone, Wi-Fi and the car, lit when each is there. Hidden
+        // under the warning and the turn chip, which take the same spot.
+        StatusStrip {
+            anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 8 }
+            opacity: engineWarning.visible || turnChip.active && root.page >= 3 ? 0 : 1
+            visible: opacity > 0
         }
 
         Column {

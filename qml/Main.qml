@@ -352,6 +352,20 @@ Window {
         }
     }
 
+    // The soft fade when the dashboard turns from day to night or back: over
+    // the pages, the map and the toast, under the volume panel, dimming,
+    // screen-off and prompts. Armed once the start-up screen is gone, so
+    // the first setting at start-up doesn't fade (see DayNightFade.qml).
+    DayNightFade {
+        id: dayNightFade
+        anchors.fill: parent
+    }
+    Timer {
+        interval: 600
+        running: !splash.visible && !dayNightFade.armed
+        onTriggered: dayNightFade.armed = true
+    }
+
     // Volume panel for the knob and long-press mute, on every page but Music
     // (which has its own bar). Above the pages and the toast, below the
     // dimming, screen-off and prompt layers. Held back until the splash is

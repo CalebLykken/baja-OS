@@ -17,11 +17,13 @@ Item {
     readonly property real warmCoolantF: 160
     property bool warmingUp: false
     function updateWarmingUp() {
+        if (!page.visible) return   // nobody sees the label; onVisibleChanged catches up
         if (!vehicle.engineKnown) warmingUp = false;
         else if (vehicle.coolant < warmCoolantF - 5) warmingUp = true;
         else if (vehicle.coolant >= warmCoolantF) warmingUp = false;
     }
     Component.onCompleted: updateWarmingUp()
+    onVisibleChanged: if (visible) updateWarmingUp()
     Connections {
         target: vehicle
         function onChanged() { page.updateWarmingUp() }
@@ -86,79 +88,14 @@ Item {
 
                 // Navigating: the next turn over the top of the map, on the
                 // same dark card as the Maps page.
-                Rectangle {
-                    id: nextTurnCard
-                    readonly property bool shown: typeof routing !== "undefined" && routing.active
-                    opacity: shown ? 1 : 0
-                    visible: opacity > 0
-                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    transform: Translate {
-                        y: nextTurnCard.shown ? 0 : -16
-                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    }
-                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                    height: miniTurn.implicitHeight + 28
-                    radius: Theme.radius
-                    color: Theme.base.panel
-                    RowLayout {
-                        id: miniTurn
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
-                        spacing: 12
-                        Icon {
-                            Layout.alignment: Qt.AlignTop
-                            name: typeof routing !== "undefined" ? routing.maneuverIcon || "straight" : "straight"
-                            size: 64
-                            color: Theme.base.text
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 0
-                            Label {
-                                visible: typeof routing !== "undefined" && !routing.arrived
-                                numeric: true
-                                text: typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
-                                color: Theme.base.text
-                                font.pixelSize: Theme.fontReadout
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                                text: typeof routing !== "undefined" ? routing.instruction : ""
-                                color: Theme.base.text
-                                font.pixelSize: Theme.fontSmall
-                                font.weight: Font.DemiBold
-                            }
-                        }
-                    }
+                HomeTurn { id: nextTurn; anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } }
+                // No fix, or the sky lost: say so, below the turn card while routing.
+                HomeGpsStatus {
+                    x: 12
+                    y: 12 + (nextTurn.shown ? nextTurn.height + 12 : 0)
                 }
-                Rectangle {
-                    id: arrivePill
-                    readonly property bool shown: typeof routing !== "undefined" && routing.active
-                    opacity: shown ? 1 : 0
-                    visible: opacity > 0
-                    Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    transform: Translate {
-                        y: arrivePill.shown ? 0 : 16
-                        Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    }
-                    anchors { left: parent.left; bottom: parent.bottom; margins: 12 }
-                    width: arriveText.implicitWidth + 32
-                    height: 64
-                    radius: Theme.radius
-                    color: Theme.panel
-                    border.width: Theme.border
-                    border.color: Theme.line
-                    Label {
-                        id: arriveText
-                        anchors.centerIn: parent
-                        text: typeof routing !== "undefined"
-                              ? "Arrive " + Units.arrivalText(routing.remainingTime) + ", " + Units.distanceText(routing.remainingDistance) : ""
-                        font.pixelSize: Theme.fontSmall
-                        font.weight: Font.DemiBold
-                    }
-                }
+                // Navigating: when you get there, how long and how far.
+                HomeArrive { anchors { left: parent.left; bottom: parent.bottom; margins: 12 } }
 
                 // Round off the map's square corners, then the frame.
                 Repeater {
@@ -201,44 +138,90 @@ Item {
 
         Card {
             Layout.fillWidth: true
-            Layout.preferredHeight: 128
+            // Grows by a line while the engine note shows, so nothing overlaps.
+            Layout.preferredHeight: engineNote.visible ? 184 : 152
             tappable: true
             onTapped: page.navigate(3)
 
-            RowLayout {
+            ColumnLayout {
                 anchors { fill: parent; margins: 20 }
-                Readout {
+                spacing: 6
+
+                // With no adapter answering (and no demo) the engine readouts
+                // are dashes; say why, and where the speed comes from.
+                Label {
+                    id: engineNote
+                    objectName: "homeEngineNote"
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    label: "Boost"
-                    value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
-                    unit: Units.boostUnit
-                    warning: vehicle.warnings.indexOf("boost") >= 0
+                    visible: !vehicle.simulated && !vehicle.engineKnown
+                    text: "Engine not connected" + (vehicle.speedKnown && !vehicle.live ? " · speed from GPS" : "")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fontSmall
                 }
-                Readout {
+
+                RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    label: page.warmingUp ? "Warming up" : "Coolant"
-                    value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
-                    unit: Units.tempUnit
-                    warning: vehicle.warnings.indexOf("coolant") >= 0
-                }
-                Readout {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    label: "Battery"
-                    value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
-                    unit: "V"
-                    warning: vehicle.warnings.indexOf("voltage") >= 0
-                }
-                Readout {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    label: "Speed"
-                    value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
-                    unit: Units.speedUnit
+                    Layout.fillHeight: true
+                    Readout {
+                        id: boostReadout
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: "Boost"
+                        widest: Units.metric ? "-0.00" : "-00.0"
+                        unit: Units.boostUnit
+                    }
+                    Readout {
+                        id: coolantReadout
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: page.warmingUp ? "Warming up" : "Coolant"
+                        widest: "000"
+                        unit: Units.tempUnit
+                    }
+                    Readout {
+                        id: batteryReadout
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1
+                        label: "Battery"
+                        widest: "00.0"
+                        unit: "V"
+                    }
+                    Readout {
+                        id: speedReadout
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignBottom
+                        Layout.preferredWidth: 1.5
+                        // Speed is the figure a driver checks most, so it gets the big numeral.
+                        numeralSize: 76
+                        label: "Speed"
+                        widest: "000"
+                        unit: Units.speedUnit
+                    }
                 }
             }
         }
     }
+
+    // The readouts follow the vehicle only while Home is on screen: changed
+    // fires 5 times a second and nobody sees these on another page. A Binding
+    // still evaluates its value while "when" is false, so each expression is
+    // guarded by page.visible too and reads nothing while hidden. RestoreNone
+    // keeps the last value when the binding pauses; they refresh on return.
+    Binding { target: boostReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : undefined }
+    Binding { target: boostReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : undefined }
+    Binding { target: coolantReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : undefined }
+    Binding { target: coolantReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : undefined }
+    Binding { target: batteryReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : undefined }
+    Binding { target: batteryReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : undefined }
+    Binding { target: speedReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : undefined }
 }

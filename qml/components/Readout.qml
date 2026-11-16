@@ -11,6 +11,12 @@ Column {
     property string value
     property string unit
     property bool warning: false
+    // Callers can raise the numeral above the standard readout size.
+    property int numeralSize: Theme.fontReadout
+    // The widest text the numeral can show (e.g. "000"). When set, the numeral
+    // gets a fixed, right-aligned slot that wide, so the unit beside it stays
+    // put as the digits change. Empty keeps the numeral as wide as its text.
+    property string widest: ""
     property real _lastPulse: 0
     readonly property bool placeholder: {
         var v = String(value).trim();
@@ -57,6 +63,11 @@ Column {
         color: r._warn ? Theme.warn : Theme.textDim
         Behavior on color { ColorAnimation { duration: 180 } }
     }
+    TextMetrics {
+        id: slot
+        font: num.font
+        text: r.widest
+    }
     Row {
         spacing: 6
         Label {
@@ -65,9 +76,13 @@ Column {
             numeric: true
             text: r.placeholder ? "—" : r.value
             color: r.placeholder ? Theme.textDim : (r._warn ? Theme.warn : Theme.text)
-            font.pixelSize: Theme.fontReadout
+            font.pixelSize: r.numeralSize
             font.weight: Theme.numWeight
-            transformOrigin: Item.Left
+            // A fixed slot holds the numeral right-aligned, so it grows in
+            // place and the em dash sits at the slot's right edge too.
+            width: r.widest !== "" ? Math.max(implicitWidth, slot.advanceWidth) : implicitWidth
+            horizontalAlignment: r.widest !== "" ? Text.AlignRight : Text.AlignLeft
+            transformOrigin: r.widest !== "" ? Item.Right : Item.Left
             Behavior on color { ColorAnimation { duration: 180 } }
         }
         Label {

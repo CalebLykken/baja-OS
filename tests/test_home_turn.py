@@ -43,6 +43,7 @@ class Routing(QObject):
         self._arrived = False
         self._icon = "turn_left"
         self._distance = 250.0
+        self._then = ""
         self._instruction = "Turn left onto Main St"
 
     @pyqtProperty(bool, notify=changed)
@@ -60,6 +61,10 @@ class Routing(QObject):
     @pyqtProperty(str, notify=progressChanged)
     def maneuverIcon(self):
         return self._icon
+
+    @pyqtProperty(str, notify=progressChanged)
+    def thenIcon(self):
+        return self._then
 
     @pyqtProperty(float, notify=progressChanged)
     def distanceToTurn(self):
@@ -83,6 +88,10 @@ class Routing(QObject):
 
     def setInstruction(self, v):
         self._instruction = v
+        self.progressChanged.emit()
+
+    def setThen(self, v):
+        self._then = v
         self.progressChanged.emit()
 
     def setIcon(self, v):
@@ -117,6 +126,8 @@ def snap():
     return {"icon": child("homeTurnIcon").property("name"),
             "distance": child("homeTurnDistance").property("text"),
             "distance_visible": child("homeTurnDistance").property("visible"),
+            "then_visible": obj.property("thenShown"),
+            "then_icon": child("homeTurnThenIcon").property("name"),
             "text_opacity": child("homeTurnText").property("opacity"),
             "height": obj.property("height")}
 
@@ -126,6 +137,9 @@ results["inactive_visible"] = obj.property("visible")
 routing.setActive(True)
 wait(400)
 results["idle"] = snap()
+routing.setThen("turn_right")
+wait(50)
+results["then"] = snap()
 routing.setComputing(True)
 wait(400)
 results["computing"] = snap()
@@ -134,6 +148,7 @@ routing.setIcon("turn_right")
 wait(50)
 results["computing_new_icon"] = snap()["icon"]
 routing.setComputing(False)
+routing.setThen("")
 wait(400)
 results["done"] = snap()
 routing.setArrived(True)
@@ -188,6 +203,20 @@ class HomeTurnTest(unittest.TestCase):
         self.assertEqual(done["icon"], "turn_right")
         self.assertNotEqual(done["distance"], "Rerouting")
         self.assertEqual(done["text_opacity"], 1.0)
+
+    def test_then_hidden_when_empty(self):
+        self.assertIs(self.results["idle"]["then_visible"], False)
+
+    def test_then_shows_icon_name(self):
+        then = self.results["then"]
+        self.assertIs(then["then_visible"], True)
+        self.assertEqual(then["then_icon"], "turn_right")
+
+    def test_then_hidden_while_computing(self):
+        self.assertIs(self.results["computing"]["then_visible"], False)
+
+    def test_then_keeps_card_height(self):
+        self.assertLessEqual(self.results["then"]["height"], self.results["idle"]["height"] + 4)
 
     def test_arrived_hides_distance(self):
         self.assertIs(self.results["arrived"]["distance_visible"], False)

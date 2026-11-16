@@ -8,6 +8,9 @@ Rectangle {
     id: card
     readonly property bool shown: typeof routing !== "undefined" && routing.active
     readonly property bool rerouting: shown && routing.computing
+    // The turn after this one, shown small beside the distance when there is one.
+    readonly property bool thenShown: typeof routing !== "undefined" && routing.thenIcon !== ""
+                                      && !routing.computing && !routing.arrived
     opacity: shown ? 1 : 0
     visible: opacity > 0
     Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
@@ -33,16 +36,41 @@ Rectangle {
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 0
-            Label {
-                objectName: "homeTurnDistance"
+            RowLayout {
                 Layout.fillWidth: true
+                spacing: 10
                 visible: card.rerouting || (typeof routing !== "undefined" && !routing.arrived)
-                numeric: true
-                elide: Text.ElideRight
-                text: card.rerouting ? "Rerouting"
-                      : typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
-                color: Theme.base.text
-                font.pixelSize: Theme.fontReadout
+                Label {
+                    objectName: "homeTurnDistance"
+                    Layout.fillWidth: true
+                    numeric: true
+                    // Shrinks rather than pushing the "Then" group off the card.
+                    fontSizeMode: Text.Fit
+                    minimumPixelSize: Theme.fontSmall
+                    elide: Text.ElideRight
+                    text: card.rerouting ? "Rerouting"
+                          : typeof routing !== "undefined" ? Units.distanceText(routing.distanceToTurn) : ""
+                    color: Theme.base.text
+                    font.pixelSize: Theme.fontReadout
+                }
+                // The turn after this one, for a quick lane change on a short block.
+                RowLayout {
+                    objectName: "homeTurnThen"
+                    Layout.alignment: Qt.AlignRight | Qt.AlignBottom
+                    spacing: 4
+                    visible: card.thenShown
+                    Label {
+                        text: "Then"
+                        color: Theme.base.textDim
+                        font.pixelSize: Theme.fontSmall
+                    }
+                    Icon {
+                        objectName: "homeTurnThenIcon"
+                        name: typeof routing !== "undefined" ? routing.thenIcon : ""
+                        size: 40
+                        color: Theme.base.textDim
+                    }
+                }
             }
             Label {
                 objectName: "homeTurnText"

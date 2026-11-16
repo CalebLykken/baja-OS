@@ -714,12 +714,14 @@ Item {
                     }
                 }
                 // Pairing steps: shown while no phone is paired or pairing is open,
-                // and only when the adapter is there. Step 1 is the current one until
+                // and only when the adapter is there and on (so "Tap Pair phone" never
+                // points at a hidden button). Step 1 is the current one until
                 // pairing opens; then steps 2 and 3 are.
                 Column {
                     Layout.fillWidth: true
                     spacing: 8
-                    visible: bluetooth.available && (bluetooth.paired.length === 0 || bluetooth.pairing)
+                    visible: bluetooth.available && bluetooth.adapterPresent
+                             && (bluetooth.paired.length === 0 || bluetooth.pairing)
                     Label {
                         width: parent.width
                         wrapMode: Text.WordWrap
@@ -747,7 +749,8 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true
-                    visible: bluetooth.available && bluetooth.paired.length > 0 && !bluetooth.pairing
+                    visible: bluetooth.available && bluetooth.adapterPresent
+                             && bluetooth.paired.length > 0 && !bluetooth.pairing
                     wrapMode: Text.WordWrap
                     color: Theme.textDim
                     font.pixelSize: Theme.fontBody

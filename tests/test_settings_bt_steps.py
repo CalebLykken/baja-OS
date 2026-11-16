@@ -35,12 +35,16 @@ class BluetoothStepsTest(unittest.TestCase):
             self.assertIn(n, self.steps)
 
     def test_steps_hidden_without_adapter_and_after_pairing(self):
+        # Gated on adapterPresent too: with Bluetooth off the Pair button is
+        # hidden, so "Tap Pair phone" would point at nothing.
         self.assertIn(
-            "visible: bluetooth.available && (bluetooth.paired.length === 0 || bluetooth.pairing)",
+            "visible: bluetooth.available && bluetooth.adapterPresent\n"
+            "                             && (bluetooth.paired.length === 0 || bluetooth.pairing)",
             self.steps)
 
     def test_paired_phone_gets_one_dim_line(self):
-        start = self.steps.index("Label {\n                    Layout.fillWidth: true\n                    visible: bluetooth.available && bluetooth.paired.length > 0")
+        start = self.steps.index("Label {\n                    Layout.fillWidth: true\n                    visible: bluetooth.available && bluetooth.adapterPresent\n"
+                                  "                             && bluetooth.paired.length > 0")
         line = self.steps[start:]
         self.assertIn("color: Theme.textDim", line[:400])
         self.assertIn("Once paired, the phone reconnects by itself", line[:600])

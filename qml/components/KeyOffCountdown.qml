@@ -13,6 +13,12 @@ ColumnLayout {
 
     spacing: 8
 
+    Label {
+        Layout.alignment: Qt.AlignHCenter
+        text: "Shutting down in"
+        font.pixelSize: Theme.fontBody
+        color: Theme.textDim
+    }
     RowLayout {
         Layout.alignment: Qt.AlignHCenter
         spacing: 10

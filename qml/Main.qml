@@ -331,8 +331,8 @@ Window {
         opacity: (1 - display.brightness / 100) * 0.85
     }
 
-    // "Screen off": a black layer over the pages and the dim overlay (the
-    // backlight itself is not driven yet, see Display._drive_panel). The tap
+    // "Screen off": a black layer over the pages and the dim overlay (Display
+    // also sets the panel's DDC brightness to 0, see backend/display.py). The tap
     // that wakes it is swallowed so it doesn't press anything underneath.
     // The shutdown prompt below stays above it.
     Rectangle {

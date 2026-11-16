@@ -172,9 +172,13 @@ QtObject {
                                           rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
                                           desert: "Desert", glacier: "Glacier", lcd: "LCD",
                                           sunset: "Sunset" })
-    readonly property var base: styles[style] || styles.amber
+    // A saved or --style name that no longer exists (renamed, removed, or a
+    // typo in the settings file) shows Trail, the default, in both day and
+    // night. `style` itself stays as saved, so Settings can still write a new one.
+    readonly property string effectiveStyle: styles[style] ? style : "trail"
+    readonly property var base: styles[effectiveStyle]
     // Colours from the day or night set; fonts and shapes always from base.
-    readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})
+    readonly property var s: dark ? base : Object.assign({}, base, lightStyles[effectiveStyle])
 
     readonly property color bg: s.bg
     readonly property color panel: s.panel

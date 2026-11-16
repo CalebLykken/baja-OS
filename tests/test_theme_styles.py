@@ -60,6 +60,69 @@ def main_choices():
     return ast.literal_eval(match.group(1))
 
 
+# Sets Theme.style at runtime and reads back the resolved token set (`s`) for
+# day and night, so the fallback is tested through the real bindings.
+FALLBACK_SCRIPT = r'''
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtQml import QQmlComponent, QQmlEngine
+
+ROOT = Path(sys.argv[1])
+app = QGuiApplication(sys.argv)
+engine = QQmlEngine()
+component = QQmlComponent(engine)
+component.setData(b'import QtQuick\nimport "qml/components"\nItem { property var th: Theme }',
+                  QUrl.fromLocalFile(str(ROOT / "x.qml")))
+obj = component.create()
+if obj is None:
+    print([e.toString() for e in component.errors()])
+    sys.exit(1)
+theme = obj.property("th")
+out = {}
+for style in ["trail", "no-such-style", "atlantic"]:
+    for dark in (True, False):
+        theme.setProperty("style", style)
+        theme.setProperty("dark", dark)
+        out[style + "|" + str(dark)] = theme.property("s").toVariant()
+print(json.dumps(out))
+'''
+
+
+@unittest.skipUnless(HAVE_QT, "PyQt6 isn't installed")
+class StyleFallbackTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        result = subprocess.run([sys.executable, "-c", FALLBACK_SCRIPT, str(ROOT)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=60, env=env)
+        if result.returncode != 0:
+            raise AssertionError(result.stdout + result.stderr)
+        cls.out = json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_unknown_style_renders_trail_at_night(self):
+        unknown, trail = self.out["no-such-style|True"], self.out["trail|True"]
+        for key in ("bg", "accent", "backdrop", "radius"):
+            self.assertEqual(unknown[key], trail[key], key)
+        self.assertEqual(unknown, trail)
+
+    def test_unknown_style_renders_trail_by_day(self):
+        unknown, trail = self.out["no-such-style|False"], self.out["trail|False"]
+        for key in ("bg", "accent", "backdrop", "radius"):
+            self.assertEqual(unknown[key], trail[key], key)
+        self.assertEqual(unknown, trail)
+        # The day set is Trail's light set, not its night colours.
+        self.assertEqual(unknown["bg"], "#e8e3d4")
+
+    def test_known_style_still_resolves(self):
+        night = self.out["atlantic|True"]
+        day = self.out["atlantic|False"]
+        self.assertEqual(night["bg"], "#0a1420")
+        self.assertEqual(day["accent"], "#2a5fa8")
+        self.assertEqual(night["backdrop"], "waves")
+
+
 @unittest.skipUnless(HAVE_QT, "PyQt6 isn't installed")
 class StyleTableTest(unittest.TestCase):
     @classmethod

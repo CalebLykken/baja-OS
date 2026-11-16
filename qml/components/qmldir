@@ -20,6 +20,7 @@ singleton Units 1.0 Units.qml
 TextButton 1.0 TextButton.qml
 Section 1.0 Section.qml
 SignalBars 1.0 SignalBars.qml
+VolumeOverlay 1.0 VolumeOverlay.qml
 EqSlider 1.0 EqSlider.qml
 EqualizerPanel 1.0 EqualizerPanel.qml
 Keyboard 1.0 Keyboard.qml

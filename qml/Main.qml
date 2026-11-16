@@ -315,6 +315,15 @@ Window {
         }
     }
 
+    // Volume panel for the knob and long-press mute, on every page but Music
+    // (which has its own bar). Above the pages and the toast, below the
+    // dimming, screen-off and prompt layers. Held back until the splash is
+    // gone so the restored volume doesn't show it.
+    VolumeOverlay {
+        ready: !splash.visible
+        quiet: root.page === 1
+    }
+
     // Software dimming for screens without DDC/CI brightness (e.g. a Mac).
     // Never fully black, and it lets touches through to the UI below.
     Rectangle {

@@ -155,6 +155,7 @@ class MediaHub(QObject):
     volumeChanged = pyqtSignal()
     sourceChanged = pyqtSignal()
     queueChanged = pyqtSignal()
+    upNextChanged = pyqtSignal()      # what plays after this song (local order, Spotify queue)
     _artReady = pyqtSignal(str, str, str, str)   # source, its art url, local copy, rounded card
 
     maxVolumeChanged = pyqtSignal()
@@ -224,6 +225,9 @@ class MediaHub(QObject):
         spotify.trackChanged.connect(self._note_spotify)
         spotify.modesChanged.connect(self.modesChanged)
         spotify.queueChanged.connect(self.queueChanged)
+        spotify.queueChanged.connect(self.upNextChanged)
+        if hasattr(local, "upNextChanged"):
+            local.upNextChanged.connect(self.upNextChanged)
         local.queueChanged.connect(self.queueChanged)       # an album started
         local.modesChanged.connect(self.modesChanged)
         if hasattr(local, "libraryChanged"):         # not the demo player
@@ -285,7 +289,7 @@ class MediaHub(QObject):
                 self._sources["local"].cancel_autoplay()    # songs found later mustn't take over
             self._apply_volume()
             for sig in ("sourceChanged", "volumeChanged", "trackChanged",
-                        "positionChanged", "playingChanged", "queueChanged", "modesChanged"):
+                        "positionChanged", "playingChanged", "queueChanged", "modesChanged", "upNextChanged"):
                 getattr(self, sig).emit()
 
     def _pause_others(self, keep):
@@ -607,9 +611,13 @@ class MediaHub(QObject):
             safe_emit(self, "recentsChanged")
         threading.Thread(target=work, daemon=True).start()
 
-    @pyqtProperty("QVariantList", notify=queueChanged)
+    @pyqtProperty("QVariantList", notify=upNextChanged)
     def upNext(self):
-        """What Spotify plays next (display only)."""
+        """The songs that play next: the Pi's own in their true order (shuffle
+        included, each with its queue `index` to tap), Spotify's queue
+        (display only), nothing for a phone (it picks)."""
+        if self._source == "local":
+            return getattr(self._sources["local"], "upNext", [])
         return self._sources["spotify"].upNext if self._source == "spotify" else []
 
     @pyqtProperty(bool, notify=sourceChanged)

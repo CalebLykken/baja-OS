@@ -45,13 +45,9 @@ Item {
 
     readonly property bool navigating: typeof routing !== "undefined" && routing.active
     readonly property var albums: media.albums
-    // Read once per queueChanged, so bindings that only need one song don't
-    // rebuild the whole queue (every song on the Pi) on each song change.
-    // Skipped while Spotify plays, so Spotify queue events don't rebuild the
-    // Pi's whole song list. Local and phone sources keep the Pi queue, and
-    // _set_source emits sourceChanged and queueChanged, so it refreshes on switch back.
-    readonly property var queueSongs: media.source === "spotify" ? [] : media.queue
-    readonly property var spotifyNext: media.upNext
+    // The songs that play after this one, in the true order (a shuffle's too);
+    // read once per change so the bindings below share it.
+    readonly property var upNext: media.upNext
     readonly property bool idle: media.source === "local" && media.title === ""   // no music on the Pi, and the phone and Spotify aren't playing
     readonly property bool hasSpotify: typeof spotify !== "undefined" && spotify.available
     // Only while Spotify is what's playing or being looked at.
@@ -60,14 +56,9 @@ Item {
 
     readonly property bool browsing: tab !== "playing" || eqOpen
     readonly property int barHeight: 84
-    // The song after this one, or null when that isn't known: the phone doesn't
-    // say, and a shuffle's order is the player's own.
-    readonly property var nextSong: {
-        if (media.source === "spotify") return page.spotifyNext.length > 0 ? page.spotifyNext[0] : null
-        if (media.source !== "local" || media.shuffle || media.repeat === "one") return null
-        var songs = page.queueSongs, after = media.index + 1
-        return after < songs.length ? songs[after] : media.repeat === "all" && songs.length > 1 ? songs[0] : null
-    }
+    // The song after this one, or null when there isn't one or it isn't known
+    // (the phone doesn't say).
+    readonly property var nextSong: page.upNext.length > 0 ? page.upNext[0] : null
 
     function show(which) {
         tab = which
@@ -375,41 +366,50 @@ Item {
                          : ""
 
                 // ---- Up next ------------------------------------------------
+                // The song playing, pinned, then what follows it in the true
+                // play order (a shuffle's too).
+                SongRow {
+                    id: nowRow
+                    visible: page.tab === "next" && !page.eqOpen && media.title !== ""
+                    anchors { top: parent.top; left: parent.left; right: parent.right; margins: 10; topMargin: 52 }
+                    current: true
+                    title: media.title
+                    subtitle: "Now playing" + (media.artist !== "" ? "  \u00b7  " + media.artist : "")
+                    tappable: false
+                }
                 ListView {
                     id: queue
                     visible: page.tab === "next" && !page.eqOpen
                     readonly property bool spotifyQueue: media.source === "spotify"
-                    anchors { fill: parent; margins: 10; topMargin: 52 }
+                    readonly property bool phoneQueue: media.source === "phone"
+                    anchors {
+                        fill: parent; margins: 10
+                        topMargin: 52 + (nowRow.visible ? nowRow.height + 4 : 0)
+                    }
                     clip: true
-                    model: spotifyQueue ? page.spotifyNext : page.queueSongs
+                    model: page.upNext
                     boundsBehavior: Flickable.StopAtBounds
-                    // Open on the playing song, and follow it as it changes.
-                    function showPlaying() {
-                        if (visible && !spotifyQueue && media.index >= 0 && count > 0)
-                            positionViewAtIndex(media.index, ListView.Center)
-                    }
-                    onVisibleChanged: Qt.callLater(showPlaying)
-                    onCountChanged: Qt.callLater(showPlaying)
-                    Connections {
-                        target: media
-                        function onTrackChanged() { Qt.callLater(queue.showPlaying) }
-                    }
                     delegate: SongRow {
                         width: queue.width
                         number: index + 1
-                        current: !queue.spotifyQueue && index === media.index
                         title: modelData.title
                         subtitle: modelData.artist
                         tappable: !queue.spotifyQueue
-                        onHit: media.playIndex(index)
+                        onHit: media.playIndex(modelData.index)
                     }
                     EmptyState {
                         visible: queue.count === 0
                         width: parent.width
                         height: queue.height
-                        icon: queue.spotifyQueue ? "queue" : media.scanning ? "refresh" : "music"
-                        title: queue.spotifyQueue ? "Nothing queued" : media.scanning ? "Reading your music" : "No songs yet"
-                        hint: queue.spotifyQueue ? "Songs you queue in Spotify line up here"
+                        icon: queue.spotifyQueue || queue.phoneQueue || nowRow.visible ? "queue"
+                              : media.scanning ? "refresh" : "music"
+                        title: queue.phoneQueue ? "Your phone picks what plays next"
+                               : queue.spotifyQueue ? "Nothing queued"
+                               : nowRow.visible ? "That is the last song"
+                               : media.scanning ? "Reading your music" : "No songs yet"
+                        hint: queue.phoneQueue ? ""
+                              : queue.spotifyQueue ? "Songs you queue in Spotify line up here"
+                              : nowRow.visible ? (media.repeat === "off" ? "Turn repeat on to start over" : "")
                               : media.scanning ? "Songs show up as they're found"
                               : "Copy albums into ~/Music on the Pi"
                     }

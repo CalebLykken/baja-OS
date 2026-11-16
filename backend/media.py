@@ -42,6 +42,7 @@ class MediaPlayer(QObject):
     playingChanged = pyqtSignal()
     volumeChanged = pyqtSignal()
     queueChanged = pyqtSignal()             # playAlbum/playAll: the queue and `album` changed
+    upNextChanged = pyqtSignal()            # the song changed, or the queue did
     modesChanged = pyqtSignal()             # never: the demo plays in order
 
     def __init__(self, queue=None, parent=None):
@@ -106,6 +107,7 @@ class MediaPlayer(QObject):
             return
         self._index = index % len(self._queue)
         self._position = 0
+        self.upNextChanged.emit()
         self.trackChanged.emit()
         self.positionChanged.emit()
 
@@ -133,6 +135,12 @@ class MediaPlayer(QObject):
     @pyqtProperty("QVariantList", notify=queueChanged)
     def queue(self):
         return self._queue
+
+    @pyqtProperty("QVariantList", notify=upNextChanged)
+    def upNext(self):
+        """The songs after this one, in order (the demo plays straight through)."""
+        return [{"title": t["title"], "artist": t["artist"], "index": i}
+                for i, t in enumerate(self._queue) if i > self._index]
 
     @pyqtProperty(bool, constant=True)
     def hasModes(self):
@@ -195,6 +203,7 @@ class MediaPlayer(QObject):
             self._queue = list(DEMO_QUEUE if self._albums else self._queue)
             self._album = -1
             self.queueChanged.emit()
+        self.upNextChanged.emit()
         self.playIndex(0)
 
     @pyqtSlot()

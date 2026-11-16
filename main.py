@@ -81,7 +81,7 @@ def parse_args():
     parser.add_argument("--fullscreen", action="store_true",
                         help="fill the whole screen (use this on the Pi)")
     parser.add_argument("--style", default=None,
-                        choices=["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd"],
+                        choices=["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd", "sunset"],
                         help="UI style for this run (default: the one last picked in Settings)")
     parser.add_argument("--no-splash", action="store_true",
                         help="skip the startup animation")

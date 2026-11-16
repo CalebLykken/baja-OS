@@ -91,6 +91,16 @@ QtObject {
             accent: "#e4ff5a", warn: "#ff6a3d", ok: "#5fe08e",
             font: "", numFont: "DejaVu Sans Mono", numItalic: false, numWeight: Font.Bold,
             radius: 2, border: 2, gauge: "segments", backdrop: "grid"
+        },
+        // Sunset: deep purple at night with a gold accent. The gold sits far
+        // from the pink-red warning colour, so an alert is never read as a
+        // selected state.
+        sunset: {
+            bg: "#140a1f", panel: "#21122f", panelTop: "#2c1840", panelHi: "#3a2154",
+            line: "#5a3a7a", text: "#fbeef2", textDim: "#b79bc4",
+            accent: "#ffb347", warn: "#ff4d6d", ok: "#7fe0b0",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 18, border: 1, gauge: "arc", backdrop: "grid"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -147,13 +157,21 @@ QtObject {
             bg: "#c3cea4", panel: "#d3dcb8", panelTop: "#dde5c6", panelHi: "#b5c295",
             line: "#8fa072", text: "#16210c", textDim: "#3f4f2a",
             accent: "#2f5a0f", warn: "#a8260f", ok: "#1f6b2e"
+        },
+        // Sunset by day: soft pink-white sheets with plum text, and the gold
+        // deepened to a burnt amber so it holds on the light ground.
+        sunset: {
+            bg: "#f3e6ea", panel: "#fcf6f7", panelTop: "#ffffff", panelHi: "#ebdbe2",
+            line: "#d3b9c6", text: "#2a1230", textDim: "#6e4f76",
+            accent: "#b4540a", warn: "#c4203f", ok: "#1f7d57"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic", "midnight", "desert", "glacier", "lcd", "sunset"]
     // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
     readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
                                           rally: "Rally", atlantic: "Atlantic", midnight: "Midnight",
-                                          desert: "Desert", glacier: "Glacier", lcd: "LCD" })
+                                          desert: "Desert", glacier: "Glacier", lcd: "LCD",
+                                          sunset: "Sunset" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})

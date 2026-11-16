@@ -156,6 +156,21 @@ class StyleTableTest(unittest.TestCase):
         self.assertIn("lcd", main_choices())
         self.assertEqual(self.out["titles"]["lcd"], "LCD")
 
+    def test_sunset_is_purple_with_gold_accent(self):
+        # Sunset: deep purple with a gold accent at night, soft pink-white by
+        # day. The gold stays apart from the pink-red warning colour.
+        night = self.out["night"]["sunset"]
+        day = self.out["day"]["sunset"]
+        self.assertEqual(night["bg"], "#140a1f")
+        self.assertEqual(night["accent"], "#ffb347")
+        self.assertEqual(night["warn"], "#ff4d6d")
+        self.assertEqual(night["radius"], 18)
+        self.assertEqual(night["backdrop"], "grid")
+        self.assertEqual(day["bg"], "#f3e6ea")
+        self.assertEqual(day["accent"], "#b4540a")
+        self.assertIn("sunset", main_choices())
+        self.assertEqual(self.out["titles"]["sunset"], "Sunset")
+
 
 if __name__ == "__main__":
     unittest.main()

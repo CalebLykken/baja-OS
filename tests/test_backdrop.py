@@ -30,6 +30,16 @@ class BackdropTextTest(unittest.TestCase):
         self.assertRegex(THEME, r'gauge: "arc", backdrop: "grid"')
         self.assertRegex(THEME, r'gauge: "needle", backdrop: "dial"')
 
+    def test_waves_and_dunes_are_painted_and_deterministic(self):
+        self.assertIn("function paintWaves(ctx)", BACKDROP)
+        self.assertIn("function paintDunes(ctx)", BACKDROP)
+        self.assertIn('kind === "waves"', BACKDROP)
+        self.assertIn('kind === "dunes"', BACKDROP)
+        self.assertNotIn("Math.random", BACKDROP)
+
+    def test_atlantic_uses_waves(self):
+        self.assertRegex(THEME, r'gauge: "arc", backdrop: "waves"')
+
     def test_nothing_runs_while_idle(self):
         for word in ("Timer", "Animation", "Behavior", "running:"):
             self.assertNotIn(word, BACKDROP)

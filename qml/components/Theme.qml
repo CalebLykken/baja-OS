@@ -52,7 +52,7 @@ QtObject {
             line: "#2d4a73", text: "#eaf1fb", textDim: "#93a9c8",
             accent: "#5b8fd0", warn: "#ff5a47", ok: "#6fd3a0",
             font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
-            radius: 14, border: 1, gauge: "arc", backdrop: "grid"
+            radius: 14, border: 1, gauge: "arc", backdrop: "waves"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -112,7 +112,7 @@ QtObject {
     readonly property int radius: s.radius
     readonly property int border: s.border
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
-    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid" or "dial"
+    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves" or "dunes"
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

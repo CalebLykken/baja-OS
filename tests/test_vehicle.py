@@ -6,6 +6,7 @@ the simulated drive, dashes, or the real battery.
 """
 
 import unittest
+from unittest import mock
 
 from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 
@@ -81,6 +82,11 @@ class ThresholdTest(unittest.TestCase):
     def test_overheating(self):
         self.assertEqual(warnings(**{**FINE, "coolant": 231}), ["coolant"])
         self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantHigh"]}), [])
+
+    def test_cold_limit_is_below_overheating(self):
+        # The "warming up" note ends below the cold limit; the overheat warning starts above the hot one.
+        self.assertLess(LIMITS["coolantCold"], LIMITS["coolantHigh"])
+        self.assertEqual(warnings(**{**FINE, "coolant": LIMITS["coolantCold"] - 1}), [])
 
     def test_battery_voltage_both_ways(self):
         self.assertEqual(warnings(**{**FINE, "voltage": 11.9}), ["voltage"])
@@ -630,3 +636,42 @@ class SettledGearTest(unittest.TestCase):
     def test_a_stop_goes_to_zero_at_once(self):
         self.assertEqual(settled_gear(3, 3, 5, 0, 0.0, 800), (0, 0, 1))
         self.assertEqual(settled_gear(3, 3, 5, 0, 40.0, 0), (0, 0, 1))
+
+
+class PeaksNoFileReadTests(unittest.TestCase):
+    """_note_peaks runs on every OBD reading: it must not read the boot id
+    (a file) unless a save is actually due."""
+
+    def setUp(self):
+        patch = mock.patch("backend.vehicle.boot_id", return_value="boot-a")
+        self.boot = patch.start()
+        self.addCleanup(patch.stop)
+        self.now = 1000.0
+        self.v = VehicleData(FakeSettings())
+        self.v._clock = lambda: self.now
+        self.boot.reset_mock()
+
+    def test_no_read_when_nothing_changed(self):
+        self.v._note_peaks(0.0, 0)
+        self.v._note_peaks(0.0, 0)
+        self.boot.assert_not_called()
+
+    def test_no_read_without_settings(self):
+        v = VehicleData(None)
+        self.boot.reset_mock()
+        v._note_peaks(50.0, 3000)
+        self.boot.assert_not_called()
+
+    def test_reads_once_per_save_then_not_inside_the_interval(self):
+        self.v._note_peaks(50.0, 3000)
+        self.assertEqual(self.boot.call_count, 1)
+        self.assertEqual(len(self.v._settings.saved), 1)
+        self.now += 5
+        self.v._note_peaks(60.0, 3500)    # dirty again, but saved too recently
+        self.v._note_peaks(60.0, 3500)
+        self.assertEqual(self.boot.call_count, 1)
+        self.assertEqual(len(self.v._settings.saved), 1)
+        self.now += 30
+        self.v._note_peaks(60.0, 3500)
+        self.assertEqual(self.boot.call_count, 2)
+        self.assertEqual(len(self.v._settings.saved), 2)

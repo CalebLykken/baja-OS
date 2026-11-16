@@ -48,6 +48,7 @@ LIMITS = {
     "rpmHigh": 6000.0,
     "boostHigh": 15.0,          # overboost
     "coolantHigh": 230.0,       # overheating
+    "coolantCold": 160.0,       # below this the engine is still warming up: ease off the boost
     "intakeHigh": 150.0,
     "voltageLow": 12.0,         # not charging
     "voltageHigh": 15.0,        # overcharging
@@ -204,13 +205,18 @@ class VehicleData(QObject):
         if top:
             self._peaks_dirty = True
             self.topSpeedChanged.emit()
+        # Nothing to save, no settings, or saved too recently: stop before
+        # boot_id(), which reads a file and this runs on every OBD reading.
+        if not self._peaks_dirty or self._settings is None:
+            return
+        now = self._clock()
+        if self._peaks_saved_at is not None and now - self._peaks_saved_at < PEAKS_SAVE_S:
+            return
         boot = boot_id()
-        if self._peaks_dirty and self._settings is not None and boot:   # no boot id: it couldn't be restored
-            now = self._clock()
-            if self._peaks_saved_at is None or now - self._peaks_saved_at >= PEAKS_SAVE_S:
-                self._peaks_saved_at, self._peaks_dirty = now, False
-                self._settings.set(PEAKS_SETTING, peaks_record(
-                    self._top_mph, self._peak_rpm, boot, uptime()))
+        if boot:   # no boot id: it couldn't be restored
+            self._peaks_saved_at, self._peaks_dirty = now, False
+            self._settings.set(PEAKS_SETTING, peaks_record(
+                self._top_mph, self._peak_rpm, boot, uptime()))
 
     def _flags(self):
         return self._live, self.simulated, self.engineKnown, self.speedKnown, self.voltageKnown

@@ -11,8 +11,8 @@ import "../assets/truck"
 // renders while this page is on screen (PageHost hides it otherwise), so
 // it costs nothing the rest of the time. The model is baja-3d.glb (~123k
 // triangles) converted to Qt's own mesh files, which load at once, with
-// its materials put right (tools/convert_truck.py): glossy gold paint,
-// grey cladding, tinted glass, and BAJA plates. Under it, this trip so
+// its materials put right (tools/convert_truck.py): glossy Atlantic Blue
+// paint with matching cladding, tinted glass, and BAJA plates. Under it, this trip so
 // far (the live readouts are on Home and Gauges).
 Item {
     id: page

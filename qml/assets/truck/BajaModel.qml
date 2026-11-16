@@ -37,7 +37,7 @@ Node {
     PrincipledMaterial {
         id: carpaint_second_011_material
         objectName: "carpaint_second.011"
-        baseColor: "#ff636365"
+        baseColor: "#1d3557"
         roughness: 0.75
         cullMode: PrincipledMaterial.NoCulling
         alphaMode: PrincipledMaterial.Opaque
@@ -64,7 +64,7 @@ Node {
     PrincipledMaterial {
         id: carpaint_173_material
         objectName: "carpaint.173"
-        baseColor: "#ffcb9526"
+        baseColor: "#1d3557"
         metalness: 0
         roughness: 0.24
         cullMode: PrincipledMaterial.NoCulling

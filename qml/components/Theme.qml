@@ -45,6 +45,14 @@ QtObject {
             font: "Liberation Sans Narrow", numFont: "DejaVu Sans", numItalic: true,
             numWeight: Font.Bold,
             radius: 12, border: 1, gauge: "arc", backdrop: "stripes"
+        },
+        // The truck's own Atlantic Blue Pearl: deep navy, steel-blue accent.
+        atlantic: {
+            bg: "#0a1420", panel: "#101f33", panelTop: "#162a45", panelHi: "#1d3558",
+            line: "#2d4a73", text: "#eaf1fb", textDim: "#93a9c8",
+            accent: "#5b8fd0", warn: "#ff5a47", ok: "#6fd3a0",
+            font: "", numFont: "", numItalic: false, numWeight: Font.DemiBold,
+            radius: 14, border: 1, gauge: "arc", backdrop: "waves"
         }
     })
     // The same looks for daylight: light grounds, dark text, the accents
@@ -53,25 +61,33 @@ QtObject {
         amber: {
             bg: "#ece9e3", panel: "#f8f6f2", panelTop: "#fbfaf7", panelHi: "#e4e0d7",
             line: "#cdc6ba", text: "#1d1b18", textDim: "#68625a",
-            accent: "#d27c00", warn: "#cc3418", ok: "#3c8a2b"
+            accent: "#c06a00", warn: "#cc3418", ok: "#3c8a2b"
         },
         cluster: {
             bg: "#e8eaed", panel: "#f7f8fa", panelTop: "#ffffff", panelHi: "#e0e3e8",
             line: "#c5cad2", text: "#13171c", textDim: "#5b636d",
-            accent: "#de4316", warn: "#cf1f1f", ok: "#1e7db5"
+            accent: "#c93a10", warn: "#cf1f1f", ok: "#1e7db5"
         },
         trail: {
             bg: "#e8e3d4", panel: "#f6f2e7", panelTop: "#fbf8f0", panelHi: "#e5dfcc",
             line: "#c8bfa4", text: "#23261b", textDim: "#696450",
-            accent: "#e2650c", warn: "#c4321f", ok: "#4c7c29"
+            accent: "#c4560a", warn: "#c4321f", ok: "#4c7c29"
         },
         rally: {
             bg: "#e2e7f2", panel: "#f5f7fc", panelTop: "#ffffff", panelHi: "#dbe2f1",
             line: "#b8c3dc", text: "#0b1633", textDim: "#4d5d84",
-            accent: "#c48600", warn: "#d03030", ok: "#1d875a"
+            accent: "#a86e00", warn: "#d03030", ok: "#1d875a"
+        },
+        atlantic: {
+            bg: "#e4eaf3", panel: "#f5f8fc", panelTop: "#ffffff", panelHi: "#d9e2f0",
+            line: "#b5c4dc", text: "#0c1a30", textDim: "#4a5d7c",
+            accent: "#2a5fa8", warn: "#c92f2f", ok: "#1c8456"
         }
     })
-    readonly property var styleNames: ["amber", "cluster", "trail", "rally"]
+    readonly property var styleNames: ["amber", "cluster", "trail", "rally", "atlantic"]
+    // Display names, since charAt(0).toUpperCase() would get "LCD" wrong.
+    readonly property var styleTitles: ({ amber: "Amber", cluster: "Cluster", trail: "Trail",
+                                          rally: "Rally", atlantic: "Atlantic" })
     readonly property var base: styles[style] || styles.amber
     // Colours from the day or night set; fonts and shapes always from base.
     readonly property var s: dark ? base : Object.assign({}, base, lightStyles[style] || {})
@@ -96,7 +112,7 @@ QtObject {
     readonly property int radius: s.radius
     readonly property int border: s.border
     readonly property string gauge: s.gauge        // "arc", "needle" or "segments"
-    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid" or "dial"
+    readonly property string backdrop: s.backdrop  // "none", "topo", "stripes", "grid", "dial", "waves" or "dunes"
 
     readonly property int gap: 14
     readonly property int touch: 100  // minimum tap target, ~13 mm on this panel

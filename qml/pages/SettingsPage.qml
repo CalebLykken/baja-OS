@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import "../components"
+import "../components/themes"
 
 // Settings in sections down the left (Display, Sound, Wi-Fi, Bluetooth, Map,
 // System, About), with the chosen section's cards on the right; long ones
@@ -286,23 +287,7 @@ Item {
                     }
                 }
                 Note { text: "Automatic is light while the sun is up and dark after it sets, where the truck is, for the whole dashboard and the map." }
-                SettingRow {
-                    label: "Style"
-                    SegmentedControl {
-                        options: Theme.styleNames.map(n => ({ label: n.charAt(0).toUpperCase() + n.slice(1), value: n }))
-                        current: Theme.style
-                        onPicked: (v) => Theme.style = v
-                    }
-                }
-                Row {
-                    objectName: "stylePreviews"
-                    Layout.alignment: Qt.AlignRight
-                    spacing: Theme.gap
-                    Repeater {
-                        model: Theme.styleNames
-                        StyleSwatch { styleName: modelData }
-                    }
-                }
+                StylePicker { Layout.fillWidth: true }
                 SettingRow {
                     label: "Start-up animation"
                     SegmentedControl {

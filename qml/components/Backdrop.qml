@@ -1,8 +1,9 @@
 import QtQuick
 
 // Full-window decoration behind the UI, one kind per style: topo contours
-// (Trail), livery stripes (Rally), a perforated dot grid (Amber) and a
-// tachometer face peeking in from a corner (Cluster). Painted once per size,
+// (Trail), livery stripes (Rally), a perforated dot grid (Amber), a
+// tachometer face peeking in from a corner (Cluster), rolling sine waves
+// (Atlantic) and layered sand ridgelines (Desert). Painted once per size,
 // style or colour change (day/night flips the theme colours), never per
 // frame, so it costs nothing while driving.
 Canvas {
@@ -113,6 +114,59 @@ Canvas {
         ctx.stroke()
     }
 
+    // Nine sine lines across the lower 65 percent of the window, 40 px apart,
+    // each with its own amplitude, wavelength and phase. Deterministic.
+    function paintWaves(ctx) {
+        ctx.strokeStyle = "" + lineColor
+        ctx.lineWidth = 1.5
+        ctx.globalAlpha = 0.7
+        var top = height * 0.35
+        for (var i = 0; i < 9; i++) {
+            var base = top + i * 40
+            var amp = 10 + (i * 5) % 13
+            var len = 260 + (i * 47) % 161
+            var phase = i * 1.7
+            ctx.beginPath()
+            for (var x = 0; x <= width + 12; x += 12) {
+                var y = base + amp * Math.sin(x / len * Math.PI * 2 + phase)
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+            }
+            ctx.stroke()
+        }
+    }
+
+    // Four layered dune ridgelines rising from the bottom, back to front,
+    // each a base height plus two sines, filled faintly and edged.
+    function paintDunes(ctx) {
+        var bases = [0.62, 0.72, 0.82, 0.92]
+        ctx.strokeStyle = "" + lineColor
+        ctx.fillStyle = "" + hiColor
+        ctx.lineWidth = 1.5
+        for (var layer = 0; layer < 4; layer++) {
+            var base = height * bases[layer]
+            ctx.globalAlpha = 0.10 + 0.04 * layer
+            ctx.beginPath()
+            ctx.moveTo(0, height)
+            for (var x = 0; x <= width + 12; x += 12) {
+                var y = base + 18 * Math.sin(x / 310 + layer * 1.9)
+                               + 8 * Math.sin(x / 120 + layer * 0.8)
+                ctx.lineTo(x, y)
+            }
+            ctx.lineTo(width + 12, height)
+            ctx.closePath()
+            ctx.fill()
+            // Edge the ridge only, not the closing sides and bottom.
+            ctx.globalAlpha = 0.7
+            ctx.beginPath()
+            for (var x2 = 0; x2 <= width + 12; x2 += 12) {
+                var y2 = base + 18 * Math.sin(x2 / 310 + layer * 1.9)
+                                + 8 * Math.sin(x2 / 120 + layer * 0.8)
+                if (x2 === 0) ctx.moveTo(x2, y2); else ctx.lineTo(x2, y2)
+            }
+            ctx.stroke()
+        }
+    }
+
     onPaint: {
         var ctx = getContext("2d")
         ctx.reset()
@@ -120,5 +174,7 @@ Canvas {
         else if (kind === "stripes") paintStripes(ctx)
         else if (kind === "grid") paintGrid(ctx)
         else if (kind === "dial") paintDial(ctx)
+        else if (kind === "waves") paintWaves(ctx)
+        else if (kind === "dunes") paintDunes(ctx)
     }
 }

@@ -61,22 +61,22 @@ QtObject {
         amber: {
             bg: "#ece9e3", panel: "#f8f6f2", panelTop: "#fbfaf7", panelHi: "#e4e0d7",
             line: "#cdc6ba", text: "#1d1b18", textDim: "#68625a",
-            accent: "#d27c00", warn: "#cc3418", ok: "#3c8a2b"
+            accent: "#c06a00", warn: "#cc3418", ok: "#3c8a2b"
         },
         cluster: {
             bg: "#e8eaed", panel: "#f7f8fa", panelTop: "#ffffff", panelHi: "#e0e3e8",
             line: "#c5cad2", text: "#13171c", textDim: "#5b636d",
-            accent: "#de4316", warn: "#cf1f1f", ok: "#1e7db5"
+            accent: "#c93a10", warn: "#cf1f1f", ok: "#1e7db5"
         },
         trail: {
             bg: "#e8e3d4", panel: "#f6f2e7", panelTop: "#fbf8f0", panelHi: "#e5dfcc",
             line: "#c8bfa4", text: "#23261b", textDim: "#696450",
-            accent: "#e2650c", warn: "#c4321f", ok: "#4c7c29"
+            accent: "#c4560a", warn: "#c4321f", ok: "#4c7c29"
         },
         rally: {
             bg: "#e2e7f2", panel: "#f5f7fc", panelTop: "#ffffff", panelHi: "#dbe2f1",
             line: "#b8c3dc", text: "#0b1633", textDim: "#4d5d84",
-            accent: "#c48600", warn: "#d03030", ok: "#1d875a"
+            accent: "#a86e00", warn: "#d03030", ok: "#1d875a"
         },
         atlantic: {
             bg: "#e4eaf3", panel: "#f5f8fc", panelTop: "#ffffff", panelHi: "#d9e2f0",

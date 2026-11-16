@@ -17,11 +17,13 @@ Item {
     readonly property real warmCoolantF: 160
     property bool warmingUp: false
     function updateWarmingUp() {
+        if (!page.visible) return   // nobody sees the label; onVisibleChanged catches up
         if (!vehicle.engineKnown) warmingUp = false;
         else if (vehicle.coolant < warmCoolantF - 5) warmingUp = true;
         else if (vehicle.coolant >= warmCoolantF) warmingUp = false;
     }
     Component.onCompleted: updateWarmingUp()
+    onVisibleChanged: if (visible) updateWarmingUp()
     Connections {
         target: vehicle
         function onChanged() { page.updateWarmingUp() }
@@ -161,36 +163,34 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Readout {
+                        id: boostReadout
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: "Boost"
                         widest: Units.metric ? "-0.00" : "-00.0"
-                        value: vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—"
                         unit: Units.boostUnit
-                        warning: vehicle.warnings.indexOf("boost") >= 0
                     }
                     Readout {
+                        id: coolantReadout
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: page.warmingUp ? "Warming up" : "Coolant"
                         widest: "000"
-                        value: vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—"
                         unit: Units.tempUnit
-                        warning: vehicle.warnings.indexOf("coolant") >= 0
                     }
                     Readout {
+                        id: batteryReadout
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1
                         label: "Battery"
                         widest: "00.0"
-                        value: vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—"
                         unit: "V"
-                        warning: vehicle.warnings.indexOf("voltage") >= 0
                     }
                     Readout {
+                        id: speedReadout
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignBottom
                         Layout.preferredWidth: 1.5
@@ -198,11 +198,30 @@ Item {
                         numeralSize: 76
                         label: "Speed"
                         widest: "000"
-                        value: vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—"
                         unit: Units.speedUnit
                     }
                 }
             }
         }
     }
+
+    // The readouts follow the vehicle only while Home is on screen: changed
+    // fires 5 times a second and nobody sees these on another page. A Binding
+    // still evaluates its value while "when" is false, so each expression is
+    // guarded by page.visible too and reads nothing while hidden. RestoreNone
+    // keeps the last value when the binding pauses; they refresh on return.
+    Binding { target: boostReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.engineKnown ? Units.boost(vehicle.boost).toFixed(Units.boostDecimals) : "—") : undefined }
+    Binding { target: boostReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("boost") >= 0) : undefined }
+    Binding { target: coolantReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.engineKnown ? Math.round(Units.temp(vehicle.coolant)) : "—") : undefined }
+    Binding { target: coolantReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("coolant") >= 0) : undefined }
+    Binding { target: batteryReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.voltageKnown ? vehicle.voltage.toFixed(1) : "—") : undefined }
+    Binding { target: batteryReadout; property: "warning"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.warnings.indexOf("voltage") >= 0) : undefined }
+    Binding { target: speedReadout; property: "value"; when: page.visible; restoreMode: Binding.RestoreNone
+        value: page.visible ? (vehicle.speedKnown ? Math.round(Units.speed(vehicle.speed)) : "—") : undefined }
 }

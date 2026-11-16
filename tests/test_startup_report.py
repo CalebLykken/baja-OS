@@ -155,5 +155,44 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class FinePhasesTest(unittest.TestCase):
+    """The finer start-up marks main.py makes between imports and backends
+    (webengine, app, settings, media, screen) read, summarise and compare
+    like any other phase name."""
+
+    PHASES = ["imports", "webengine", "app", "settings", "media", "screen",
+              "backends", "qml", "first frame"]
+
+    def _clock_line(self, step_ms, up=14.2):
+        now = FakeNow(100.0)
+        clock = StartupClock(now=now, uptime=lambda: up)
+        for i, name in enumerate(self.PHASES):
+            now.t = 100.0 + (i + 1) * step_ms / 1000
+            clock.mark(name)
+        return clock.summary()
+
+    def test_every_fine_phase_is_read_in_order(self):
+        line = self._clock_line(100)
+        phases, up = sr.parse(line)
+        self.assertEqual(list(phases), self.PHASES)
+        self.assertEqual(phases["screen"], 600)
+        self.assertEqual(phases["backends"], 700)
+        self.assertEqual(up, 14.2)
+
+    def test_summary_and_compare_handle_the_new_names(self):
+        before = [sr.parse(self._clock_line(100)) for _ in range(3)]
+        after = [sr.parse(self._clock_line(150)) for _ in range(2)]
+        rows = sr.compare(before + after, 2)
+        names = [name for name, *_ in rows]
+        for phase in ("webengine", "app", "settings", "media", "screen"):
+            self.assertIn(phase, names)
+        by_name = {name: (b, a, d) for name, b, a, d in rows}
+        self.assertEqual(by_name["media"], (500, 750, 250))
+        self.assertEqual(by_name["screen"], (600, 900, 300))
+        table = sr.render_compare(rows)
+        self.assertTrue(any(l.startswith("screen") and "+300" in l for l in table))
+        self.assertEqual(len(sr.summarise(before + after)), len(self.PHASES) + 1)
+
+
 if __name__ == "__main__":
     unittest.main()

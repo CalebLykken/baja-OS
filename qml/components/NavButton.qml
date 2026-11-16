@@ -9,6 +9,10 @@ Item {
     property string icon
     property string label
     property bool active: false
+    // A small accent dot on the icon's corner: something to look at on this
+    // page (stored trouble codes, a waiting update). Hidden on the active page,
+    // where the driver is already looking.
+    property bool badge: false
     signal clicked()
 
     // Set once loading is done so the page active at startup doesn't animate.
@@ -23,6 +27,7 @@ Item {
     readonly property alias cardScale: card.scale
     readonly property alias cardWidth: card.width
     readonly property alias labelWidth: legend.contentWidth
+    readonly property alias badgeShown: dot.visible
 
     onActiveChanged: {
         if (active && ready && visible)
@@ -85,6 +90,18 @@ Item {
                 size: 34
                 color: btn.active ? Theme.accent : Theme.textDim
                 Behavior on color { ColorAnimation { duration: 150 } }
+
+                // The badge dot: a plain shape, shown or hidden, with no
+                // animation or timer of its own.
+                Rectangle {
+                    id: dot
+                    visible: btn.badge && !btn.active
+                    width: 14; height: 14; radius: 7
+                    color: Theme.accent
+                    border.width: 2
+                    border.color: Theme.bg
+                    anchors { right: parent.right; top: parent.top; rightMargin: -6; topMargin: -6 }
+                }
             }
             Legend {
                 id: legend

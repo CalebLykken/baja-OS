@@ -33,6 +33,17 @@ Window {
     readonly property bool onMaps: page === 2
     readonly property bool fullPage: page === 1 || page === 2     // Music and Maps
 
+    // The badge dot on a nav key: stored trouble codes on Truck (not for the
+    // demo's made-up codes), a waiting update on Settings. Bound per key, so
+    // it follows those properties when they change.
+    function badgeFor(i) {
+        if (i === 4)
+            return typeof vehicle !== "undefined" && vehicle.codeCount > 0 && !vehicle.simulated
+        if (i === 5)
+            return typeof updater !== "undefined" && updater.canUpdate
+        return false
+    }
+
     // Lets screenshot tooling (and later a hardware button) switch pages.
     function showPage(i) { page = i }
     function setStyle(name) { Theme.style = name }
@@ -198,6 +209,7 @@ Window {
                     icon: modelData.icon
                     label: modelData.label
                     active: root.page === index
+                    badge: root.badgeFor(index)
                     onClicked: root.page = index
                 }
             }

@@ -96,17 +96,22 @@ Window {
     Timer { interval: 3000; running: true; onTriggered: root.mapWanted = true }
     onPageChanged: if (page === 0 || page === 2) mapWanted = true
 
-    // The other pages are built when first opened, or in the background a few
-    // seconds after start-up (one at a time, after the map engine), so the
-    // first frame and the map start don't wait for pages nobody is looking at.
+    // The other pages are built when first opened, or in the background after
+    // start-up, one after another: Music 1 s after the map has drawn (or 6 s
+    // after start if it hasn't), then each next page 500 ms after the previous
+    // one finished building (PageHost.built). A slow boot spreads the work out
+    // instead of overlapping builds, and a quick one gets there sooner. All
+    // the timers are single-shot, so none is left running once Truck is built.
     property bool preloadMusic: false
     property bool preloadSettings: false
     property bool preloadGauges: false
     property bool preloadTruck: false
-    Timer { interval: 4000; running: true; onTriggered: root.preloadMusic = true }
-    Timer { interval: 5000; running: true; onTriggered: root.preloadSettings = true }
-    Timer { interval: 6000; running: true; onTriggered: root.preloadGauges = true }
-    Timer { interval: 7000; running: true; onTriggered: root.preloadTruck = true }
+    Timer { id: musicFallback; interval: 6000; running: true; onTriggered: root.preloadMusic = true }
+    Timer { id: musicAfterMap; interval: 1000; onTriggered: root.preloadMusic = true }
+    onMapReadyChanged: if (mapReady && !preloadMusic) musicAfterMap.start()
+    Timer { id: settingsNext; interval: 500; onTriggered: root.preloadSettings = true }
+    Timer { id: gaugesNext; interval: 500; onTriggered: root.preloadGauges = true }
+    Timer { id: truckNext; interval: 500; onTriggered: root.preloadTruck = true }
 
     Loader {
         id: mapLoader
@@ -223,20 +228,24 @@ Window {
                 onNavigate: (i) => root.page = i
             }
         }
-        PageHost { anchors.fill: parent; index: 3; current: root.page
+        PageHost { id: gaugesHost; anchors.fill: parent; index: 3; current: root.page
+            onBuiltChanged: if (built) truckNext.start()
             preload: root.preloadGauges
             lazy: Component { GaugesPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
         PageHost { anchors.fill: parent; index: 4; current: root.page
             preload: root.preloadTruck
             lazy: Component { TruckPage { anchors.fill: parent; trip: tripCounter; onNavigate: (i) => root.page = i } } }
-        PageHost { anchors.fill: parent; index: 5; current: root.page
+        PageHost { id: settingsHost; anchors.fill: parent; index: 5; current: root.page
+            onBuiltChanged: if (built) gaugesNext.start()
             preload: root.preloadSettings
             lazy: Component { SettingsPage { anchors.fill: parent; onNavigate: (i) => root.page = i } } }
     }
 
     // Music: everything right of the rail.
     PageHost {
+        id: musicHost
         anchors { left: rail.right; right: parent.right; top: parent.top; bottom: parent.bottom }
+        onBuiltChanged: if (built) settingsNext.start()
         index: 1
         current: root.page
         preload: root.preloadMusic

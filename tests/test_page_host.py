@@ -118,11 +118,14 @@ wait(450)
 out["back_a"] = state(root, "a")
 out["back_b"] = state(root, "b")
 
-# Lazy page builds when first shown.
+# built: true for a child page, false for a lazy one until it is loaded.
+out["built_plain"] = root.findChild(QQuickItem, "a").property("built")
+out["built_before"] = root.findChild(QQuickItem, "c").property("built")
 out["lazy_before"] = root.findChild(QObject, "built") is not None
 root.setProperty("cur", 2)
 wait(100)
 out["lazy_after"] = root.findChild(QObject, "built") is not None
+out["built_after"] = root.findChild(QQuickItem, "c").property("built")
 
 print(json.dumps(out))
 '''
@@ -186,6 +189,23 @@ class PageHostTest(unittest.TestCase):
     def test_lazy_page_builds_when_first_shown(self):
         self.assertFalse(self.out["lazy_before"])
         self.assertTrue(self.out["lazy_after"])
+
+    def test_built_reports_whether_the_page_exists(self):
+        self.assertTrue(self.out["built_plain"])
+        self.assertFalse(self.out["built_before"])
+        self.assertTrue(self.out["built_after"])
+
+    def test_main_chains_preloads_without_fixed_timers(self):
+        text = (ROOT / "qml" / "Main.qml").read_text()
+        # The clock's own 5 s repeating timer is the only one allowed to repeat.
+        text = text.replace("Timer { interval: 5000; running: true; repeat: true; onTriggered: clock.now", "")
+        for ms in ("4000", "5000", "7000"):
+            self.assertNotIn("interval: " + ms, text)
+        self.assertEqual(text.count("interval: 6000"), 1)   # the Music fallback
+        self.assertNotIn("repeat: true", text)
+        for host in ("musicHost", "settingsHost", "gaugesHost"):
+            self.assertIn("id: " + host, text)
+        self.assertIn("onBuiltChanged", text)
 
 
 if __name__ == "__main__":

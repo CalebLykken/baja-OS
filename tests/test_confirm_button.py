@@ -35,8 +35,16 @@ class ConfirmButtonTest(unittest.TestCase):
         self.assertIn("implicitWidth: Math.max(plainProbe.implicitWidth, confirmProbe.implicitWidth)", body)
 
     def test_restart_asks_first(self):
-        self.assertRegex(PAGE, r'ConfirmButton \{[^\n]*text: "Restart dashboard"[^\n]*confirmText: "Tap again to restart"')
+        self.assertRegex(PAGE, r'ConfirmButton \{[^\n]*text: "Restart dashboard"[^\n]*confirmText: "Tap to restart"')
         self.assertNotRegex(PAGE, r'TextButton \{[^\n]*Restart dashboard')
+
+    def test_confirm_texts_stay_short(self):
+        # The row of power buttons is fixed-width; long texts push Shut down off the panel.
+        import re
+        texts = re.findall(r'confirmText: "([^"]*)"', PAGE)
+        self.assertGreaterEqual(len(texts), 6)
+        for t in texts:
+            self.assertLessEqual(len(t), 16, t)
 
     def test_forget_is_touch_sized(self):
         self.assertNotIn("implicitHeight: 48", PAGE)

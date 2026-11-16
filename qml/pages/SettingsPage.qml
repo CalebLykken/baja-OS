@@ -441,7 +441,7 @@ Item {
                 ConfirmButton {
                     visible: typeof spotifyAccount !== "undefined" && spotifyAccount.linked
                     text: "Unlink library"
-                    confirmText: "Tap again to unlink"
+                    confirmText: "Tap to unlink"
                     onConfirmed: spotifyAccount.signOut()
                 }
                 Note { text: "Carry on playing Spotify after a restart or a lost connection" }
@@ -599,7 +599,7 @@ Item {
                                 visible: model.saved && wifi.canControl
                                 implicitHeight: 56
                                 text: "Forget"
-                                confirmText: "Tap again to forget"
+                                confirmText: "Sure?"
                                 onConfirmed: wifi.forget(model.ssid)
                             }
                         }
@@ -770,7 +770,7 @@ Item {
                         ConfirmButton {
                             icon: "delete"
                             text: "Forget"
-                            confirmText: "Tap again to forget"
+                            confirmText: "Sure?"
                             danger: true
                             onConfirmed: bluetooth.forgetDevice(modelData.path)
                         }
@@ -903,7 +903,7 @@ Item {
                     ConfirmButton {
                         icon: "refresh"
                         text: "Reset link"
-                        confirmText: "Tap again to reset"
+                        confirmText: "Tap to reset"
                         danger: true
                         onConfirmed: phone.resetToken()
                     }
@@ -1063,9 +1063,9 @@ Item {
                 heading: "Restart and power"
                 RowLayout {
                     spacing: 14
-                    ConfirmButton { icon: "refresh"; text: "Restart dashboard"; confirmText: "Tap again to restart"; enabled: !updater.busy; onConfirmed: system.restartDashboard() }
-                    ConfirmButton { text: "Reboot"; confirmText: "Tap again to reboot"; enabled: system.canPower && !updater.updating; onConfirmed: system.reboot() }
-                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap again to shut down"; danger: true; enabled: system.canPower && !updater.updating; onConfirmed: system.powerOff() }
+                    ConfirmButton { icon: "refresh"; text: "Restart dashboard"; confirmText: "Tap to restart"; enabled: !updater.busy; onConfirmed: system.restartDashboard() }
+                    ConfirmButton { text: "Reboot"; confirmText: "Tap to reboot"; enabled: system.canPower && !updater.updating; onConfirmed: system.reboot() }
+                    ConfirmButton { icon: "power"; text: "Shut down"; confirmText: "Tap to shut down"; danger: true; enabled: system.canPower && !updater.updating; onConfirmed: system.powerOff() }
                 }
                 Label {
                     visible: system.powerError !== ""

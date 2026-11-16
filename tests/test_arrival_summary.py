@@ -109,8 +109,35 @@ class ResumedTest(unittest.TestCase):
 
 
 class QmlTest(unittest.TestCase):
+    def test_the_trip_card_has_an_arrived_state_with_parking_and_done(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("function findParkingHere", text)
+        card = text[text.index("id: tripCard"):]
+        card = card[:card.index("The truck is off the offline map")]
+        self.assertIn("routing.arrived", card)
+        self.assertIn("page.findParkingHere()", card)
+        self.assertIn('"Done"', card)
+
     def test_the_turn_card_shows_it(self):
         self.assertIn("routing.arrivalSummary", (ROOT / "qml/pages/MapsPage.qml").read_text())
+
+    def test_the_turn_card_shows_off_route_and_a_failed_reroute(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        card = text[text.index("id: turnCard"):]
+        card = card[:card.index("id: thenStrip")] if "id: thenStrip" in card else card
+        self.assertIn("routing.offRoute", card)
+        self.assertIn("routing.error", card)
+
+    def test_a_failed_reroute_wins_over_off_route_and_goes_when_back_on_the_line(self):
+        text = (ROOT / "qml/pages/MapsPage.qml").read_text()
+        card = text[text.index("id: turnCard"):]
+        # The failed-reroute text is chosen before "Off route" (both are true at once).
+        self.assertLess(card.index('"No new route found'), card.index('"Off route"'))
+        # It only counts while still off the line, so a stale error is not shown.
+        lost = card[card.index("property bool lostNow"):].split("\n")[0]
+        self.assertIn("routing.offRoute", lost)
+        off = card[card.index("property bool offNow"):].split("\n")[0]
+        self.assertIn('routing.error === ""', off)
 
 
 if __name__ == "__main__":

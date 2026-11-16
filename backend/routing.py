@@ -143,6 +143,18 @@ def short_instruction(m):
         return _fallback(m)
 
 
+def exit_sign(m):
+    """(number, toward) for a highway exit maneuver ("165B", "I-5 S"); ('', '') for anything else."""
+    try:
+        if not isinstance(m, dict) or m.get("type") not in (20, 21):
+            return "", ""
+        sign = m.get("sign") if isinstance(m.get("sign"), dict) else {}
+        number, toward = _texts(sign.get("exit_number_elements")), _texts(sign.get("exit_toward_elements"))
+        return (number[0] if number else ""), (toward[0] if toward else "")
+    except Exception:
+        return "", ""
+
+
 def _short(m):
     kind = m.get("type")
     sign = m.get("sign") if isinstance(m.get("sign"), dict) else {}
@@ -230,6 +242,41 @@ def ferry_legs(maneuvers, unit_m=1000.0):
             if math.isfinite(v):
                 leg[key] += v
     return out
+
+
+def via_name(maneuvers):
+    """The road most of the route is on: the first street name with the
+    largest total length over the maneuvers. Ferries, unnamed steps and
+    odd lengths are skipped. "" when there is none; never raises."""
+    totals = {}
+    try:
+        for m in maneuvers:
+            if not isinstance(m, dict) or m.get("ferry") is True or m.get("type") == FERRY_ENTER:
+                continue
+            names = m.get("street_names")
+            if not isinstance(names, (list, tuple)) or not names or not isinstance(names[0], str):
+                continue
+            name = names[0].strip()
+            try:
+                n = float(m.get("length"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if name and math.isfinite(n) and n > 0:
+                totals[name] = totals.get(name, 0.0) + n
+        return max(totals, key=totals.get) if totals else ""
+    except Exception:
+        return ""
+
+
+def has_toll(data):
+    """Whether the route has a toll: the summary says so, or a maneuver is on one."""
+    try:
+        if data["trip"]["summary"].get("has_toll"):
+            return True
+        return any(isinstance(m, dict) and m.get("toll") is True
+                   for leg in data["trip"]["legs"] for m in leg.get("maneuvers", ()))
+    except Exception:
+        return False
 
 
 def tidy(text):
@@ -391,6 +438,14 @@ class Route:
         # The router says what units its lengths and spoken text are in.
         unit_m = unit_metres(data["trip"].get("units"))
         self.ferries = ferry_legs(self.maneuvers, unit_m) if isinstance(self.maneuvers, list) else []
+        try:
+            self.via = via_name(self.maneuvers)
+        except Exception:
+            self.via = ""
+        try:
+            self.toll = bool(has_toll(data))
+        except Exception:
+            self.toll = False
         self.seg = 0                  # the shape segment the truck is on
         self.along = 0.0              # metres travelled along the route
         self.off = 0.0                # metres from the line
@@ -581,6 +636,8 @@ class Router(QObject):
         self._gen = 0                 # number of the latest request; older answers are dropped
         self._error = ""
         self._off_count = 0
+        self._off_said = False        # "Off route" spoken this episode
+        self._fail_said = False       # and "can't find a new route"
         self._off_since = 0.0         # when the current run of off-route fixes began
         self._clock = time.monotonic  # for off-route timing (tests use a fake one)
         self._last_reroute = 0.0
@@ -767,19 +824,25 @@ class Router(QObject):
                 self._save()
                 if self._stops_failed:
                     self.stopsFailed.emit(self._stops_failed)
+            if reroute and self._started and self._off_said and not self._fail_said:
+                self._fail_said = True
+                self._say("Can't find a new route. Keep going on the line.")
             self._stops_failed = ""
             self.changed.emit()
             return
         self._stops_failed = ""
+        self._error = ""            # a good route ends any "no new route" notice
         self._route = route
         self._arrived = False
         self._arrival_summary = ""
         self._arrive_timer.stop()
         self._off_count = 0
+        carry_on = self._off_said       # "Off route" was just said: don't say "Rerouting" too
+        self._off_said = self._fail_said = False
         self._spoken = set()
         self._route.locate(self._gps.lon, self._gps.lat)
         if reroute and self._started and not self._gps.stale:
-            self._begin("Rerouting. ")
+            self._begin("Okay. " if carry_on else "Rerouting. ")
         if resumed and resumed["started"]:
             self._go(f"Continuing to {self._stops[0][0] if self._stops else name}. ")
             self._go_at = self._go_eta = None       # no honest start time after a restart
@@ -976,6 +1039,7 @@ class Router(QObject):
         self._started = False
         self._go_at = self._go_eta = None
         self._arrival_summary = ""
+        self._off_said = self._fail_said = False
         self._route = None
         self._last_said = ""
         self._dest = None
@@ -1038,11 +1102,16 @@ class Router(QObject):
                     and not self._computing
                     and now - self._last_reroute > REROUTE_EVERY_S and self._dest):
                 self._last_reroute = now
+                if not self._off_said:
+                    self._off_said = True
+                    self._say("Off route. Finding a new route.")
                 while r.passed_stop(self._gps.heading, self._gps.speed):
                     self._leave_stop(r)
                 self._request(*self._dest, reroute=True)
         else:
             self._off_count = 0
+            if r.off <= OFF_ROUTE_M:
+                self._off_said = self._fail_said = False
         self.progressChanged.emit()
 
     # ---- what QML sees ------------------------------------------------------------
@@ -1076,6 +1145,15 @@ class Router(QObject):
     def shape(self):
         """The route as [[lon, lat], ...] for the map."""
         return [list(p) for p in self._route.shape] if self._route else []
+
+    @pyqtProperty(str, notify=changed)
+    def via(self):
+        """The main road of the route, for the preview card ("" if unknown)."""
+        return self._route.via if self._route else ""
+
+    @pyqtProperty(bool, notify=changed)
+    def hasToll(self):
+        return bool(self._route and self._route.toll)
 
     @pyqtProperty("QVariantList", notify=changed)
     def ferries(self):
@@ -1131,6 +1209,21 @@ class Router(QObject):
             return "You've arrived at " + self._route.name
         # The short form on screen; the spoken form chains the next step.
         return short_instruction(self._route.next_maneuver())
+
+    def _exit_sign(self):
+        if not self._route or self._arrived:
+            return "", ""
+        return exit_sign(self._route.next_maneuver())
+
+    @pyqtProperty(str, notify=progressChanged)
+    def exitNumber(self):
+        """The next maneuver's highway exit number ("165B"), '' if it isn't an exit."""
+        return self._exit_sign()[0]
+
+    @pyqtProperty(str, notify=progressChanged)
+    def exitToward(self):
+        """The first name on the exit's sign ("I-5 S"), '' if none."""
+        return self._exit_sign()[1]
 
     @pyqtProperty(str, notify=progressChanged)
     def maneuverIcon(self):

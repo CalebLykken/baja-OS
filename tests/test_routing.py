@@ -11,6 +11,7 @@ import math
 import time
 import unittest
 import urllib.error
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -18,7 +19,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from backend.gps import STALE_S, Gps
 from backend.routing import (OFF_ROUTE_FIXES, OFF_ROUTE_S, RESUME_S, Route, Router, decode_polyline6,
-                             route_record, saved_route, short_instruction, tidy)
+                             exit_sign, has_toll, route_record, saved_route, short_instruction, tidy, via_name)
 
 app = QCoreApplication.instance() or QCoreApplication([])   # arrival starts a timer
 
@@ -745,6 +746,31 @@ class AvoidTest(unittest.TestCase):
         self.assertTrue(self.router.avoidFerries)
         self.assertEqual(self.settings.values["avoidFerries"], "true")
 
+    def test_a_toll_change_keeps_the_old_route_until_the_answer_lands(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        shown = self.router.remainingDistance
+        held = mock.patch("backend.routing.threading", SimpleNamespace(
+            Thread=lambda **k: SimpleNamespace(start=lambda: None)))
+        held.start()
+        self.addCleanup(held.stop)
+        self.router.setAvoid("avoidTolls", True)
+        self.assertTrue(self.router.computing)
+        self.assertTrue(self.router.previewing)
+        self.assertEqual(self.router.remainingDistance, shown)
+        answer(self.router, ROUTE, "", "Shop", True)
+        self.assertFalse(self.router.computing)
+        self.assertTrue(self.router.previewing)
+
+    def test_the_toll_request_zeroes_use_tolls(self):
+        self.run_with_router(lambda: self.router.routeTo("Shop", *END))
+        self.run_with_router(lambda: self.router.setAvoid("avoidTolls", True))
+        self.assertEqual(self.sent[-1]["costing_options"]["auto"]["use_tolls"], 0)
+
+    def test_maps_page_has_a_chip_for_each_avoid_option(self):
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        for key in ("avoidHighways", "avoidTolls", "avoidFerries"):
+            self.assertIn('routing.setAvoid("%s", !routing.%s)' % (key, key), qml)
+
     def test_no_route_means_no_request(self):
         self.run_with_router(lambda: self.router.setAvoid("avoidFerries", True))
         self.assertEqual(self.sent, [])
@@ -1163,6 +1189,72 @@ class ShortInstructionTest(unittest.TestCase):
         self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
         router.repeatLast()
         self.assertEqual(said[-1], "Turn right onto Pine Street, then arrive.")
+
+
+class ExitSignTest(unittest.TestCase):
+    EXIT = {"type": 20, "sign": {"exit_number_elements": [{"text": "165B"}],
+                                 "exit_toward_elements": [{"text": "I-5 S"}, {"text": "Tacoma"}]}}
+
+    def test_exit_gives_number_and_first_toward(self):
+        self.assertEqual(exit_sign(self.EXIT), ("165B", "I-5 S"))
+        self.assertEqual(exit_sign(dict(self.EXIT, type=21)), ("165B", "I-5 S"))
+
+    def test_turn_has_none(self):
+        self.assertEqual(exit_sign(dict(self.EXIT, type=10)), ("", ""))
+
+    def test_junk_never_raises(self):
+        for m in (None, "x", 5, {}, {"type": 20}, {"type": 20, "sign": None},
+                  {"type": 20, "sign": {"exit_number_elements": [5, None, {"text": 3}],
+                                        "exit_toward_elements": "I-5"}}):
+            self.assertEqual(exit_sign(m), ("", ""))
+
+
+class ViaTollTest(unittest.TestCase):
+    def test_via_longest_total(self):
+        ms = [{"street_names": ["Main St"], "length": 1.0}, {"street_names": ["5th Ave"], "length": 1.5},
+              {"street_names": ["Main St", "SR 9"], "length": "0.8"}]
+        self.assertEqual(via_name(ms), "Main St")       # 1.8 beats 1.5
+        ms[2]["length"] = 0.4
+        self.assertEqual(via_name(ms), "5th Ave")
+
+    def test_via_skips_and_never_raises(self):
+        ms = [{"street_names": ["Ferry Rd"], "length": 9, "ferry": True}, {"street_names": [], "length": 3},
+              {"street_names": ["A"], "length": "x"}, {"street_names": ["B"]}, None, "z",
+              {"street_names": [5], "length": 1}, {"street_names": "I-5", "length": 1}]
+        self.assertEqual(via_name(ms), "")
+        for odd in ([], None, 5, "x", {}):
+            self.assertEqual(via_name(odd), "")
+
+    def test_toll(self):
+        data = json.loads(json.dumps(ROUTE))
+        self.assertFalse(Route(data, "x").toll)
+        self.assertFalse(has_toll(None))
+        data["trip"]["legs"][0]["maneuvers"][1]["toll"] = True
+        self.assertTrue(Route(data, "x").toll)
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["summary"]["has_toll"] = True
+        self.assertTrue(Route(data, "x").toll)
+
+    def test_route_via(self):
+        data = json.loads(json.dumps(ROUTE))
+        data["trip"]["legs"][0]["maneuvers"][0]["street_names"] = ["I-5 N"]
+        data["trip"]["legs"][0]["maneuvers"][0]["length"] = 2.2
+        self.assertEqual(Route(data, "x").via, "I-5 N")
+
+
+class MapsPageViaTest(unittest.TestCase):
+    def test_card_uses_via(self):
+        from pathlib import Path
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("routing.via", qml)
+        self.assertIn("routing.hasToll", qml)
+
+
+class MapsPageExitChipTest(unittest.TestCase):
+    def test_turn_card_uses_exit_number(self):
+        from pathlib import Path
+        qml = (Path(__file__).resolve().parent.parent / "qml/pages/MapsPage.qml").read_text()
+        self.assertIn("routing.exitNumber", qml)
 
 
 if __name__ == "__main__":

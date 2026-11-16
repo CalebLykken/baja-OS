@@ -6,6 +6,7 @@ none, the sign is simply hidden.
 
 import collections
 import json
+import math
 import threading
 import time
 import urllib.request
@@ -18,6 +19,7 @@ ROUTER = "http://127.0.0.1:8002"
 CHECK_EVERY_MS = 3000
 MOVING_MS = 2.0           # below this the fixes are too close together to match
 KEEP_S = 20               # a limit older than this (no match since) is dropped
+HELD_AWAY_M = 80          # stopped, a limit is kept (a red light) until the truck is this far from where it was matched
 GAP_S = 5.0               # a few missed fixes is still one drive; longer and the old points can't be trusted to join up
 TRACE_EVERY_S = 0.8       # the trace keeps about one fix a second, however often they come
 MAX_KMH = 200             # no posted limit is above this; a bigger number is a bad answer
@@ -73,13 +75,16 @@ class RoadInfo(QObject):
         self._limit = 0               # km/h, 0 = unknown
         self._name = ""
         self._at = 0.0
+        self._match_at_pos = None     # (lat, lon) of the fix the last match was asked about
+        self._asked_pos = None
         self._busy = False
         self._matched.connect(self._on_matched)
         gps.fixChanged.connect(self._on_fix)
         self._timer = QTimer(self, interval=CHECK_EVERY_MS, timeout=self._check)
 
     def start(self):
-        self._timer.start()
+        # the check timer only runs while the truck is moving (see _on_fix), so a parked truck costs nothing
+        pass
 
     def _on_fix(self):
         now = time.monotonic()
@@ -88,13 +93,32 @@ class RoadInfo(QObject):
                 self._fixes.clear()       # after a gap, start the trace again
             self._fix_at = now
             self._fixes.append((self._gps.lat, self._gps.lon))
+        if self._gps.speed >= MOVING_MS and not self._timer.isActive():
+            self._timer.start()
+
+    def _moved_away(self):
+        """True when the truck is more than HELD_AWAY_M from where the last match was made."""
+        if self._match_at_pos is None:
+            return True
+        lat0, lon0 = self._match_at_pos
+        dy = math.radians(self._gps.lat - lat0) * 6371000
+        dx = math.radians(self._gps.lon - lon0) * 6371000 * math.cos(math.radians(lat0))
+        return math.hypot(dx, dy) > HELD_AWAY_M
 
     def _check(self):
-        if self._limit and time.monotonic() - self._at > KEEP_S:
+        moving = self._gps.speed >= MOVING_MS
+        # a limit is only dropped when the truck is driving on without a new match, or has
+        # gone elsewhere; sitting at a light, matches stop but the road hasn't changed
+        if (self._limit and time.monotonic() - self._at > KEEP_S
+                and (moving or self._moved_away())):
             self._limit, self._name = 0, ""
             self.changed.emit()
-        if self._busy or len(self._fixes) < 4 or self._gps.speed < MOVING_MS:
+        if not moving and not self._busy and not self._limit:
+            self._timer.stop()        # parked with nothing to expire: the next moving fix restarts it
             return
+        if self._busy or len(self._fixes) < 4 or not moving:
+            return
+        self._asked_pos = self._fixes[-1]
         shape = [{"lat": lat, "lon": lon} for lat, lon in self._fixes]
         body = json.dumps({
             "shape": shape, "costing": "auto", "shape_match": "map_snap",
@@ -123,6 +147,7 @@ class RoadInfo(QObject):
         if limit < 0:
             return
         self._at = time.monotonic()
+        self._match_at_pos = self._asked_pos
         if (limit, name) != (self._limit, self._name):
             self._limit, self._name = limit, name
             self.changed.emit()
